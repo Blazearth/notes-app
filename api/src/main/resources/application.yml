@@ -1,0 +1,96 @@
+spring:
+  application:
+    name: weavr-api
+
+  # --------------------------------------------------------------------------
+  # RUNTIME datasource -> Supavisor TRANSACTION pooler (port 6543).
+  # --------------------------------------------------------------------------
+  # Free-tier direct connections are few and a HikariCP pool will exhaust them.
+  # Two non-negotiables on this path:
+  #   * prepareThreshold=0 in the URL - the transaction pooler does not keep a
+  #     session, so server-side prepared statements produce intermittent
+  #     "prepared statement S_1 already exists" errors under load.
+  #   * a small pool.
+  # See WEAVR_DB_URL in .env.example.
+  datasource:
+    url: ${WEAVR_DB_URL}
+    username: ${WEAVR_DB_USER}
+    password: ${WEAVR_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${WEAVR_DB_POOL_MAX:8}
+      minimum-idle: 2
+      connection-timeout: 10000
+      idle-timeout: 300000
+      max-lifetime: 900000
+      pool-name: weavr-pool
+
+  # --------------------------------------------------------------------------
+  # MIGRATION datasource -> SESSION pooler (port 5432) or a direct connection.
+  # --------------------------------------------------------------------------
+  # Deliberately a different URL from the one above. Flyway takes a
+  # session-level advisory lock and runs DDL inside transactions; both break
+  # under the transaction pooler. This is easy to miss because it usually works
+  # on the first migration and fails later, under concurrency.
+  flyway:
+    enabled: true
+    url: ${WEAVR_FLYWAY_URL}
+    user: ${WEAVR_FLYWAY_USER}
+    password: ${WEAVR_FLYWAY_PASSWORD}
+    locations: classpath:db/migration
+    # Supabase ships a populated schema (auth, storage, ...) so the public
+    # schema is not "empty" from Flyway's point of view.
+    baseline-on-migrate: true
+    baseline-version: 0
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema. Hibernate never writes DDL.
+      ddl-auto: none
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+          batch_size: 25
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Decoder is built explicitly in SecurityConfig so issuer and
+          # audience validation are visible rather than implied, and so we
+          # never depend on Supabase serving an OIDC discovery document.
+          jwk-set-uri: ${weavr.supabase.url}/auth/v1/.well-known/jwks.json
+
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+
+weavr:
+  supabase:
+    # e.g. https://sgjpiordywdklzhlhmwq.supabase.co
+    url: ${WEAVR_SUPABASE_URL}
+    # Supabase mints access tokens with aud=authenticated for signed-in users.
+    jwt-audience: authenticated
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    com.weavr.api: ${WEAVR_LOG_LEVEL:INFO}
+    org.flywaydb: INFO

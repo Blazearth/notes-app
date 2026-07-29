@@ -1,0 +1,42 @@
+# --- secrets -----------------------------------------------------------------
+# Never commit these. .env.example is the tracked template.
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+*.keystore
+*.jks
+google-services.json
+GoogleService-Info.plist
+
+# --- java / maven ------------------------------------------------------------
+# The Maven wrapper here is script-only (properties file, no jar), so there is
+# no binary to exclude from the rule above.
+target/
+.mvn/timing.properties
+
+# --- node / expo -------------------------------------------------------------
+node_modules/
+.expo/
+.expo-shared/
+dist/
+web-build/
+*.tsbuildinfo
+
+# --- native build output -----------------------------------------------------
+# Managed by prebuild; regenerated rather than tracked.
+app/ios/
+app/android/
+
+# --- editors / os ------------------------------------------------------------
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- logs / scratch ----------------------------------------------------------
+*.log
+tmp/
