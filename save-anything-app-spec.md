@@ -1,9 +1,14 @@
-# [App Name — TBD] — Full Product & Technical Specification
+# Weavr — Full Product & Technical Specification
 ### AI-powered "save anything" execution engine — RevenueCat Shipaton 2026 submission
+
+> **This document is partly superseded.** It is kept as the original product
+> spec; the stack decisions in [CLAUDE.md](CLAUDE.md) override it wherever they
+> disagree — see *Where the spec is stale* there. Sections 2, 3, 9–13 are still
+> current.
 
 **Team:** Arth + friend, two-person vibe-coded build
 **Window:** Aug 1 – Sep 30, 2026
-**Working name candidates:** Cairn, Bindle, Loopkeep, Reso *(all unclaimed as of this doc; run an App Store + domain check before locking one in)*
+**Name:** locked as **Weavr** (Jul 2026). Bundle/package id `com.weavr.app`, Java package `com.weavr.api`, Expo slug `weavr`.
 
 ---
 

@@ -27,16 +27,37 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 
 ## Status — Phase 1 (Foundation)
 
-Implemented:
+### What's real vs. stubbed
 
-- Flyway `V1__init.sql` — full schema including pgvector, the job queue, the AI
-  budget counter, and RLS policies
-- Supabase JWT validation as an OAuth2 resource server (issuer + audience checked
-  explicitly)
-- `POST /v1/saves` → writes a row, enqueues a job, returns `202`
-- `GET /v1/saves`, `GET /v1/saves/{id}`
+| Area | State | Notes |
+|---|---|---|
+| Flyway `V1__init.sql` | **real, verified** | Applied against Supabase (PG 17.6). All 11 tables, pgvector, HNSW index, generated FTS column, RLS policies |
+| Supabase JWT auth | **real, partly verified** | Issuer + audience checked explicitly. Rejection path verified (401); the accept path has not run |
+| `POST /v1/saves` | **real, unverified** | Writes a row, enqueues a job, returns `202`. Never exercised with a valid token |
+| `GET /v1/saves`, `/{id}` | **real, unverified** | Same |
+| Job queue | **enqueue only** | Rows land in `jobs`. Nothing consumes them yet |
+| Job runner | **absent** | Phase 2 — `SKIP LOCKED` claim, retry, `group_id` round-robin |
+| Text-extraction cascade | **absent** | Phase 2 — yt-dlp / ffmpeg / ASR |
+| Any Gemini call | **absent** | Phase 3. `gemini_calls` and `ai_budget_days` tables exist and are empty |
+| OCR tier | **absent** | Phase 4 |
+| Search (FTS + vector) | **schema only** | `search_tsv` and `embedding` columns exist and are populated by nobody. Phase 5 |
+| RevenueCat / entitlements | **schema only** | `subscriptions`, `usage_counters` tables exist. Phase 5 |
+| Expo app | **not scaffolded** | See [app/README.md](app/README.md) |
 
-Not yet: the job **runner** (Phase 2), any Gemini call (Phase 3), the Expo app.
+**Nothing is faked.** Every "real" row above is genuinely implemented — the
+unverified ones simply have not been run against a live token yet. There are no
+mock responses or placeholder implementations in the codebase.
+
+### Verified on 2026-07-30
+
+Against the live Supabase project: `V1` migrated (11.7s) · app started · Flyway
+on the session pooler and Hikari on the transaction pooler, confirmed distinct
+in the logs · `GET /actuator/health` 200 · unauthenticated and
+malformed-token requests rejected 401 · `./mvnw clean verify` green, 11/11 tests.
+
+**Not yet verified:** creating a save with a real Supabase JWT. That path
+exercises the `@CurrentUser` resolver, the lazy profile upsert, and the JSONB
+mapping — none of which have executed. It is the last Phase 1 exit criterion.
 
 ## Running the API
 

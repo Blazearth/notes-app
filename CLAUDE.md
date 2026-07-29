@@ -8,6 +8,8 @@ Monorepo: `api/` (Spring Boot), `app/` (Expo, not yet scaffolded), `docs/`. Git-
 
 **Phase 1 backend is in.** Flyway `V1__init.sql` (full schema), Supabase JWT resource server, `POST/GET /v1/saves`, job *enqueue*. Not yet: the job runner (Phase 2), any Gemini call (Phase 3), the mobile app.
 
+V1 has been applied against the live Supabase project and the app boots; auth rejection is verified, but **no save has ever been created with a real JWT** — that path is untested. Per-area status is in [README.md](README.md#whats-real-vs-stubbed).
+
 Build and test — JDK 25, Maven via the wrapper:
 
 ```bash
