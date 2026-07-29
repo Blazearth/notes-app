@@ -16,6 +16,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtIssuerValidator;
 import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 
@@ -56,7 +57,12 @@ class SecurityConfig {
      */
     @Bean
     JwtDecoder jwtDecoder(SupabaseProperties supabase) {
-        NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(supabase.jwkSetUri()).build();
+        // Supabase signs access tokens with ES256 (EC P-256). The default
+        // builder only accepts RS256, so every token would be silently rejected
+        // with "no matching key(s) found".
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(supabase.jwkSetUri())
+                .jwsAlgorithm(SignatureAlgorithm.ES256)
+                .build();
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(List.of(
                 // exp / nbf, with the default clock skew
                 JwtValidators.createDefault(),
