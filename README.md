@@ -32,10 +32,10 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Area | State | Notes |
 |---|---|---|
 | Flyway `V1__init.sql` | **real, verified** | Applied against Supabase (PG 17.6). All 11 tables, pgvector, HNSW index, generated FTS column, RLS policies |
-| Supabase JWT auth | **real, partly verified** | Issuer + audience checked explicitly. Rejection path verified (401); the accept path has not run |
-| `POST /v1/saves` | **real, unverified** | Writes a row, enqueues a job, returns `202`. Never exercised with a valid token |
-| `GET /v1/saves`, `/{id}` | **real, unverified** | Same |
-| Job queue | **enqueue only** | Rows land in `jobs`. Nothing consumes them yet |
+| Supabase JWT auth | **real, verified** | Issuer + audience checked explicitly. Both paths exercised: rejection (401) and accept, with a real **ES256** token |
+| `POST /v1/saves` | **real, verified** | `202` with a real JWT; row committed and readable. Exercises `@CurrentUser`, the lazy profile upsert, and the JSONB mapping |
+| `GET /v1/saves`, `/{id}` | **real, verified** | `200` on both; `/{id}` returns the created save, the list returns it too |
+| Job queue | **enqueue only** | The enqueue runs as part of the verified create path. Nothing consumes the rows yet |
 | Job runner | **absent** | Phase 2 — `SKIP LOCKED` claim, retry, `group_id` round-robin |
 | Text-extraction cascade | **absent** | Phase 2 — yt-dlp / ffmpeg / ASR |
 | Any Gemini call | **absent** | Phase 3. `gemini_calls` and `ai_budget_days` tables exist and are empty |
@@ -46,9 +46,8 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Expo app — Home / Library / Spaces / Capture | **real UI, sample content** | Built from the Claude Design mockups. Nothing calls the API yet |
 | Expo app — auth, API calls, share extension | **absent** | The *Open app when saving* toggle exists; the native extension does not. See [app/README.md](app/README.md) |
 
-**Nothing is faked.** Every "real" row above is genuinely implemented — the
-unverified ones simply have not been run against a live token yet. There are no
-mock responses or placeholder implementations in the codebase.
+**Nothing is faked.** Every "real" row above is genuinely implemented — there are
+no mock responses or placeholder implementations in the codebase.
 
 ### Verified on 2026-07-30
 
@@ -63,9 +62,20 @@ WCAG AA contrast on body text, muted text, the FAB glyph, the digest label and
 both nav-pill states — worst case 4.50:1. **Not run on a device or emulator**:
 there is no dev build yet, so nothing here has been seen rendered.
 
-**Not yet verified:** creating a save with a real Supabase JWT. That path
-exercises the `@CurrentUser` resolver, the lazy profile upsert, and the JSONB
-mapping — none of which have executed. It is the last Phase 1 exit criterion.
+**Phase 1 exit criterion met — the full create path ran against live Supabase.**
+Sign in through `/auth/v1/token` (ES256 JWT) → `POST /v1/saves` **202**, save
+`6d6a3ce3-…` created → `GET /v1/saves/{id}` **200**, same save → `GET /v1/saves`
+**200**, one save listed. That single pass covers the `@CurrentUser` resolver
+(`sub` → UUID), the lazy profile upsert on a first-time user, the JSONB mapping,
+and a commit through the transaction pooler with `prepareThreshold=0`.
+
+One bug surfaced and was fixed on the way: `NimbusJwtDecoder.withJwkSetUri()`
+accepts **RS256 only** by default, and Supabase signs with **ES256**, so every
+valid token was being rejected as "no matching key(s) found" (`4299a48`).
+
+**Still unverified:** the `jobs` row itself. The enqueue ran without error as
+part of the create path, but nobody has looked at the row — it is the Phase 2
+runner's first job to prove it.
 
 ## Running the app
 
@@ -83,7 +93,7 @@ land — an EAS dev client is required. See [app/README.md](app/README.md).
 Requires JDK 25. Maven comes from the wrapper — nothing to install.
 
 ```bash
-cp .env.example .env          # then fill in the two DB passwords
+cp .env.example .env          # two DB passwords + SUPABASE_ANON_KEY
 set -a && source .env && set +a
 cd api && ./mvnw spring-boot:run
 ```
@@ -102,15 +112,24 @@ else — see below.
 
 ### Smoke test
 
-Grab an access token by signing in with the Supabase client (or from the
-Supabase dashboard's API docs), then:
+This is the path verified on 2026-07-30. Mint a token against Supabase Auth
+directly — `SUPABASE_ANON_KEY` is the public anon key, safe to use here:
 
 ```bash
+export SUPABASE_ACCESS_TOKEN=$(curl -s \
+  "$WEAVR_SUPABASE_URL/auth/v1/token?grant_type=password" \
+  -H "apikey: $SUPABASE_ANON_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"…"}' | jq -r .access_token)
+
 curl -X POST http://localhost:8080/v1/saves \
   -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"sourceType":"url","sourceUrl":"https://www.youtube.com/shorts/abc123"}'
 ```
+
+A brand-new user needs its email confirmed before password grant works — do that
+with the admin API (service-role key) rather than clicking a link in an inbox.
 
 Expect `202` with a body containing `"status":"processing"` and a `Location`
 header. A row appears in `saves`, and a matching row in `jobs` waiting for the
@@ -133,6 +152,19 @@ tutorial you'll find wrong:
   `spring-boot-starter-security-oauth2-resource-server` (not
   `spring-boot-starter-oauth2-resource-server`), plus a `-test` companion per
   starter.
+
+**`NimbusJwtDecoder` accepts RS256 only until you tell it otherwise.** Supabase
+signs access tokens with **ES256** (EC P-256), so a stock
+`NimbusJwtDecoder.withJwkSetUri(...).build()` rejects every valid token with a
+misleading "no matching key(s) found" — it reads like a JWKS or issuer problem,
+and it is neither. Hence the explicit `.jwsAlgorithm(SignatureAlgorithm.ES256)`
+in `SecurityConfig`.
+
+Note that `jwsAlgorithm()` *adds to a set* and the RS256 default applies only
+while that set is empty, so the accepted set is now exactly `{ES256}`. Supabase's
+asymmetric signing keys can be ECC P-256 **or** RSA 2048 — if that key is ever
+rotated to RSA, auth breaks completely with the same confusing error. Add
+`.jwsAlgorithm(SignatureAlgorithm.RS256)` alongside it before rotating anything.
 
 **RLS is not the API's access-control boundary.** Spring connects as `postgres`,
 which carries `BYPASSRLS`, so the policies in V1 do not constrain it.

@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Monorepo: `api/` (Spring Boot), `app/` (Expo SDK 57 + expo-router), `docs/`. Git-initialised.
 
-**Phase 1 backend is in.** Flyway `V1__init.sql` (full schema), Supabase JWT resource server, `POST/GET /v1/saves`, job *enqueue*. Not yet: the job runner (Phase 2), any Gemini call (Phase 3).
+**Phase 1 backend is done and verified end-to-end.** Flyway `V1__init.sql` (full schema), Supabase JWT resource server, `POST/GET /v1/saves`, job *enqueue*. Not yet: the job runner (Phase 2), any Gemini call (Phase 3).
 
-V1 has been applied against the live Supabase project and the app boots; auth rejection is verified, but **no save has ever been created with a real JWT** — that path is untested. Per-area status is in [README.md](README.md#whats-real-vs-stubbed).
+The full create path has run against live Supabase: sign in (ES256 JWT) → `POST /v1/saves` 202 → `GET /v1/saves/{id}` 200 → list 200. That covers the `@CurrentUser` resolver, the lazy profile upsert, the JSONB mapping, and a commit through the transaction pooler. **Supabase signs with ES256, and `NimbusJwtDecoder` accepts RS256 only by default** — the explicit `.jwsAlgorithm()` call in `SecurityConfig` is load-bearing, and the failure mode is a misleading "no matching key(s) found". Per-area status is in [README.md](README.md#whats-real-vs-stubbed).
 
 **The Expo app's UI shell is in.** Home / Library / Spaces / Capture from the Claude Design mockups, plus a theme and personalisation layer ported from [PennyWise](https://github.com/sarim2000/pennywiseai-tracker) — two surface families × 13 accents × light/dark/AMOLED, cover gradients, font and nav-style choices, all persisted. It renders from `app/src/data/sampleContent.ts`: **nothing in the app calls the API or signs in yet.** Details and the contrast-picking rationale are in [app/README.md](app/README.md).
 

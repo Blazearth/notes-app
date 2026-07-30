@@ -131,9 +131,11 @@ Expo app with **EAS dev client** from day one (`expo-share-extension` and `react
 
 App Store Connect app record. Play Console app record. RevenueCat project created and linked to both.
 
-**Exit criteria:** `curl` with a real Supabase JWT creates a save · dev client runs on a physical device and creates a save · Flyway migrates cleanly against Supabase · both store records exist.
+**Exit criteria:** ✅ `curl` with a real Supabase JWT creates a save (2026-07-30) · ⬜ dev client runs on a physical device and creates a save · ✅ Flyway migrates cleanly against Supabase · ⬜ both store records exist.
 
 **Risks:** Apple enrolment still pending — if so, do Android first and keep iOS moving on the simulator.
+
+**Remaining:** the two mobile-side criteria. The backend half of Phase 1 is closed.
 
 ---
 
