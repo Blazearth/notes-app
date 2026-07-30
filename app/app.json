@@ -32,6 +32,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3defb561-b324-4275-b53a-e284d300ab70"
+      }
+    },
+    "owner": "blazearth"
   }
 }
