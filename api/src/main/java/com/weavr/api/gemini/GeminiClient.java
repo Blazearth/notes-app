@@ -79,11 +79,19 @@ public class GeminiClient {
 
             log.debug("Gemini classify: save={} model={}", saveId, model);
 
-            String rawResponse = http.post()
+            // Read as raw bytes, not String: JSON is UTF-8 by spec (RFC 8259), but
+            // Gemini's response has no charset param on its Content-Type header, so
+            // Spring's StringHttpMessageConverter falls back to a platform-dependent
+            // default rather than UTF-8. That mis-decoded multi-byte characters
+            // (accented names, non-English text) into mojibake before Jackson ever
+            // saw them — e.g. "café" arrived as "cafÃ©". Jackson's byte-based
+            // readTree follows the JSON spec directly, so this sidesteps the
+            // charset guess entirely instead of pinning a specific one.
+            byte[] rawResponse = http.post()
                     .uri(url)
                     .body(objectMapper.writeValueAsString(requestBody))
                     .retrieve()
-                    .body(String.class);
+                    .body(byte[].class);
 
             JsonNode root = objectMapper.readTree(rawResponse);
 
