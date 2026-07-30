@@ -6,6 +6,28 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 
 ---
 
+## Where we are — 2026-07-30 (two days before the window opens)
+
+| Phase | Built | Exit criteria met |
+|---|---|---|
+| 0 — Pre-flight | repo, Supabase project, decisions closed | ⬜ store records, Apple enrolment, **real Gemini RPD still unverified** |
+| 1 — Foundation | schema, auth, `POST`/`GET /v1/saves`, whole Expo app | 2 of 4 — backend closed, mobile blocked on a dev build |
+| 2 — Ingestion cascade | job runner, cascade steps 1–2, process plumbing | 0 of 4 — all four need yt-dlp installed or the share extension |
+| 3–8 | — | — |
+
+**The pattern to notice: writing code is running well ahead of proving it.** The
+backend is roughly a phase early, and the app is far ahead of what Phase 1 asked
+for. But three things stand between us and a demo, and none of them are code:
+
+1. **No dev build exists**, so nothing in the app has run on a device.
+2. **yt-dlp and ffmpeg are not installed**, so no cascade step has run for real.
+3. **The Gemini RPD number is still unverified** — Phase 0 flagged it, and it
+   changes capacity planning materially at 250 vs 500.
+
+Each is small and unblocks a whole phase. Do them before writing more pipeline.
+
+---
+
 ## The shape of this plan
 
 **Ship publicly at the end of Week 5, not Week 8.** The Grand Prize is judged on traction *during* the event (spec §13), and #BuildInPublic scores on visible iteration. A narrow app in users' hands on Sep 1 with four weeks of public iteration beats a feature-complete submission on Sep 29. Everything below is sequenced so that **Weeks 1–5 build a releasable product** and **Weeks 6–8 are ship-measure-iterate**.
@@ -159,18 +181,56 @@ Three error paths, not two — the extra one earns its place (CA#2):
 
 **Deviation from CA#3:** fairness is a per-group *exclusion* (a group with a job already running is skipped) rather than true round-robin. Postgres rejects `FOR UPDATE` in a query with window functions, so a `row_number()` ranking would cost the skip-locked property. At a pool of 1–2 the exclusion gives the same anti-monopoly result; revisit if concurrency ever rises.
 
-**The cascade** (CLAUDE.md § text-extraction cascade), in order:
-1. `yt-dlp --skip-download --write-auto-subs --write-subs` → captions
-2. `--write-info-json` → title, description, hashtags, uploader
-3. ASR fallback: `ffmpeg` → 16 kHz mono → Groq Whisper
-4. Readable-text extraction for links; text extraction for PDFs
+**The cascade** (CLAUDE.md § text-extraction cascade) — `api/src/main/java/com/weavr/api/pipeline/`:
 
-Process hygiene, non-negotiable (these hang rather than fail):
-- Drain stdout **and** stderr on separate threads
-- `waitFor(timeout)` + `destroyForcibly()`
-- `-f 'worst[height>=360]'`, `--download-sections "*0-90"`, pipe to ffmpeg, delete in `finally`
+| Step | State |
+|---|---|
+| 1. Platform captions — `--skip-download --write-subs --write-auto-subs` | ✅ built |
+| 2. Post metadata — title, description, uploader | ✅ built |
+| 3. ASR — `ffmpeg` → 16 kHz mono → Groq Whisper | ⬜ absent |
+| 4. Readable-text for links; text extraction for PDFs | ⬜ absent |
 
-Steal from the teardown: caption-language discovery from `subtitles` + `automatic_captions` (CA#14) · `ffprobe` audio-stream probe before ASR (CA#13) · yt-dlp error → user-message mapping table (CA#9) · write each stage to `save_stages` (CA#4).
+**Steps 1 and 2 are inverted from the order above, deliberately.** The metadata
+probe is `--dump-single-json`: one call, no files, no media — and its response
+*also* lists the available caption tracks (CA#14), so it doubles as the discovery
+step. Captions are then fetched only when the probe says they exist. Running the
+cheaper call first costs nothing and often ends the cascade there.
+
+**Everything here is untested against a real yt-dlp.** Neither yt-dlp nor ffmpeg
+is installed on the dev machine, so no child process has ever been spawned. The
+pure logic is well covered — VTT parsing, error classification, cascade ordering
+— and `ExternalProcess` is verified against real child processes, but the
+argument lists, the JSON field names and the subtitle-file discovery are all
+unproven. Installing yt-dlp locally is what closes this, and it should happen
+before step 3 is written on top.
+
+Process hygiene, non-negotiable (these hang rather than fail) — ✅ done in
+`ExternalProcess`, and each one proven by reproducing the hang with a real
+spawned JVM rather than a mock:
+- Drain stdout **and** stderr on separate threads *(test floods 1 MB down each; sequential draining deadlocks)*
+- `waitFor(timeout)` + `destroyForcibly()` *(test uses a child that never exits)*
+- Output capped, and the pump keeps draining past the cap — ceasing to read refills the pipe and re-blocks the child
+- stdin closed immediately, so a tool that prompts cannot wait forever
+- Still to come with step 3: `-f 'worst[height>=360]'`, `--download-sections "*0-90"`, pipe to ffmpeg, delete in `finally`
+
+Steal from the teardown: ✅ caption-language discovery from `subtitles` +
+`automatic_captions` (CA#14) · ⬜ `ffprobe` audio-stream probe before ASR (CA#13)
+· ✅ yt-dlp error → user-message mapping table (CA#9), defaulting *unrecognised*
+failures to retryable because broken extractors are routine · ✅ each stage
+written to `save_stages` (CA#4).
+
+**A save still does not reach `ready`.** Extraction produces text; turning that
+into a knowledge type and structured fields is the single Gemini call in Phase 3.
+The text parks in `save_stages` and the save waits — marking it ready without the
+model would be a lie the whole UI repeats.
+
+⬜ **Save-level idempotency on `POST /v1/saves` — do it in this phase, with the
+extension.** The *job* is deduped by save id, but the save is not, so a retry
+creates a duplicate. Two callers hit this: the extension's background
+`URLSession`, which retries by design, and the in-app Paste Link tile on a double
+tap. It is also what Phase 4's `alreadyExists` state needs in order to say "saved
+again" instead of silently making a second copy. Retrofitting it after silent
+capture ships means reconciling duplicates in live data.
 
 ### Mobile
 
@@ -182,9 +242,11 @@ Steal from the teardown: caption-language discovery from `subtitles` + `automati
 
 Android: no-display Activity + WorkManager. Straightforward — do it second.
 
-**Exit criteria:** share a YouTube Short → captions land in `save_stages` with no Gemini call · share an Instagram Reel with no captions → Whisper transcript lands · a killed extension still completes its upload · a yt-dlp failure produces a human-readable message.
+**Exit criteria:** ⬜ share a YouTube Short → captions land in `save_stages` with no Gemini call *(code path exists; never run against a real yt-dlp)* · ⬜ share an Instagram Reel with no captions → Whisper transcript lands *(ASR absent)* · ⬜ a killed extension still completes its upload · ⬜ a yt-dlp failure produces a human-readable message *(the mapping table is built and tested, but only against captured stderr strings, not live failures)*.
 
 **Risks:** Instagram needs curl-cffi impersonation for public Reels (confirmed in the teardown). Budget two days. Treat unauthenticated failure as an acceptable outcome, not a blocker.
+
+**Where Phase 2 actually stands:** the backend skeleton is ahead of schedule — runner, cascade steps 1–2, process plumbing and error classification are all written, and the runner is verified against live Supabase. But *none of the exit criteria are met*, because every one of them needs either yt-dlp installed or the share extension to exist. The next two moves are cheap and unblock the rest: install yt-dlp locally and run one real Short through the cascade, then start the extension spike.
 
 ---
 
@@ -217,7 +279,19 @@ Also: model fallback chain on 404 (CA#10) · per-stage idempotency flags so a re
 
 ### Mobile
 
-Feed screen — `GET /v1/saves` with React Query, rendering structured cards per type. Processing states visible. Pull to refresh.
+Feed screen — `GET /v1/saves`, rendering structured cards per type. Processing states visible. Pull to refresh.
+
+**Mostly built already.** The feed, its four states (loading / error / empty /
+per-status) and pull-to-refresh are in; React Query was not used, since a single
+list with manual refresh did not justify the dependency. What is missing is the
+*type-specific card*: today every save renders as a generic row, because nothing
+populates `knowledge_type` or `structured_data` until this phase. Deciding the
+per-type card layouts is the real work left here, not the plumbing.
+
+**Two Phase-3 hooks already exist in the runner** and should be used rather than
+rebuilt: `RetryAfterException` is exactly the budget-exhaustion path (reschedules
+without spending an attempt, so a day of quota rejections cannot fail a save),
+and `save_stages` already holds the extracted text the model call consumes.
 
 **Exit criteria:** a recipe Reel with captions becomes a structured recipe card, one Gemini call, visible in `gemini_calls` · budget exhaustion queues rather than fails · a blocked download yields `unusable`, not invented ingredients · the app shows real cards.
 
@@ -228,6 +302,11 @@ Feed screen — `GET /v1/saves` with React Query, rendering structured cards per
 **Goal:** overlay-only Reels work. This is the differentiator and the hardest extraction case.
 
 ### Backend
+
+Everything here shells out to ffmpeg and tesseract, so it goes through the same
+`ExternalProcess` the cascade uses — already built and hardened against the
+hang-not-fail cases. The frame-extraction and OCR commands are new; the process
+plumbing is not.
 
 Frames: `select='gt(scene,0.25)',mpdecimate,scale=768:-1` — scene detection plus dedupe so a 5-second ingredient card isn't 5 frames.
 
@@ -246,6 +325,12 @@ Without this, the threshold is a guess and both failure directions are invisible
 ### Mobile
 
 **Silent capture end-to-end.** Share → "Saved ✓" auto-dismiss → back in the Reel → push notification when ready. Settings toggle (mirrored to App Group). State machine from the teardown: `idle` / `success` / `alreadyExists` / `error`, auto-dismiss at 2.5 s / 3 s, and the **5-second escape hatch** so nobody is ever trapped in a spinner (CA#11).
+
+The *Open app when saving* toggle already exists in the app and defaults to off,
+and `src/prefs/shareExtensionBridge.ts` is a deliberate no-op marking where the
+App Group mirror has to be written. `alreadyExists` depends on the save-level
+idempotency listed in Phase 2 — without it a re-share creates a duplicate rather
+than reporting one.
 
 **Exit criteria:** an overlay-only recipe Reel extracts correctly with no Gemini vision call · eval set measured, threshold set from data, numbers written down · sharing never opens the app · re-sharing shows "Saved again," not an error.
 
@@ -267,6 +352,11 @@ Without this, the threshold is a guess and both failure directions are invisible
 ### Mobile
 
 Feed · search · save detail · shopping list · settings · onboarding tuned for the §3 flow (first completed save inside 30 seconds, paywall *after* the first aha). RevenueCat paywall via `react-native-purchases-ui` templates — don't hand-roll.
+
+Feed and settings exist. **Settings is currently an Appearance screen only** —
+theme, accent, cover, typeface, nav style, blur, greeting, and the capture toggle
+— so the product settings (account, caps, subscription state) still need a home.
+Search, save detail and the shopping list are unbuilt.
 
 ### Ship
 
