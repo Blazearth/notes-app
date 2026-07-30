@@ -80,11 +80,13 @@ either way here, because no native project has been generated yet.
 
 ### Deferred by design — easy to mistake for bugs
 
-**Nothing polls.** A save sits at `processing` until the job runner claims it, and
-the job runner is Phase 2 — so polling would spin forever without ever observing
-a transition. Pull-to-refresh covers the gap until there is a runner, or the push
-notification the pipeline is meant to send. A freshly created save therefore
-keeps its "Processing" pill indefinitely; that is correct, not stuck.
+**Nothing polls, and a save never leaves `processing`.** The job runner exists now
+and claims the job within seconds — but the handler behind it is a stub that
+records an `accepted` stage and stops, because nothing yet fetches captions,
+metadata or audio. So there is still no state transition for a poller to observe,
+and polling would spin for nothing. Pull-to-refresh covers it until the
+extraction cascade lands, or the push notification the pipeline is meant to send.
+A freshly created save keeps its "Processing" pill; that is correct, not stuck.
 
 **`POST /v1/saves` is not idempotent yet.** A retry creates a second save. The
 server dedupes the *job* by save id, but not the save. Two callers will hit this:
