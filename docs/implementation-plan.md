@@ -125,7 +125,12 @@ Auth: `spring-boot-starter-oauth2-resource-server` against Supabase's JWKS. A `@
 
 Expo app with **EAS dev client** from day one (`expo-share-extension` and `react-native-purchases` are native — Expo Go will never work). Supabase client, anonymous auth, JWT attached to API calls. One screen: paste a URL, POST it, see the row come back.
 
-**Done ahead of this:** the UI shell (Home / Library / Spaces / Capture) and the whole theme and personalisation layer are built and bundle clean — see [app/README.md](../app/README.md). What is left of Phase 1 mobile is exactly the part above: Supabase client, auth, and the API call. The Capture sheet's tiles are the natural place to hang the first `POST /v1/saves`.
+**Done ahead of this, on paper:** the UI shell, the theme and personalisation layer, the Supabase client, email/password auth, the Home feed from `GET /v1/saves`, and the Capture sheet's Paste Link tile posting to `POST /v1/saves`. All of it typechecks and bundles — see [app/README.md](../app/README.md).
+
+**What is actually left is the hard half: making a dev build and running it.** Nothing above has executed on a device, so the exit criterion is untouched. Two deviations from this plan to note when it does run:
+
+- **Auth is email/password, not anonymous.** Anonymous sign-in needs a dashboard toggle that is not enabled, and password grant is the path already proven end-to-end. Cost: new accounts need email confirmation through the admin API before they can sign in.
+- **The session is in AsyncStorage, not a shared Keychain.** That is fine until Phase 2, where step 3 of the share-extension spike depends on it. Moving it — and storing the *refresh* token — is the retrofit CLAUDE.md warns is painful.
 
 ### Parallel
 

@@ -190,10 +190,47 @@ HTTP ping to a static endpoint.
 
 ## Known gaps
 
+**Blocking the Phase 1 exit**
+
+- **Nothing in the app has run on a device.** The Expo app typechecks and
+  bundles; no dev build exists, so no screen has been seen rendered and no
+  request has left a device. Sign-in, the feed and save creation are all written
+  but unproven — `npx expo run:android` is the next real test, and it is the
+  remaining Phase 1 exit criterion alongside the store records.
+- **Local setup is incomplete.** `app/.env` does not exist yet (copy
+  `app/.env.example`), and the root `.env` predates `SUPABASE_ANON_KEY`, so the
+  backend smoke test cannot mint a token either. Both are one-line fixes, but
+  nothing works until they are done.
+
+**Correctness**
+
 - **Request-level idempotency on `POST /v1/saves`.** The job enqueue is
-  idempotent, but a background `URLSession` retry from the iOS share extension
-  will currently create a second save. This pairs with the extension work in
-  Phase 2 — fix it there, before silent capture ships.
+  idempotent by save id, but the save itself is not, so a retry creates a
+  duplicate. This now has *two* callers: the iOS share extension's background
+  `URLSession` (Phase 2) and the in-app Paste Link tile, which will double-post
+  if a user taps twice on a slow network. Fix before silent capture ships.
 - **No integration tests against a real database.** Unit tests cover validation
   and enum mapping only. Testcontainers with a `pgvector/pgvector` image is the
   natural next step.
+- **`SecurityConfig` accepts `{ES256}` and nothing else.** `jwsAlgorithm()` adds
+  to a set rather than extending the defaults. Rotating the Supabase signing key
+  to RSA 2048 would break auth entirely, with the same misleading "no matching
+  key(s) found". One extra line fixes it; see the gotcha above.
+
+**Deferred by design, but easy to mistake for bugs**
+
+- **A save never leaves `processing`.** Nothing consumes the job queue until the
+  Phase 2 runner exists. The app deliberately does not poll — it would spin
+  forever without observing a transition — so a freshly created save sits in the
+  feed with a "Processing" pill until pull-to-refresh, and then still does.
+- **Auth is email/password, not anonymous.** §10 of the plan called for anonymous
+  auth in Phase 1. Password sign-in was chosen instead because it is the path
+  already proven end-to-end, and anonymous sign-in needs a dashboard toggle that
+  has not been enabled. Consequence: a new account needs its email confirmed via
+  the admin API before it can sign in, which is friction during testing.
+- **The session is not in a shared Keychain yet.** It lives in AsyncStorage,
+  which the iOS share extension cannot read. Moving it — and storing the
+  *refresh* token, not just the access token — is a prerequisite for the
+  extension, and the app README flags it as painful to retrofit.
+- **Capture tiles other than Paste Link do nothing.** They are visibly disabled
+  rather than silently inert, and each needs its own capture surface.

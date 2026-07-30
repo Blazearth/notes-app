@@ -63,14 +63,45 @@ The feed and Capture are wired to the real API. What is left on sample content i
 weekly digest, Spaces and the Library groups all depend on pipeline output or
 collaboration features that no endpoint serves yet.
 
+### What "not yet run on a device" means
+
+`tsc --noEmit` is clean and `expo export` bundles. That proves every module
+resolves and the types line up with the Java DTOs. It proves **nothing** about
+runtime: no screen has been rendered, no request has left a device, and sign-in
+has never succeeded. There is no dev build yet. Until `npx expo run:android`
+says otherwise, treat all three "real" API rows above as written-but-unproven.
+
+The most likely first failures, in order: `EXPO_PUBLIC_API_BASE_URL` pointing
+somewhere the device cannot reach, and a new account whose email has not been
+confirmed. If requests fail even with a reachable URL, check whether the platform
+is blocking **cleartext HTTP** to a LAN IP — Android blocks it by default outside
+debug builds, and iOS ATS blocks it unless excepted. This has not been tested
+either way here, because no native project has been generated yet.
+
+### Deferred by design — easy to mistake for bugs
+
 **Nothing polls.** A save sits at `processing` until the job runner claims it, and
 the job runner is Phase 2 — so polling would spin forever without ever observing
 a transition. Pull-to-refresh covers the gap until there is a runner, or the push
-notification the pipeline is meant to send.
+notification the pipeline is meant to send. A freshly created save therefore
+keeps its "Processing" pill indefinitely; that is correct, not stuck.
 
 **`POST /v1/saves` is not idempotent yet.** A retry creates a second save. The
-server dedupes the *job* by save id, but not the save, and this has to be fixed
-before the share extension's background upload can retry safely.
+server dedupes the *job* by save id, but not the save. Two callers will hit this:
+the share extension's background upload, and the Paste Link tile if a user taps
+twice on a slow network. Fix before silent capture ships.
+
+**Auth is email/password, not anonymous.** Phase 1 of the plan called for
+anonymous auth; password sign-in was used instead because it is the path already
+proven end-to-end against this Supabase project, and anonymous sign-in needs a
+dashboard toggle nobody has enabled. The cost is testing friction: a new account
+must have its email confirmed through the admin API (service-role key) before it
+can sign in. `signUp` surfaces this rather than failing silently.
+
+**The session lives in AsyncStorage, which the share extension cannot read.**
+Moving it to a shared Keychain access group — storing the **refresh** token, not
+just the access token — is a prerequisite for silent capture and is the retrofit
+the note below warns about.
 
 ## Layout
 
