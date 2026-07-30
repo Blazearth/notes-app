@@ -113,6 +113,23 @@ weavr:
     # over a machine caption); `en-orig` is the original-language track.
     subtitle-langs: ${WEAVR_YTDLP_SUB_LANGS:en,en-orig}
 
+  # --------------------------------------------------------------------------
+  # Gemini — AI classification + extraction.
+  # --------------------------------------------------------------------------
+  # primary-model: used for every save (500 RPD on free tier).
+  # fallback-model: used when primary returns confidence < threshold (20 RPD).
+  # confidence-threshold: below this, retry with fallback model.
+  # primary-rpd / fallback-rpd: the daily request budget ceiling per model.
+  # Counters live in ai_budget_days (US/Pacific reset timezone, matching Google).
+  gemini:
+    api-key: ${WEAVR_GEMINI_API_KEY}
+    primary-model: gemini-3.1-flash-lite
+    fallback-model: gemini-2.5-flash
+    primary-rpd: ${WEAVR_GEMINI_PRIMARY_RPD:500}
+    fallback-rpd: ${WEAVR_GEMINI_FALLBACK_RPD:20}
+    confidence-threshold: ${WEAVR_GEMINI_CONFIDENCE_THRESHOLD:0.7}
+    timeout: 30s
+
   supabase:
     # e.g. https://sgjpiordywdklzhlhmwq.supabase.co
     url: ${WEAVR_SUPABASE_URL}
