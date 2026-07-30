@@ -22,6 +22,7 @@ dev build:
 
 ```bash
 cd app
+cp .env.example .env      # then fill it in — the app will not start without it
 npm install
 npx expo run:android      # or run:ios — prebuilds the native project
 npm run typecheck
@@ -30,34 +31,63 @@ npm run typecheck
 `npx expo export --platform android` bundles without a device and is the fastest
 check that nothing is broken.
 
+**Configuration.** Three `EXPO_PUBLIC_*` variables, all of them public by
+definition — they are inlined into the JS bundle. The service-role key must never
+appear here. Missing values are collected rather than thrown, so a fresh clone
+shows a screen naming the variable instead of a white crash; the check is in
+[src/api/config.ts](src/api/config.ts).
+
+The one that catches people is `EXPO_PUBLIC_API_BASE_URL`: `localhost` is the
+*device*, not your machine. Android emulators reach the host at `10.0.2.2`, and a
+physical device needs the machine's LAN IP. There is deliberately no default,
+because a wrong one fails as an opaque timeout. These are read at **build** time,
+so restart the bundler after changing them.
+
 ## What's real vs. stubbed
 
 | Area | State |
 |---|---|
 | Theme system (palettes, accents, AMOLED, fonts, covers) | **real** — 78 palette combinations, all audited for WCAG AA |
 | Preferences (persisted to AsyncStorage) | **real** |
-| Home / Library / Spaces / Capture sheet | **real UI, sample content** — see below |
 | Appearance settings | **real** — every control writes through and takes effect immediately |
-| API calls | **absent** — nothing talks to `/v1/saves` yet |
-| Auth (Supabase sign-in) | **absent** |
+| Auth (Supabase email/password) | **real, not yet run on a device** |
+| Home feed ← `GET /v1/saves` | **real, not yet run on a device** — loading / error / empty / per-status states |
+| Capture → `POST /v1/saves` | **real, not yet run on a device** — the Paste Link tile only |
+| Library / Spaces / Continue / digest | **sample content** — these need features that do not exist yet |
+| Other capture tiles | **inert** — visibly disabled until their capture surfaces exist |
 | Share extension / silent capture | **absent** — the toggle exists, the native side does not |
 | RevenueCat | **absent** |
 
-Screen content comes from [src/data/sampleContent.ts](src/data/sampleContent.ts),
-transcribed from the mockups. The backend can already serve `GET /v1/saves`, but
-no save has ever been created with a real Supabase JWT, so wiring the screens to
-it would be building on an unverified path. The sample items keep the shape of
-`SaveResponse` (a `knowledgeType` key, a source line) so the swap is mechanical.
+The feed and Capture are wired to the real API. What is left on sample content is
+[src/data/sampleContent.ts](src/data/sampleContent.ts): the Continue rail, the
+weekly digest, Spaces and the Library groups all depend on pipeline output or
+collaboration features that no endpoint serves yet.
+
+**Nothing polls.** A save sits at `processing` until the job runner claims it, and
+the job runner is Phase 2 — so polling would spin forever without ever observing
+a transition. Pull-to-refresh covers the gap until there is a runner, or the push
+notification the pipeline is meant to send.
+
+**`POST /v1/saves` is not idempotent yet.** A retry creates a second save. The
+server dedupes the *job* by save id, but not the save, and this has to be fixed
+before the share extension's background upload can retry safely.
 
 ## Layout
 
 ```
-app/                    expo-router routes — thin wrappers only
-  _layout.tsx           providers, font loading, splash gate, stack
+app/                    expo-router routes — thin wrappers and guards only
+  _layout.tsx           providers, font loading, splash gate, config check
   index.tsx             the tab shell (Home / Library / Spaces + FAB)
+  sign-in.tsx           redirects to / when a session exists
   capture.tsx           the Capture sheet, as a transparent modal
   appearance.tsx        Appearance settings
 src/
+  api/
+    config.ts           EXPO_PUBLIC_* reading + MISSING_CONFIG
+    types.ts            wire types mirroring the Java DTOs
+    client.ts           fetch wrapper, auth header, ApiError mapping
+  auth/                 Supabase client + SessionProvider
+  saves/                the feed provider and its formatting helpers
   theme/
     palettes.ts         surface families × accents → a Palette
     contrast.ts         WCAG luminance maths; the on-colour pickers
@@ -143,7 +173,24 @@ reproduces them as views, which is faithful and drops a dependency plus its
 font-loading race. Swapping in a real icon set later is a change to one file.
 
 **The tab shell is state, not routes.** Home / Library / Spaces are kept mounted
-once visited so switching preserves scroll position; they render lazily. Capture
-and Appearance are real routes.
+once visited so switching preserves scroll position; they render lazily. Capture,
+Appearance and sign-in are real routes.
+
+**Enums are lower-case on the wire.** Every API enum implements `DbEnum`, whose
+`db()` carries `@JsonValue` — so it is `"processing"`, not `"PROCESSING"`. Getting
+this wrong fails at the `@JsonCreator` on the way in and reads as a 400 with no
+obvious cause. [src/api/types.ts](src/api/types.ts) mirrors the Java one-for-one.
+
+**A 401 has a completely empty body** — zero bytes, no content-type; the reason
+lives in the `WWW-Authenticate` header, not JSON (verified against the running
+service). That is why the client's response parsing is wrapped in a `try/catch`
+with a kind-aware fallback message: without it, every expired token would surface
+as a JSON parse error rather than an auth problem.
+
+**The access token is read per request, never cached.** `supabase.auth.getSession()`
+refreshes an expired token on the way out, which matters because a save can be
+posted minutes after the app was last foregrounded. The refresh timer is stopped
+while the app is backgrounded — on native the JS runtime is suspended, so a timer
+that fires there wakes to a stale clock.
 
 See [docs/implementation-plan.md](../docs/implementation-plan.md), Phase 1–2.

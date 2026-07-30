@@ -1,3 +1,8 @@
+// Must come before anything that touches URL/URLSearchParams. Hermes ships an
+// incomplete `URL`, and both the Supabase client and our own `saveTitle` parse
+// URLs — without this, hostname comes back empty rather than throwing.
+import 'react-native-url-polyfill/auto';
+
 import { Sora_500Medium, Sora_600SemiBold, Sora_700Bold, useFonts } from '@expo-google-fonts/sora';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -6,7 +11,11 @@ import React, { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { MISSING_CONFIG } from '@/api/config';
+import { SessionProvider, useSession } from '@/auth/SessionProvider';
 import { PreferencesProvider, usePreferences } from '@/prefs/PreferencesProvider';
+import { SavesProvider } from '@/saves/SavesProvider';
+import { ConfigErrorScreen } from '@/screens/ConfigErrorScreen';
 import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -28,6 +37,7 @@ function Routes() {
         }}
       >
         <Stack.Screen name="index" />
+        <Stack.Screen name="sign-in" options={{ animation: 'fade' }} />
         <Stack.Screen name="appearance" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen
           name="capture"
@@ -42,19 +52,24 @@ function Routes() {
 }
 
 function SplashGate({ fontsReady }: { fontsReady: boolean }) {
-  const { hydrated } = usePreferences();
+  const { hydrated: prefsReady } = usePreferences();
+  const { hydrated: sessionReady } = useSession();
+  const ready = fontsReady && prefsReady && sessionReady;
 
-  // Hold the splash until both the stored preferences and the Sora faces are
-  // in, otherwise the first frame renders in the wrong theme and font.
+  // Hold the splash until the stored preferences, the stored session and the
+  // Sora faces are all in. Releasing early renders the first frame in the wrong
+  // theme, or flashes sign-in at an already-signed-in user.
   useEffect(() => {
-    if (fontsReady && hydrated) SplashScreen.hideAsync().catch(() => {});
-  }, [fontsReady, hydrated]);
+    if (ready) SplashScreen.hideAsync().catch(() => {});
+  }, [ready]);
 
-  if (!fontsReady || !hydrated) return null;
+  if (!ready) return null;
 
   return (
     <ThemeProvider>
-      <Routes />
+      <SavesProvider>
+        <Routes />
+      </SavesProvider>
     </ThemeProvider>
   );
 }
@@ -69,11 +84,25 @@ export default function RootLayout() {
   // A font failure should degrade to the system face, not hang the splash.
   const fontsReady = fontsLoaded || fontError != null;
 
+  // Before anything else: without configuration the Supabase client and the API
+  // client are both inert, so say so plainly instead of failing at the first
+  // request with a network error that looks like a server problem.
+  if (MISSING_CONFIG.length > 0) {
+    SplashScreen.hideAsync().catch(() => {});
+    return (
+      <SafeAreaProvider>
+        <ConfigErrorScreen missing={MISSING_CONFIG} />
+      </SafeAreaProvider>
+    );
+  }
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <PreferencesProvider>
-          <SplashGate fontsReady={fontsReady} />
+          <SessionProvider>
+            <SplashGate fontsReady={fontsReady} />
+          </SessionProvider>
         </PreferencesProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

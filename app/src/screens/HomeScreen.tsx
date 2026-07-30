@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -13,11 +13,12 @@ import {
   ACTIVE_SPACES,
   CONTINUE_ITEMS,
   GREETING_NAME,
-  RECENTLY_CAPTURED,
   WEEKLY_DIGEST,
   type ContinueItem,
 } from '@/data/sampleContent';
 import { usePreferences } from '@/prefs/PreferencesProvider';
+import { saveSubtitle, saveTitle, STATUS_LABELS } from '@/saves/format';
+import { useSaves } from '@/saves/SavesProvider';
 import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -72,16 +73,120 @@ function ContinueCard({ item }: { item: ContinueItem }) {
   );
 }
 
+/** A small status pill for saves the pipeline has not finished. */
+function StatusPill({ label, tint }: { label: string; tint: string }) {
+  const { radius, spacing } = useTheme();
+  return (
+    <View
+      style={{
+        paddingVertical: 3,
+        paddingHorizontal: spacing.sm,
+        borderRadius: radius.pill,
+        backgroundColor: tint,
+      }}
+    >
+      <AppText variant="caption" style={{ fontSize: 9.5, color: '#FFFFFF' }}>
+        {label}
+      </AppText>
+    </View>
+  );
+}
+
+/**
+ * The live feed section.
+ *
+ * All four states are real here, because with no job runner yet the interesting
+ * ones are the common ones: a save is created and then sits at `processing`
+ * indefinitely, and an unreachable API is the single most likely thing to happen
+ * during development.
+ */
+function RecentlyCaptured() {
+  const { palette, spacing } = useTheme();
+  const { saves, status, error, refresh } = useSaves();
+
+  if (status === 'loading') {
+    return (
+      <View style={{ paddingVertical: spacing.xxl, alignItems: 'center' }}>
+        <ActivityIndicator color={palette.accent} />
+      </View>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <Card>
+        <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
+          {error?.kind === 'network' ? "Can't reach Weavr" : 'Could not load your saves'}
+        </AppText>
+        <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.md }}>
+          {error?.message}
+        </AppText>
+        <Pressable accessibilityRole="button" onPress={() => void refresh()}>
+          <AppText variant="label" tone="accent">
+            Try again
+          </AppText>
+        </Pressable>
+      </Card>
+    );
+  }
+
+  if (saves.length === 0) {
+    return (
+      <Card>
+        <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
+          Nothing saved yet
+        </AppText>
+        <AppText variant="caption" tone="muted">
+          Tap + and paste a link, or share something into Weavr from another app.
+        </AppText>
+      </Card>
+    );
+  }
+
+  const tintFor = (status_: string) =>
+    status_ === 'failed' ? palette.danger : status_ === 'pending' ? palette.warning : palette.accent;
+
+  return (
+    <View style={{ gap: spacing.smd }}>
+      {saves.map((save) => (
+        <ListRow
+          key={save.id}
+          title={saveTitle(save)}
+          subtitle={saveSubtitle(save)}
+          tint={save.knowledgeType ? TYPE_COLORS[save.knowledgeType] : undefined}
+          trailing={
+            save.status === 'ready' ? undefined : (
+              <StatusPill label={STATUS_LABELS[save.status]} tint={tintFor(save.status)} />
+            )
+          }
+        />
+      ))}
+    </View>
+  );
+}
+
 export function HomeScreen() {
   const { palette, radius, spacing, icon } = useTheme();
   const { prefs } = usePreferences();
+  const { refresh, refreshing } = useSaves();
   const router = useRouter();
 
   const name = prefs.userName.trim() || GREETING_NAME;
   const greeting = greetingForHour(new Date().getHours());
 
   return (
-    <Screen cover>
+    <Screen
+      cover
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void refresh()}
+          tintColor={palette.accent}
+          colors={[palette.accent]}
+          progressBackgroundColor={palette.surface}
+        />
+      }
+    >
       {/* Greeting + avatar */}
       <View
         style={{
@@ -183,16 +288,7 @@ export function HomeScreen() {
       </View>
 
       <SectionLabel>Recently captured</SectionLabel>
-      <View style={{ gap: spacing.smd }}>
-        {RECENTLY_CAPTURED.map((save) => (
-          <ListRow
-            key={save.id}
-            title={save.title}
-            subtitle={save.source}
-            tint={TYPE_COLORS[save.knowledgeType]}
-          />
-        ))}
-      </View>
+      <RecentlyCaptured />
     </Screen>
   );
 }

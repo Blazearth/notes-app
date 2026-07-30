@@ -1,5 +1,11 @@
 import React from 'react';
-import { ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+  ScrollView,
+  View,
+  type RefreshControlProps,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTheme } from '@/theme/ThemeProvider';
@@ -13,6 +19,8 @@ export interface ScreenProps {
   reserveNavSpace?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
   scroll?: boolean;
+  /** Pass a `<RefreshControl>` to enable pull-to-refresh. */
+  refreshControl?: React.ReactElement<RefreshControlProps>;
 }
 
 export function Screen({
@@ -21,6 +29,7 @@ export function Screen({
   reserveNavSpace = true,
   contentStyle,
   scroll = true,
+  refreshControl,
 }: ScreenProps) {
   const { palette, layout, navBarStyle } = useTheme();
   const insets = useSafeAreaInsets();
@@ -49,6 +58,7 @@ export function Screen({
           showsVerticalScrollIndicator={false}
           // The mockups hide scrollbars entirely (`::-webkit-scrollbar`).
           contentInsetAdjustmentBehavior="never"
+          refreshControl={refreshControl}
         >
           {children}
         </ScrollView>

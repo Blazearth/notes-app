@@ -43,8 +43,9 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Search (FTS + vector) | **schema only** | `search_tsv` and `embedding` columns exist and are populated by nobody. Phase 5 |
 | RevenueCat / entitlements | **schema only** | `subscriptions`, `usage_counters` tables exist. Phase 5 |
 | Expo app — theme & personalisation | **real, bundles clean** | 78 palette combinations, all audited for WCAG AA. Preferences persist |
-| Expo app — Home / Library / Spaces / Capture | **real UI, sample content** | Built from the Claude Design mockups. Nothing calls the API yet |
-| Expo app — auth, API calls, share extension | **absent** | The *Open app when saving* toggle exists; the native extension does not. See [app/README.md](app/README.md) |
+| Expo app — auth + save create/list | **real, never run on a device** | Supabase email/password, `POST`/`GET /v1/saves`, all four feed states. Typechecks and bundles; no dev build exists yet |
+| Expo app — Library / Spaces / digest | **sample content** | Need pipeline output or collaboration endpoints that do not exist |
+| Expo app — share extension | **absent** | The *Open app when saving* toggle exists; the native extension does not. See [app/README.md](app/README.md) |
 
 **Nothing is faked.** Every "real" row above is genuinely implemented — there are
 no mock responses or placeholder implementations in the codebase.

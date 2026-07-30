@@ -1,7 +1,8 @@
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { View } from 'react-native';
 
+import { useSession } from '@/auth/SessionProvider';
 import { BottomNav, type NavItem } from '@/components/BottomNav';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { LibraryScreen } from '@/screens/LibraryScreen';
@@ -24,9 +25,12 @@ const TABS: NavItem[] = [
  */
 export default function TabShell() {
   const { palette } = useTheme();
+  const { session } = useSession();
   const router = useRouter();
   const [active, setActive] = useState('home');
   const [visited, setVisited] = useState<Record<string, boolean>>({ home: true });
+
+  if (!session) return <Redirect href="/sign-in" />;
 
   const select = (key: string) => {
     setVisited((prev) => (prev[key] ? prev : { ...prev, [key]: true }));

@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import React from 'react';
 import { Pressable, ScrollView, TextInput, View, useColorScheme } from 'react-native';
 
+import { useSession } from '@/auth/SessionProvider';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -311,6 +312,7 @@ function CoverChip({
 export function AppearanceScreen() {
   const { palette, radius, spacing, layout, icon } = useTheme();
   const { prefs, setPreference, resetPreferences } = usePreferences();
+  const { session, signOut } = useSession();
   const systemScheme = useColorScheme();
   const router = useRouter();
 
@@ -481,6 +483,38 @@ export function AppearanceScreen() {
               backgroundColor: palette.surfaceVariant,
             }}
           />
+        </Card>
+      </Group>
+
+      <Group title="Account">
+        <Card style={{ gap: spacing.md }}>
+          <View>
+            <AppText variant="caption" tone="muted">
+              Signed in as
+            </AppText>
+            <AppText variant="bodySmall" style={{ fontSize: 14 }}>
+              {session?.user.email ?? session?.user.id ?? 'unknown'}
+            </AppText>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => void signOut()}
+            style={({ pressed }) => [
+              {
+                alignSelf: 'flex-start',
+                paddingVertical: spacing.sm,
+                paddingHorizontal: spacing.lg,
+                borderRadius: radius.pill,
+                borderWidth: 1,
+                borderColor: palette.border,
+              },
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <AppText variant="label" style={{ color: palette.danger }}>
+              Sign out
+            </AppText>
+          </Pressable>
         </Card>
       </Group>
 
