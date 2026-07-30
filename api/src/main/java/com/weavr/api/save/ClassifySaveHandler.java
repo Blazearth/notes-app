@@ -190,7 +190,7 @@ class ClassifySaveHandler implements JobHandler {
 
         jdbc.sql("""
                         update saves
-                        set status          = ?::save_status,
+                        set status          = ?,
                             knowledge_type  = ?,
                             confidence      = ?,
                             structured_data = ?::jsonb,
