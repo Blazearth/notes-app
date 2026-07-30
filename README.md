@@ -38,7 +38,7 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | `GET /v1/saves`, `/{id}` | **real, verified** | `200` on both; `/{id}` returns the created save, the list returns it too |
 | Job queue | **real, verified** | Enqueue runs as part of the create path; the runner drains it |
 | Job runner | **real, verified** | `SKIP LOCKED` claim, per-group exclusion, three error paths, stale-claim sweep. Claimed and completed a real job against live Supabase |
-| Extraction cascade — metadata + captions | **real, unverified against yt-dlp** | `--dump-single-json` probe then `--write-auto-subs`, VTT to prose, error classification. Neither yt-dlp nor ffmpeg is installed on the dev machine, so the binary calls have never run |
+| Extraction cascade — metadata + captions | **real, verified** | `--dump-single-json` probe then `--write-auto-subs`, VTT to prose, error classification. Run against yt-dlp 2026.07.04 and a live YouTube video by the opt-in `YtDlpLiveTest`; it found and fixed three defects |
 | Extraction cascade — ASR | **absent** | ffmpeg → 16 kHz mono → Groq Whisper. A different provider with its own key |
 | `process_save` handler | **real** | Runs the cascade and parks the text in `save_stages`. Saves stay `processing` — the Phase 3 model call is what advances them |
 | Any Gemini call | **absent** | Phase 3. `gemini_calls` and `ai_budget_days` tables exist and are empty |
@@ -200,16 +200,21 @@ HTTP ping to a static endpoint.
 
 ## Known gaps
 
-**Unverified because the tooling is missing locally**
+**Verified against a real yt-dlp** (closed — see [testing.md](docs/testing.md#what-running-the-real-binary-found))
 
-- **yt-dlp and ffmpeg are not installed on the dev machine.** The extraction
-  cascade is written and its pure logic is well covered — VTT parsing, error
-  classification, and the ordering decisions all have tests — but no yt-dlp
-  process has ever been spawned. The `ExternalProcess` wrapper underneath it *is*
-  verified against real child processes, including the pipe-deadlock and
-  hang-timeout cases. Installing yt-dlp locally is what closes this.
-- **The container must install both.** A plain JRE base image has neither, and
-  the failure mode is every save retrying until it exhausts `max_attempts`.
+- The probe and caption paths now run end to end against yt-dlp 2026.07.04 and a
+  real YouTube video, via the opt-in `YtDlpLiveTest`. Doing so found three
+  defects that no amount of mocking would have: a `--sub-langs` regex that
+  expanded into 29 downloads and earned an HTTP 429, a non-zero exit discarding
+  captions already written to disk, and caption selection ranked by file size —
+  which reliably preferred the bloated auto-generated track over the uploaded
+  one. All three are fixed and pinned by tests.
+- **The container must still install both binaries.** A plain JRE base image has
+  neither, and the failure mode is every save retrying until it exhausts
+  `max_attempts`. Use the distro package for ffmpeg; the standalone Windows
+  build used locally is ~94 MB per binary because it is statically linked.
+- **ASR is still absent**, so a post with neither captions nor a description
+  fails as `no_text_extracted` rather than falling through to Whisper.
 
 **Blocking the Phase 1 exit**
 

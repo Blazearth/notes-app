@@ -106,8 +106,12 @@ weavr:
     binary: ${WEAVR_YTDLP_BINARY:yt-dlp}
     probe-timeout: 60s
     caption-timeout: 90s
-    # The probe reports what a video actually offers; this is the ask.
-    subtitle-langs: ${WEAVR_YTDLP_SUB_LANGS:en.*,en}
+    # Exact codes, NOT a regex. Each entry is matched as a pattern, and yt-dlp
+    # synthesises translated tracks named `<source>-<target>`, so `en.*` pulls
+    # in en-ar, en-ja, en-ru and the rest — 29 downloads for one TED talk, and
+    # a 429 partway through. `en` is the English track (an uploaded one wins
+    # over a machine caption); `en-orig` is the original-language track.
+    subtitle-langs: ${WEAVR_YTDLP_SUB_LANGS:en,en-orig}
 
   supabase:
     # e.g. https://sgjpiordywdklzhlhmwq.supabase.co

@@ -12,19 +12,28 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 |---|---|---|
 | 0 — Pre-flight | repo, Supabase project, decisions closed | ⬜ store records, Apple enrolment, **real Gemini RPD still unverified** |
 | 1 — Foundation | schema, auth, `POST`/`GET /v1/saves`, whole Expo app | 2 of 4 — backend closed, mobile blocked on a dev build |
-| 2 — Ingestion cascade | job runner, cascade steps 1–2, process plumbing | 0 of 4 — all four need yt-dlp installed or the share extension |
+| 2 — Ingestion cascade | job runner, cascade steps 1–2, process plumbing, **verified against a real yt-dlp** | 1 of 4 — captions proven end to end; the rest need ASR or the share extension |
 | 3–8 | — | — |
 
 **The pattern to notice: writing code is running well ahead of proving it.** The
 backend is roughly a phase early, and the app is far ahead of what Phase 1 asked
-for. But three things stand between us and a demo, and none of them are code:
+for. Two things stand between us and a demo, and neither is code:
 
 1. **No dev build exists**, so nothing in the app has run on a device.
-2. **yt-dlp and ffmpeg are not installed**, so no cascade step has run for real.
-3. **The Gemini RPD number is still unverified** — Phase 0 flagged it, and it
+2. **The Gemini RPD number is still unverified** — Phase 0 flagged it, and it
    changes capacity planning materially at 250 vs 500.
 
 Each is small and unblocks a whole phase. Do them before writing more pipeline.
+
+**The third item on this list is now closed, and it is worth noting what closing
+it cost.** yt-dlp and ffmpeg are installed, and the first run against a real
+video found three defects in code that already had 27 passing tests — a
+`--sub-langs` regex that expanded to 29 downloads and drew an HTTP 429, an exit
+code that discarded captions already written, and caption selection ranked by
+file size, which preferred the bloated auto-generated track over the human one.
+None were visible to a mocked process. Details in
+[testing.md](testing.md#what-running-the-real-binary-found); the lesson applies
+directly to the two items still open above.
 
 ---
 
@@ -196,13 +205,20 @@ probe is `--dump-single-json`: one call, no files, no media — and its response
 step. Captions are then fetched only when the probe says they exist. Running the
 cheaper call first costs nothing and often ends the cascade there.
 
-**Everything here is untested against a real yt-dlp.** Neither yt-dlp nor ffmpeg
-is installed on the dev machine, so no child process has ever been spawned. The
-pure logic is well covered — VTT parsing, error classification, cascade ordering
-— and `ExternalProcess` is verified against real child processes, but the
-argument lists, the JSON field names and the subtitle-file discovery are all
-unproven. Installing yt-dlp locally is what closes this, and it should happen
-before step 3 is written on top.
+**Steps 1 and 2 are now verified against a real yt-dlp** (2026.07.04) by the
+opt-in `YtDlpLiveTest` — argument lists, JSON field names and subtitle-file
+discovery included. That run found three defects, all fixed and pinned by tests;
+the two worth remembering before step 3 is written on top are that
+**`--sub-langs` entries are regexes** matching yt-dlp's synthesised
+`<source>-<target>` translation tracks, and that **auto-generated VTT is several
+times larger than an uploaded track while carrying less text**, so caption files
+must be ranked on parsed prose rather than size. Full write-up in
+[testing.md](testing.md#what-running-the-real-binary-found).
+
+Only YouTube has been exercised live. Instagram, TikTok and Reels remain
+unproven, and Instagram increasingly requires authentication — treat an
+unauthenticated failure there as an acceptable outcome rather than reaching for
+cookies.
 
 Process hygiene, non-negotiable (these hang rather than fail) — ✅ done in
 `ExternalProcess`, and each one proven by reproducing the hang with a real
@@ -242,11 +258,13 @@ capture ships means reconciling duplicates in live data.
 
 Android: no-display Activity + WorkManager. Straightforward — do it second.
 
-**Exit criteria:** ⬜ share a YouTube Short → captions land in `save_stages` with no Gemini call *(code path exists; never run against a real yt-dlp)* · ⬜ share an Instagram Reel with no captions → Whisper transcript lands *(ASR absent)* · ⬜ a killed extension still completes its upload · ⬜ a yt-dlp failure produces a human-readable message *(the mapping table is built and tested, but only against captured stderr strings, not live failures)*.
+**Exit criteria:** 🟡 share a YouTube Short → captions land in `save_stages` with no Gemini call *(the yt-dlp half is proven live — probe, caption fetch and VTT-to-prose all run against a real video; what is unproven is the share hand-off and the `save_stages` write from a device)* · ⬜ share an Instagram Reel with no captions → Whisper transcript lands *(ASR absent)* · ⬜ a killed extension still completes its upload · 🟡 a yt-dlp failure produces a human-readable message *(the mapping table is tested against captured stderr, and one live `HTTP 429` was classified correctly as retryable `source_blocked`; other live failures untested)*.
 
 **Risks:** Instagram needs curl-cffi impersonation for public Reels (confirmed in the teardown). Budget two days. Treat unauthenticated failure as an acceptable outcome, not a blocker.
 
-**Where Phase 2 actually stands:** the backend skeleton is ahead of schedule — runner, cascade steps 1–2, process plumbing and error classification are all written, and the runner is verified against live Supabase. But *none of the exit criteria are met*, because every one of them needs either yt-dlp installed or the share extension to exist. The next two moves are cheap and unblock the rest: install yt-dlp locally and run one real Short through the cascade, then start the extension spike.
+**Where Phase 2 actually stands:** the backend half is done and now *proven* — runner, cascade steps 1–2, process plumbing and error classification are written, the runner is verified against live Supabase, and the cascade is verified against a real yt-dlp. What remains is not backend work: the share extension does not exist, and ASR is unwritten. The next move is the extension spike, which is the single highest-risk mobile unknown and has hard lead times.
+
+Worth carrying forward: the cascade had 27 green tests and three real defects, and the gap between those two numbers was entirely "the binary was mocked". The same shape of gap is currently open on `JobStore`'s claim query, which is exercised only by one manual run against Supabase.
 
 ---
 

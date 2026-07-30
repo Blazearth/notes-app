@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -95,45 +96,58 @@ public class YtDlpClient {
                 "-o", "%(id)s.%(ext)s",
                 url), properties.captionTimeout(), workDir);
 
+        // Read the directory *before* judging the exit code. yt-dlp exits
+        // non-zero when any requested track fails, even though earlier tracks
+        // already landed on disk — a 429 on the second language would otherwise
+        // throw away a complete transcript we had successfully fetched.
+        Optional<String> captions = bestCaptions(workDir);
+        if (captions.isPresent()) {
+            if (!result.succeeded()) {
+                log.debug("yt-dlp exited {} but usable captions were written; keeping them",
+                        result.exitCode());
+            }
+            return captions;
+        }
+
         if (!result.succeeded()) {
             throw new YtDlpFailedException(describe(result), result.stderr());
         }
-
-        String vtt = readLargestVtt(workDir);
-        if (vtt == null) {
-            return Optional.empty();
-        }
-
-        String text = VttParser.toPlainText(vtt);
-        return text.isBlank() ? Optional.empty() : Optional.of(text);
+        return Optional.empty();
     }
 
     /**
-     * A video can yield several subtitle files (uploaded plus auto-generated,
-     * or several English variants). The largest is the most complete; picking by
-     * filename would mean guessing at yt-dlp's language suffixes.
+     * A video can yield several subtitle files — an uploaded track plus a
+     * machine-generated one, typically.
+     *
+     * <p><b>Ranked by extracted prose, not by file size.</b> Auto-generated VTT
+     * is inflated several-fold by the rolling window and inline karaoke timings:
+     * on one real TED talk the auto track was 43,947 bytes against the uploaded
+     * track's 8,456, yet yielded <em>fewer</em> words once parsed (4,284 chars
+     * against 4,443). Choosing on raw bytes therefore picks the noisier source
+     * systematically, and would prefer a non-Latin translation over English
+     * outright, since UTF-8 makes that text larger for the same content.
      */
-    private String readLargestVtt(Path workDir) {
+    private Optional<String> bestCaptions(Path workDir) {
         try (Stream<Path> files = Files.list(workDir)) {
-            Optional<Path> largest = files
-                    .filter(p -> p.getFileName().toString().endsWith(".vtt"))
-                    .max(Comparator.comparingLong(YtDlpClient::sizeOf));
-
-            if (largest.isEmpty()) {
-                return null;
-            }
-            return Files.readString(largest.get(), StandardCharsets.UTF_8);
+            return files
+                    .filter(path -> path.getFileName().toString().endsWith(".vtt"))
+                    .map(YtDlpClient::readQuietly)
+                    .filter(Objects::nonNull)
+                    .map(VttParser::toPlainText)
+                    .filter(text -> !text.isBlank())
+                    .max(Comparator.comparingInt(String::length));
         } catch (IOException e) {
             log.warn("Could not read subtitles from {}", workDir, e);
-            return null;
+            return Optional.empty();
         }
     }
 
-    private static long sizeOf(Path path) {
+    private static String readQuietly(Path path) {
         try {
-            return Files.size(path);
+            return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            return 0L;
+            log.warn("Could not read subtitle file {}", path, e);
+            return null;
         }
     }
 

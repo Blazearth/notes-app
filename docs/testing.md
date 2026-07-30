@@ -20,10 +20,27 @@ difference between a useful status and a misleading one.
 | `curl` against a running API | Real request/response shapes and status codes | Anything on a device |
 | `tsc --noEmit` (app) | Types line up, including against the Java DTOs | That a single screen renders |
 | `expo export` (app) | Every module resolves; the bundle builds | Same — nothing has run |
+| `WEAVR_LIVE_YTDLP=1 ./mvnw test -Dtest=YtDlpLiveTest` | That yt-dlp accepts our argument lists, and the JSON/subtitle files are shaped as assumed | Nothing about the app |
 | `expo run:android` | **Actual runtime.** Nothing below this line has ever happened | — |
 
 Nothing in the app has passed the last row yet. Treat every app-side claim
 accordingly.
+
+### External binaries
+
+The cascade shells out to yt-dlp and ffmpeg. Neither is a Java dependency, so
+Maven will not tell you they are missing — the symptom is every save retrying
+until it exhausts `max_attempts`.
+
+```bash
+yt-dlp --version && ffmpeg -version | head -1
+```
+
+On the dev machine both live in `C:\Users\Saksham\tools\bin`, on the user PATH:
+yt-dlp is the standalone `.exe` from GitHub releases, ffmpeg the gyan.dev
+"essentials" build. That build is statically linked, hence ~94 MB per binary —
+**do not copy that approach into the Docker image**; use the distro package.
+Override the binary location with `WEAVR_YTDLP_BINARY` if it is not on PATH.
 
 ---
 
@@ -33,9 +50,21 @@ accordingly.
 
 ```bash
 cd api
-./mvnw test           # 56 tests, ~15s, NO database or .env needed
+./mvnw test           # 67 tests, ~15s, NO database or .env needed (2 skip: see below)
 ./mvnw clean verify   # the above plus packaging
 ```
+
+The two skipped tests are `YtDlpLiveTest`, which talks to YouTube. They are
+opt-in rather than default because a red build caused by a third party
+rate-limiting us is worse than no signal:
+
+```bash
+WEAVR_LIVE_YTDLP=1 ./mvnw test -Dtest=YtDlpLiveTest
+WEAVR_LIVE_YTDLP=1 WEAVR_LIVE_URL=https://... ./mvnw test -Dtest=YtDlpLiveTest
+```
+
+Run them after touching anything under `pipeline/ytdlp/`, and expect an
+occasional 429 that is not your fault.
 
 Unit tests need no configuration at all — there is no `@SpringBootTest`, so no
 context loads and no environment variables are read. If a test ever starts
@@ -176,6 +205,63 @@ The other: enums are **lower-case on the wire** (`"processing"`, not
 
 ---
 
+## What running the real binary found
+
+The extraction cascade had 27 passing tests before yt-dlp was ever installed.
+The first run against a real video found **three** defects. This is the clearest
+evidence in the repo for the distinction at the top of this page, so it is worth
+recording what each one looked like — every one of them was invisible to a
+mocked `ExternalProcess`, because in each case the code was self-consistent and
+the *world* was different.
+
+**1. `--sub-langs` entries are regexes, and they matched 29 languages.**
+
+The default was `en.*,en`, which reads like "English variants". yt-dlp
+synthesises *translated* caption tracks named `<source>-<target>` at download
+time, so the pattern expanded to `en, en-ar, en-zh-TW, en-nl, en-orig, en-fr,
+en-de, en-ja, en-ru, …` — 29 subtitle downloads for one video, which earned an
+`HTTP Error 429` partway through and left the fetch half-done.
+
+The trap is that the probe JSON gives no warning: `en-ar` is **not** a key in it.
+The real keys are plain codes (`ar`, `ja`, `ru`) plus `en` and `en-orig`; the
+translated names only exist at download time. Reading the JSON would have
+confirmed the wrong conclusion. The fix is exact codes — `en,en-orig`.
+
+**2. Ranking caption files by size picks the worse one, every time.**
+
+Selection was "largest `.vtt` wins", on the reasoning that the biggest file is
+the most complete. Measured on one real TED talk:
+
+| Track | Raw bytes | Prose after parsing |
+|---|---|---|
+| `en` (uploaded) | 8,456 | **4,443 chars** |
+| `en-orig` (auto-generated) | 43,947 | 4,284 chars |
+
+The auto track is 5.2× the bytes and carries *less* text, because
+auto-captions repeat each line in a rolling window and tag every word with
+inline timings (`Hear<00:00:19.720><c> that?</c>`). So the heuristic reliably
+chose the noisier source. It would also prefer any non-Latin translation over
+English outright, since UTF-8 makes the same content larger. Rank on parsed
+prose instead — the parser has already stripped exactly the bloat that was
+being mistaken for content.
+
+This also validated `VttParser` for the first time: 43,947 bytes of the messiest
+real input available collapsed to within 4% of the human transcript.
+
+**3. A non-zero exit does not mean nothing was produced.**
+
+yt-dlp exits non-zero if *any* requested track fails, even when earlier tracks
+already wrote complete files. The code threw on the exit code alone, discarding
+a transcript it had successfully fetched. Read the output directory first; only
+throw when there is genuinely nothing to keep.
+
+**The generalisable part:** all three were *plausible* readings of the
+documentation. Testing them meant giving up on asserting against a mock and
+asserting against the artefact the real tool leaves behind — files on disk, and
+their parsed content.
+
+---
+
 ## Traps
 
 **Two database URLs, and they are not interchangeable.** `WEAVR_DB_URL` is the
@@ -217,15 +303,18 @@ Honest gaps, roughly in order of how much they would cost to discover late.
 | Gap | What would close it |
 |---|---|
 | **Nothing in the app has run on a device.** No screen rendered, no request sent, sign-in never succeeded | `npx expo run:android` with `app/.env` filled in |
-| **No yt-dlp process has ever been spawned.** Argument lists, JSON field names and subtitle-file discovery are all unproven | Install yt-dlp, run one real YouTube Short through the cascade |
+| **Only YouTube has been exercised live.** Instagram, TikTok and Reels paths are unproven, and Instagram increasingly requires auth | Run `YtDlpLiveTest` with `WEAVR_LIVE_URL` set to one URL per platform |
+| **ffmpeg is installed but nothing calls it.** ASR and keyframe extraction are unwritten, so the binary is staged, not used | Phase 2 ASR / Phase 4 keyframes |
 | **No integration tests against a real database.** Every SQL statement is validated only by booting the app | Testcontainers with a `pgvector/pgvector` image |
 | **No automated contrast check.** The 78-combination audit is a manual script | A test runner in `app/`, then promote the script above |
 | **No test covers `JobStore`'s SQL.** The claim query's correctness rests on one manual run | Same Testcontainers setup |
 | **The app has no test runner at all** | Vitest or Jest, plus React Native Testing Library |
 
-The first two are cheap and each unblocks a whole phase. The Testcontainers gap
-is the one that will bite quietly: today a typo in a rarely-hit SQL branch ships
-undetected.
+The device gap is the cheap one and it unblocks a whole phase. The Testcontainers
+gap is the one that will bite quietly: today a typo in a rarely-hit SQL branch
+ships undetected — and `JobStore`'s claim query is now the only substantial piece
+of the backend whose correctness still rests on a single manual run, which is
+exactly the position the cascade was in before yt-dlp was installed.
 
 ---
 
@@ -237,6 +326,14 @@ cd app && npm run typecheck && npx expo export --platform android
 ```
 
 If you touched `palettes.ts` or `contrast.ts`, run the contrast audit too.
+
+If you touched anything under `pipeline/ytdlp/`, run the live test —
+`verify` mocks the process away, which is precisely how three defects survived
+27 green tests:
+
+```bash
+cd api && WEAVR_LIVE_YTDLP=1 ./mvnw test -Dtest=YtDlpLiveTest
+```
 
 If you touched SQL, boot the service against Supabase — `verify` will not catch
 a broken query, and neither will `typecheck`.
