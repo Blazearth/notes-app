@@ -132,7 +132,7 @@ public class JobStore {
                             updated_at = now()
                         where id = ?
                         """)
-                .param(next)
+                .param(java.sql.Timestamp.from(next))
                 .param(truncate(error))
                 .param(jobId)
                 .update();
@@ -153,7 +153,7 @@ public class JobStore {
                             updated_at = now()
                         where id = ?
                         """)
-                .param(Instant.now().plus(delay))
+                .param(java.sql.Timestamp.from(Instant.now().plus(delay)))
                 .param(truncate(reason))
                 .param(jobId)
                 .update();

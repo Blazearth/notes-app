@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.weavr.api.job.JobHandler;
+import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobRecord;
 import com.weavr.api.job.JobType;
 import com.weavr.api.job.PermanentJobException;
@@ -40,13 +41,15 @@ class ProcessSaveHandler implements JobHandler {
     private final SaveRepository saves;
     private final SaveStageWriter stages;
     private final ExtractionCascade cascade;
+    private final JobQueue jobQueue;
     private final JdbcClient jdbc;
 
     ProcessSaveHandler(SaveRepository saves, SaveStageWriter stages,
-                       ExtractionCascade cascade, JdbcClient jdbc) {
+                       ExtractionCascade cascade, JobQueue jobQueue, JdbcClient jdbc) {
         this.saves = saves;
         this.stages = stages;
         this.cascade = cascade;
+        this.jobQueue = jobQueue;
         this.jdbc = jdbc;
     }
 
@@ -74,7 +77,26 @@ class ProcessSaveHandler implements JobHandler {
                     "Weavr can't process this kind of save yet.");
         };
 
-        log.info("Save {} extracted {} chars, waiting on the Phase 3 model call", saveId, text.length());
+        log.info("Save {} extracted {} chars, enqueuing classify_save", saveId, text.length());
+
+        enqueueClassify(saveId, save.getUserId());
+    }
+
+    /**
+     * Enqueues the classify_save job in its own transaction.
+     *
+     * <p>{@link JobQueue#enqueueForUser} requires an active transaction
+     * ({@code propagation = MANDATORY}). The job runner calls
+     * {@code handle()} outside any transaction, so we open one here for the
+     * enqueue alone. The idempotency key makes duplicate enqueues a no-op.
+     */
+    @Transactional
+    void enqueueClassify(UUID saveId, UUID userId) {
+        jobQueue.enqueueForUser(
+                JobType.CLASSIFY_SAVE,
+                java.util.Map.of("saveId", saveId.toString()),
+                "classify_save:" + saveId,
+                userId);
     }
 
     private String extractFromUrl(UUID saveId, Save save) {

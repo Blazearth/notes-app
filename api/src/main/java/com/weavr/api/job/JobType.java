@@ -9,6 +9,9 @@ public final class JobType {
     /** Entry point for a new save: runs the text-extraction cascade onward. */
     public static final String PROCESS_SAVE = "process_save";
 
+    /** Stage 2: runs the Gemini classify-and-extract call on extracted text. */
+    public static final String CLASSIFY_SAVE = "classify_save";
+
     private JobType() {
     }
 }
