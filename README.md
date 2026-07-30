@@ -58,7 +58,15 @@ no mock responses or placeholder implementations in the codebase.
 Against the live Supabase project: `V1` migrated (11.7s) · app started · Flyway
 on the session pooler and Hikari on the transaction pooler, confirmed distinct
 in the logs · `GET /actuator/health` 200 · unauthenticated and
-malformed-token requests rejected 401 · `./mvnw clean verify` green, 56/56 tests.
+malformed-token requests rejected 401 · `./mvnw clean verify` green, 67 tests
+(2 skipped — the opt-in live yt-dlp pair).
+
+Against a real yt-dlp 2026.07.04 and a live YouTube video: probe returned every
+field `SourceMetadata` reads · caption fetch wrote 2 files, not 29 · VTT parsed
+to 4,443 characters of prose, from the uploaded track rather than the noisier
+auto-generated one · one genuine `HTTP 429` classified as retryable
+`source_blocked`. Only YouTube has been exercised — Instagram, TikTok and Reels
+are still unproven.
 
 Expo app: `tsc --noEmit` clean · `expo export --platform android` bundles (3.8 MB
 Hermes bytecode, every route resolved) · all 78 palette combinations audited for

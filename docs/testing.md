@@ -4,9 +4,14 @@ How to check work in this repo, what each check actually proves, and which
 mistakes it cannot catch.
 
 The distinction that matters here: **compiling is not running, and running is not
-running against the real thing.** Most of this codebase currently sits at the
-first two levels, so being precise about which level a claim comes from is the
-difference between a useful status and a misleading one.
+running against the real thing.** Being precise about which level a claim comes
+from is the difference between a useful status and a misleading one.
+
+That is not an abstract worry. The extraction cascade had 27 passing tests and
+three real defects, and the entire gap between those two numbers was that the
+external binary had been mocked — see [what running the real binary
+found](#what-running-the-real-binary-found). The app is currently in the same
+position, one level lower: it typechecks and bundles, and nothing has run.
 
 ---
 
@@ -18,13 +23,13 @@ difference between a useful status and a misleading one.
 | `./mvnw clean verify` | The above, plus the jar builds | Anything about the database |
 | Booting the API | Context wiring, every bean, Flyway, both pooler URLs | That endpoints behave correctly |
 | `curl` against a running API | Real request/response shapes and status codes | Anything on a device |
+| `WEAVR_LIVE_YTDLP=1 ./mvnw test -Dtest=YtDlpLiveTest` | **The real binary.** That yt-dlp accepts our argument lists, that the JSON field names exist, and that subtitle files land where we look | Any platform except the one you passed |
 | `tsc --noEmit` (app) | Types line up, including against the Java DTOs | That a single screen renders |
 | `expo export` (app) | Every module resolves; the bundle builds | Same — nothing has run |
-| `WEAVR_LIVE_YTDLP=1 ./mvnw test -Dtest=YtDlpLiveTest` | That yt-dlp accepts our argument lists, and the JSON/subtitle files are shaped as assumed | Nothing about the app |
-| `expo run:android` | **Actual runtime.** Nothing below this line has ever happened | — |
+| `expo run:android` | **Actual runtime.** Nothing on the app side has reached this row | — |
 
-Nothing in the app has passed the last row yet. Treat every app-side claim
-accordingly.
+The backend now reaches its top row; the app does not reach its own. Treat every
+app-side claim accordingly.
 
 ### External binaries
 
@@ -66,10 +71,12 @@ WEAVR_LIVE_YTDLP=1 WEAVR_LIVE_URL=https://... ./mvnw test -Dtest=YtDlpLiveTest
 Run them after touching anything under `pipeline/ytdlp/`, and expect an
 occasional 429 that is not your fault.
 
-Unit tests need no configuration at all — there is no `@SpringBootTest`, so no
-context loads and no environment variables are read. If a test ever starts
-needing `.env`, that is a signal it has become an integration test and should be
-named like one.
+The default suite needs no configuration at all — there is no `@SpringBootTest`,
+so no context loads and nothing reads `.env`. The only environment variable any
+test consults is `WEAVR_LIVE_YTDLP`, and its sole effect is to enable the live
+pair above. If a test ever starts needing database or Supabase credentials, that
+is a signal it has become an integration test and should be named — and gated —
+like one.
 
 To exercise the database, boot the service:
 
@@ -102,7 +109,7 @@ drops into interactive setup. Either configure it or drop the script.
 
 ## Techniques worth reusing
 
-Three things in this repo could not be tested the obvious way. The workarounds
+Four things in this repo could not be tested the obvious way. The workarounds
 generalise.
 
 ### Testing process handling — spawn a real JVM, never a mock
@@ -203,6 +210,35 @@ The other: enums are **lower-case on the wire** (`"processing"`, not
 `"PROCESSING"`), because every one implements `DbEnum`, whose `db()` carries
 `@JsonValue`. Confirm from the Java source, not from the TypeScript.
 
+### Depending on a third party — gate it, don't skip it
+
+Mocking yt-dlp proves the parsing and hides everything that matters about the
+tool. But a test that hits YouTube on every build will eventually go red because
+YouTube rate-limited us, and a suite that cries wolf gets ignored.
+
+The compromise is a test that is real but **opt-in**, in the suite rather than in
+someone's shell history:
+
+```java
+@EnabledIfEnvironmentVariable(named = "WEAVR_LIVE_YTDLP", matches = "1")
+class YtDlpLiveTest { … }
+```
+
+It reports as *skipped* rather than absent, so `Tests run: 67 … Skipped: 2` is a
+standing reminder that two checks exist and are not running. Two rules make it
+worth having:
+
+- **Assert on shape, not on content.** The title of a video will change; that it
+  has a non-blank title will not. `YtDlpLiveTest` asserts the fields parse and
+  that *at most four* subtitle files were written — the second is what would have
+  caught the 29-download bug on the spot.
+- **Print what it saw.** A live test that only passes or fails wastes the trip.
+  Logging the field values and the first 200 characters of the transcript is how
+  the size-versus-prose inversion became visible at all.
+
+The same pattern is the obvious way to add Testcontainers and, later, a real
+Gemini call — both are slow or metered, and neither belongs on every build.
+
 ---
 
 ## What running the real binary found
@@ -268,6 +304,12 @@ their parsed content.
 transaction pooler (6543); `WEAVR_FLYWAY_URL` is the session pooler (5432).
 Flyway takes a session-level advisory lock, which the transaction pooler breaks —
 *later*, under concurrency, not on the first migration.
+
+**`--sub-langs` entries are regexes, and `en.*` is not "English variants".** It
+matches yt-dlp's synthesised `<source>-<target>` translation tracks, so one
+fetch becomes dozens of downloads and an HTTP 429. Use exact codes. The probe
+JSON will not warn you — those track names do not appear in it. Full story
+[above](#what-running-the-real-binary-found).
 
 **Something may already be listening on 8080.** A leftover `spring-boot:run` will
 answer `/actuator/health` with a 200 and make you think your new build started.
