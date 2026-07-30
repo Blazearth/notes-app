@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Weavr",
+    "slug": "weavr",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "weavr",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.weavr.app",
+      "supportsTablet": false,
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.com.weavr.app"
+        ],
+        "keychain-access-groups": [
+          "$(AppIdentifierPrefix)com.weavr.shared"
+        ]
+      }
+    },
+    "android": {
+      "package": "com.weavr.app",
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": true
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-status-bar",
+      "expo-splash-screen"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

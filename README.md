@@ -42,7 +42,9 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | OCR tier | **absent** | Phase 4 |
 | Search (FTS + vector) | **schema only** | `search_tsv` and `embedding` columns exist and are populated by nobody. Phase 5 |
 | RevenueCat / entitlements | **schema only** | `subscriptions`, `usage_counters` tables exist. Phase 5 |
-| Expo app | **not scaffolded** | See [app/README.md](app/README.md) |
+| Expo app — theme & personalisation | **real, bundles clean** | 78 palette combinations, all audited for WCAG AA. Preferences persist |
+| Expo app — Home / Library / Spaces / Capture | **real UI, sample content** | Built from the Claude Design mockups. Nothing calls the API yet |
+| Expo app — auth, API calls, share extension | **absent** | The *Open app when saving* toggle exists; the native extension does not. See [app/README.md](app/README.md) |
 
 **Nothing is faked.** Every "real" row above is genuinely implemented — the
 unverified ones simply have not been run against a live token yet. There are no
@@ -55,9 +57,26 @@ on the session pooler and Hikari on the transaction pooler, confirmed distinct
 in the logs · `GET /actuator/health` 200 · unauthenticated and
 malformed-token requests rejected 401 · `./mvnw clean verify` green, 11/11 tests.
 
+Expo app: `tsc --noEmit` clean · `expo export --platform android` bundles (3.8 MB
+Hermes bytecode, every route resolved) · all 78 palette combinations audited for
+WCAG AA contrast on body text, muted text, the FAB glyph, the digest label and
+both nav-pill states — worst case 4.50:1. **Not run on a device or emulator**:
+there is no dev build yet, so nothing here has been seen rendered.
+
 **Not yet verified:** creating a save with a real Supabase JWT. That path
 exercises the `@CurrentUser` resolver, the lazy profile upsert, and the JSONB
 mapping — none of which have executed. It is the last Phase 1 exit criterion.
+
+## Running the app
+
+```bash
+cd app && npm install
+npx expo run:android          # or run:ios
+npx expo export --platform android   # bundles without a device
+```
+
+Expo Go will not work once `expo-share-extension` and `react-native-purchases`
+land — an EAS dev client is required. See [app/README.md](app/README.md).
 
 ## Running the API
 

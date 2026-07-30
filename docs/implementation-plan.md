@@ -125,6 +125,8 @@ Auth: `spring-boot-starter-oauth2-resource-server` against Supabase's JWKS. A `@
 
 Expo app with **EAS dev client** from day one (`expo-share-extension` and `react-native-purchases` are native — Expo Go will never work). Supabase client, anonymous auth, JWT attached to API calls. One screen: paste a URL, POST it, see the row come back.
 
+**Done ahead of this:** the UI shell (Home / Library / Spaces / Capture) and the whole theme and personalisation layer are built and bundle clean — see [app/README.md](../app/README.md). What is left of Phase 1 mobile is exactly the part above: Supabase client, auth, and the API call. The Capture sheet's tiles are the natural place to hang the first `POST /v1/saves`.
+
 ### Parallel
 
 App Store Connect app record. Play Console app record. RevenueCat project created and linked to both.

@@ -4,17 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Monorepo: `api/` (Spring Boot), `app/` (Expo, not yet scaffolded), `docs/`. Git-initialised.
+Monorepo: `api/` (Spring Boot), `app/` (Expo SDK 57 + expo-router), `docs/`. Git-initialised.
 
-**Phase 1 backend is in.** Flyway `V1__init.sql` (full schema), Supabase JWT resource server, `POST/GET /v1/saves`, job *enqueue*. Not yet: the job runner (Phase 2), any Gemini call (Phase 3), the mobile app.
+**Phase 1 backend is in.** Flyway `V1__init.sql` (full schema), Supabase JWT resource server, `POST/GET /v1/saves`, job *enqueue*. Not yet: the job runner (Phase 2), any Gemini call (Phase 3).
 
 V1 has been applied against the live Supabase project and the app boots; auth rejection is verified, but **no save has ever been created with a real JWT** — that path is untested. Per-area status is in [README.md](README.md#whats-real-vs-stubbed).
 
-Build and test — JDK 25, Maven via the wrapper:
+**The Expo app's UI shell is in.** Home / Library / Spaces / Capture from the Claude Design mockups, plus a theme and personalisation layer ported from [PennyWise](https://github.com/sarim2000/pennywiseai-tracker) — two surface families × 13 accents × light/dark/AMOLED, cover gradients, font and nav-style choices, all persisted. It renders from `app/src/data/sampleContent.ts`: **nothing in the app calls the API or signs in yet.** Details and the contrast-picking rationale are in [app/README.md](app/README.md).
+
+Build and test — JDK 25 and Node for the app, Maven via the wrapper:
 
 ```bash
 cd api && ./mvnw test          # unit tests, no database needed
 cd api && ./mvnw spring-boot:run
+cd app && npm run typecheck
+cd app && npx expo export --platform android   # bundles without a device
 ```
 
 Secrets live in a gitignored `.env` at the repo root; [.env.example](.env.example) is the tracked template.
