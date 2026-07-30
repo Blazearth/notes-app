@@ -26,6 +26,11 @@ export interface Preferences {
   /** Translucent blur on the nav and sheets. Off = flat opaque fills. */
   blurEffects: boolean;
   /**
+   * Tactile feedback on presses and selections. No effect on web, where there
+   * is no haptics API, so the toggle is hidden rather than shown as a no-op.
+   */
+  haptics: boolean;
+  /**
    * Capture flow: bring the app to the foreground when saving from the share
    * sheet. Off by default — silent capture is the designed behaviour.
    */
@@ -43,6 +48,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   cover: 'none',
   navBarStyle: 'floating',
   blurEffects: true,
+  haptics: true,
   openAppWhenSaving: false,
   userName: '',
 };

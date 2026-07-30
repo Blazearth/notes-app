@@ -1,9 +1,11 @@
 import React from 'react';
-import { Pressable, Switch, View } from 'react-native';
+import { Switch, View } from 'react-native';
 
+import { useHaptic } from '@/motion/haptics';
 import { withAlpha } from '@/theme/contrast';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppText } from './AppText';
+import { Touchable } from './Touchable';
 
 interface BaseProps {
   title: string;
@@ -18,6 +20,14 @@ export function SettingSwitch({
   disabled,
 }: BaseProps & { value: boolean; onValueChange: (v: boolean) => void; disabled?: boolean }) {
   const { palette, spacing, alpha } = useTheme();
+  const haptic = useHaptic();
+
+  // Flipping a switch is a commitment, not a browse — it earns a heavier tap
+  // than the `light` used for navigation.
+  const handleChange = (next: boolean) => {
+    haptic('medium');
+    onValueChange(next);
+  };
 
   return (
     <View
@@ -41,7 +51,7 @@ export function SettingSwitch({
       </View>
       <Switch
         value={value}
-        onValueChange={onValueChange}
+        onValueChange={handleChange}
         disabled={disabled}
         trackColor={{ true: withAlpha(palette.accent, 0.55), false: palette.surfaceVariant }}
         thumbColor={value ? palette.accent : palette.surface}
@@ -60,17 +70,15 @@ export function SettingLink({
   const { spacing } = useTheme();
 
   return (
-    <Pressable
+    <Touchable
+      accessibilityRole="button"
       onPress={onPress}
-      style={({ pressed }) => [
-        {
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: spacing.lg,
-          paddingVertical: spacing.md,
-        },
-        pressed && { opacity: 0.7 },
-      ]}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.lg,
+        paddingVertical: spacing.md,
+      }}
     >
       <View style={{ flex: 1 }}>
         <AppText variant="bodySmall" style={{ fontSize: 14 }}>
@@ -87,6 +95,6 @@ export function SettingLink({
           {value}
         </AppText>
       ) : null}
-    </Pressable>
+    </Touchable>
   );
 }

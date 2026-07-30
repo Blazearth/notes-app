@@ -1,14 +1,16 @@
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
 import { HatchThumb } from '@/components/HatchThumb';
 import { ListRow } from '@/components/ListRow';
+import { Reveal } from '@/components/Reveal';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
+import { Touchable } from '@/components/Touchable';
 import {
   ACTIVE_SPACES,
   CONTINUE_ITEMS,
@@ -121,11 +123,11 @@ function RecentlyCaptured() {
         <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.md }}>
           {error?.message}
         </AppText>
-        <Pressable accessibilityRole="button" onPress={() => void refresh()}>
+        <Touchable accessibilityRole="button" onPress={() => void refresh()} haptic="medium">
           <AppText variant="label" tone="accent">
             Try again
           </AppText>
-        </Pressable>
+        </Touchable>
       </Card>
     );
   }
@@ -188,7 +190,8 @@ export function HomeScreen() {
       }
     >
       {/* Greeting + avatar */}
-      <View
+      <Reveal
+        index={0}
         style={{
           flexDirection: 'row',
           alignItems: 'center',
@@ -202,93 +205,111 @@ export function HomeScreen() {
           </AppText>
           <AppText variant="title">{name}</AppText>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Appearance settings"
-          onPress={() => router.push('/appearance')}
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 20,
-            backgroundColor: palette.accentContainer,
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Glyph name="circle" size={icon.md} color={palette.accent} />
-        </Pressable>
-      </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+            onPress={() => router.push('/settings')}
+            weight="tile"
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: radius.sm,
+              backgroundColor: palette.surface,
+              borderWidth: 1,
+              borderColor: palette.border,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Glyph name="settings" size={icon.sm} />
+          </Touchable>
+        </View>
+      </Reveal>
 
       {/* Ask-or-find bar */}
-      <Pressable
-        accessibilityRole="search"
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: spacing.smd,
-          backgroundColor: palette.surface,
-          borderWidth: 1,
-          borderColor: palette.border,
-          borderRadius: radius.pill,
-          paddingVertical: spacing.md,
-          paddingHorizontal: spacing.lg,
-          marginBottom: spacing.xxl - 2,
-        }}
-      >
-        <Glyph name="search" size={16} weight={2} />
-        <AppText tone="muted" style={{ fontSize: 14 }}>
-          Ask or find anything…
-        </AppText>
-      </Pressable>
+      <Reveal index={1}>
+        <Touchable
+          accessibilityRole="search"
+          // Search has no destination yet, so no haptic: a buzz would promise an
+          // action this control does not perform.
+          haptic={null}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: spacing.smd,
+            backgroundColor: palette.surface,
+            borderWidth: 1,
+            borderColor: palette.border,
+            borderRadius: radius.pill,
+            paddingVertical: spacing.md,
+            paddingHorizontal: spacing.lg,
+            marginBottom: spacing.xxl - 2,
+          }}
+        >
+          <Glyph name="search" size={16} weight={2} />
+          <AppText tone="muted" style={{ fontSize: 14 }}>
+            Ask or find anything…
+          </AppText>
+        </Touchable>
+      </Reveal>
 
-      <SectionLabel>Continue</SectionLabel>
-      <View style={{ marginBottom: spacing.xxl - 2 }}>
-        <Rail>
-          {CONTINUE_ITEMS.map((item) => (
-            <ContinueCard key={item.id} item={item} />
-          ))}
-        </Rail>
-      </View>
+      <Reveal index={2}>
+        <SectionLabel>Continue</SectionLabel>
+        <View style={{ marginBottom: spacing.xxl - 2 }}>
+          <Rail>
+            {CONTINUE_ITEMS.map((item) => (
+              <ContinueCard key={item.id} item={item} />
+            ))}
+          </Rail>
+        </View>
+      </Reveal>
 
-      <Card variant="accent" padding={spacing.lg} style={{ marginBottom: spacing.xxl - 2 }}>
-        {/* On the accent container, not the page — so the label uses the
-            container's computed on-colour rather than the accent itself. */}
-        <AppText variant="sectionLabel" tone="onAccentContainer" style={{ marginBottom: spacing.sm }}>
-          Weekly digest
-        </AppText>
-        <AppText tone="onAccentContainer">{WEEKLY_DIGEST}</AppText>
-      </Card>
+      <Reveal index={3}>
+        <Card variant="accent" padding={spacing.lg} style={{ marginBottom: spacing.xxl - 2 }}>
+          {/* On the accent container, not the page — so the label uses the
+              container's computed on-colour rather than the accent itself. */}
+          <AppText variant="sectionLabel" tone="onAccentContainer" style={{ marginBottom: spacing.sm }}>
+            Weekly digest
+          </AppText>
+          <AppText tone="onAccentContainer">{WEEKLY_DIGEST}</AppText>
+        </Card>
+      </Reveal>
 
-      <SectionLabel>Active spaces</SectionLabel>
-      <View style={{ flexDirection: 'row', gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
-        {ACTIVE_SPACES.map((space) => (
-          <Card key={space.id} radius={radius.md} padding={spacing.md} style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: radius.sm,
-                  backgroundColor: palette.surfaceVariant,
-                  borderWidth: 1,
-                  borderColor: palette.border,
-                }}
-              />
-              <View style={{ flex: 1 }}>
-                <AppText variant="cardTitle" numberOfLines={1}>
-                  {space.name}
-                </AppText>
-                <AppText variant="caption" tone="muted">
-                  {space.memberCount} members
-                </AppText>
+      <Reveal index={4}>
+        <SectionLabel>Active spaces</SectionLabel>
+        <View style={{ flexDirection: 'row', gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
+          {ACTIVE_SPACES.map((space) => (
+            <Card key={space.id} radius={radius.md} padding={spacing.md} style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
+                <View
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: radius.sm,
+                    backgroundColor: palette.surfaceVariant,
+                    borderWidth: 1,
+                    borderColor: palette.border,
+                  }}
+                />
+                <View style={{ flex: 1 }}>
+                  <AppText variant="cardTitle" numberOfLines={1}>
+                    {space.name}
+                  </AppText>
+                  <AppText variant="caption" tone="muted">
+                    {space.memberCount} members
+                  </AppText>
+                </View>
               </View>
-            </View>
-          </Card>
-        ))}
-      </View>
+            </Card>
+          ))}
+        </View>
+      </Reveal>
 
-      <SectionLabel>Recently captured</SectionLabel>
-      <RecentlyCaptured />
+      <Reveal index={5}>
+        <SectionLabel>Recently captured</SectionLabel>
+        <RecentlyCaptured />
+      </Reveal>
     </Screen>
   );
 }

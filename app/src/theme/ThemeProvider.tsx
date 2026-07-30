@@ -5,6 +5,7 @@ import { useColorScheme } from 'react-native';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import type { NavBarStyle } from '@/prefs/types';
 import { COVERS, type CoverSpec } from './covers';
+import { PressDepth, Spring } from './motion';
 import { buildPalette, type Palette } from './palettes';
 import { Alpha, Duration, Elevation, IconSize, Layout, Radius, Spacing } from './tokens';
 import { buildTypography, type Typography } from './typography';
@@ -19,6 +20,8 @@ export interface Theme {
   alpha: typeof Alpha;
   elevation: typeof Elevation;
   duration: typeof Duration;
+  spring: typeof Spring;
+  pressDepth: typeof PressDepth;
   /** Personalisation that components read directly. */
   cover: CoverSpec;
   navBarStyle: NavBarStyle;
@@ -50,6 +53,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       alpha: Alpha,
       elevation: Elevation,
       duration: Duration,
+      spring: Spring,
+      pressDepth: PressDepth,
       cover: COVERS[prefs.cover] ?? COVERS.none,
       navBarStyle: prefs.navBarStyle,
       blurEffects: prefs.blurEffects,

@@ -1,8 +1,9 @@
 import React from 'react';
-import { Pressable, View } from 'react-native';
+import { View } from 'react-native';
 
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppText } from './AppText';
+import { Touchable } from './Touchable';
 
 export interface ChipProps {
   label: string;
@@ -20,22 +21,24 @@ export function Chip({ label, selected = false, onPress, tint }: ChipProps) {
   const { palette, radius, spacing } = useTheme();
 
   return (
-    <Pressable
+    <Touchable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
       onPress={onPress}
-      style={({ pressed }) => [
-        {
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: spacing.sm,
-          paddingVertical: spacing.sm,
-          paddingHorizontal: spacing.lg,
-          borderRadius: radius.pill,
-          backgroundColor: selected ? palette.text : palette.surface,
-          borderWidth: selected ? 0 : 1,
-          borderColor: selected ? 'transparent' : palette.border,
-        },
-        pressed && { opacity: 0.8 },
-      ]}
+      // A filter strip is swept through, so `selection` rather than `light` —
+      // the softer tick reads as moving along a set instead of N separate taps.
+      haptic="selection"
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+        paddingVertical: spacing.sm,
+        paddingHorizontal: spacing.lg,
+        borderRadius: radius.pill,
+        backgroundColor: selected ? palette.text : palette.surface,
+        borderWidth: selected ? 0 : 1,
+        borderColor: selected ? 'transparent' : palette.border,
+      }}
     >
       {tint ? <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: tint }} /> : null}
       <AppText
@@ -44,6 +47,6 @@ export function Chip({ label, selected = false, onPress, tint }: ChipProps) {
       >
         {label}
       </AppText>
-    </Pressable>
+    </Touchable>
   );
 }

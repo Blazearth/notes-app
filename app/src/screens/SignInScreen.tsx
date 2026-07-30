@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, TextInput, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, TextInput, View } from 'react-native';
 
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Screen } from '@/components/Screen';
+import { Touchable } from '@/components/Touchable';
 import { useSession } from '@/auth/SessionProvider';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -97,21 +98,20 @@ export function SignInScreen() {
             style={field}
           />
 
-          <Pressable
+          <Touchable
             accessibilityRole="button"
             disabled={!canSubmit}
             onPress={() => void submit()}
-            style={({ pressed }) => [
-              {
-                alignItems: 'center',
-                justifyContent: 'center',
-                minHeight: 46,
-                borderRadius: radius.pill,
-                backgroundColor: palette.accent,
-                opacity: canSubmit ? 1 : 0.45,
-              },
-              pressed && { opacity: 0.85 },
-            ]}
+            // The one commitment on this screen.
+            haptic="medium"
+            baseOpacity={canSubmit ? 1 : 0.45}
+            style={{
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: 46,
+              borderRadius: radius.pill,
+              backgroundColor: palette.accent,
+            }}
           >
             {busy ? (
               <ActivityIndicator color={palette.onAccent} />
@@ -120,7 +120,7 @@ export function SignInScreen() {
                 {mode === 'signIn' ? 'Sign in' : 'Create account'}
               </AppText>
             )}
-          </Pressable>
+          </Touchable>
 
           {message ? (
             <AppText
@@ -132,7 +132,7 @@ export function SignInScreen() {
           ) : null}
         </Card>
 
-        <Pressable
+        <Touchable
           accessibilityRole="button"
           onPress={() => {
             setMode((m) => (m === 'signIn' ? 'signUp' : 'signIn'));
@@ -143,7 +143,7 @@ export function SignInScreen() {
           <AppText variant="bodySmall" tone="accent">
             {mode === 'signIn' ? 'Create an account' : 'I already have an account'}
           </AppText>
-        </Pressable>
+        </Touchable>
       </Screen>
     </KeyboardAvoidingView>
   );

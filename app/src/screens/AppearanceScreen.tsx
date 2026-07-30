@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Pressable, ScrollView, TextInput, View, useColorScheme } from 'react-native';
+import { ScrollView, TextInput, View, useColorScheme } from 'react-native';
 
 import { useSession } from '@/auth/SessionProvider';
 import { AppText } from '@/components/AppText';
@@ -11,6 +11,7 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Segmented } from '@/components/Segmented';
 import { SettingSwitch } from '@/components/SettingRow';
+import { Touchable } from '@/components/Touchable';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import { NAV_BAR_STYLES, THEME_MODES, type NavBarStyle, type ThemeMode } from '@/prefs/types';
 import { withAlpha } from '@/theme/contrast';
@@ -166,11 +167,13 @@ function AccentSwatch({
   const preview = buildPalette({ family, accent: id, isDark, amoled: false });
 
   return (
-    <Pressable
+    <Touchable
       accessibilityRole="radio"
       accessibilityState={{ selected }}
       accessibilityLabel={ACCENTS[id].label}
       onPress={onPress}
+      weight="tile"
+      haptic="selection"
       style={{ alignItems: 'center', gap: spacing.xs, width: 56 }}
     >
       <View
@@ -199,7 +202,7 @@ function AccentSwatch({
       <AppText variant="caption" tone={selected ? 'default' : 'muted'} style={{ fontSize: 10 }}>
         {ACCENTS[id].label}
       </AppText>
-    </Pressable>
+    </Touchable>
   );
 }
 
@@ -221,10 +224,11 @@ function FamilyCard({
   const family = SURFACE_FAMILIES[id];
 
   return (
-    <Pressable
+    <Touchable
       accessibilityRole="radio"
       accessibilityState={{ selected }}
       onPress={onPress}
+      haptic="selection"
       style={{
         flex: 1,
         borderRadius: radius.md,
@@ -254,7 +258,7 @@ function FamilyCard({
       <AppText variant="caption" tone="muted">
         {family.description}
       </AppText>
-    </Pressable>
+    </Touchable>
   );
 }
 
@@ -271,11 +275,13 @@ function CoverChip({
   const spec = COVERS[id];
 
   return (
-    <Pressable
+    <Touchable
       accessibilityRole="radio"
       accessibilityState={{ selected }}
       accessibilityLabel={spec.label}
       onPress={onPress}
+      weight="tile"
+      haptic="selection"
       style={{ alignItems: 'center', gap: spacing.xs, width: 76 }}
     >
       <View
@@ -305,7 +311,7 @@ function CoverChip({
       <AppText variant="caption" tone={selected ? 'default' : 'muted'} style={{ fontSize: 10 }}>
         {spec.label}
       </AppText>
-    </Pressable>
+    </Touchable>
   );
 }
 
@@ -328,26 +334,24 @@ export function AppearanceScreen() {
           marginBottom: spacing.xl,
         }}
       >
-        <Pressable
+        <Touchable
           accessibilityRole="button"
           accessibilityLabel="Back"
           onPress={() => router.back()}
-          style={({ pressed }) => [
-            {
-              width: 36,
-              height: 36,
-              borderRadius: radius.sm,
-              backgroundColor: palette.surface,
-              borderWidth: 1,
-              borderColor: palette.border,
-              alignItems: 'center',
-              justifyContent: 'center',
-            },
-            pressed && { opacity: 0.7 },
-          ]}
+          weight="tile"
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: radius.sm,
+            backgroundColor: palette.surface,
+            borderWidth: 1,
+            borderColor: palette.border,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
         >
-          <Glyph name="diamond" size={icon.sm} />
-        </Pressable>
+          <Glyph name="chevron" size={icon.sm} />
+        </Touchable>
         <AppText variant="display">Appearance</AppText>
       </View>
 
@@ -496,47 +500,44 @@ export function AppearanceScreen() {
               {session?.user.email ?? session?.user.id ?? 'unknown'}
             </AppText>
           </View>
-          <Pressable
+          <Touchable
             accessibilityRole="button"
             onPress={() => void signOut()}
-            style={({ pressed }) => [
-              {
-                alignSelf: 'flex-start',
-                paddingVertical: spacing.sm,
-                paddingHorizontal: spacing.lg,
-                borderRadius: radius.pill,
-                borderWidth: 1,
-                borderColor: palette.border,
-              },
-              pressed && { opacity: 0.7 },
-            ]}
+            haptic="medium"
+            style={{
+              alignSelf: 'flex-start',
+              paddingVertical: spacing.sm,
+              paddingHorizontal: spacing.lg,
+              borderRadius: radius.pill,
+              borderWidth: 1,
+              borderColor: palette.border,
+            }}
           >
             <AppText variant="label" style={{ color: palette.danger }}>
               Sign out
             </AppText>
-          </Pressable>
+          </Touchable>
         </Card>
       </Group>
 
-      <Pressable
+      <Touchable
         accessibilityRole="button"
         onPress={resetPreferences}
-        style={({ pressed }) => [
-          {
-            alignSelf: 'flex-start',
-            paddingVertical: spacing.smd,
-            paddingHorizontal: spacing.lg,
-            borderRadius: radius.pill,
-            borderWidth: 1,
-            borderColor: palette.border,
-          },
-          pressed && { opacity: 0.7 },
-        ]}
+        // Throws away every personalisation choice on this screen at once.
+        haptic="medium"
+        style={{
+          alignSelf: 'flex-start',
+          paddingVertical: spacing.smd,
+          paddingHorizontal: spacing.lg,
+          borderRadius: radius.pill,
+          borderWidth: 1,
+          borderColor: palette.border,
+        }}
       >
         <AppText variant="label" tone="muted">
           Reset to defaults
         </AppText>
-      </Pressable>
+      </Touchable>
     </Screen>
   );
 }

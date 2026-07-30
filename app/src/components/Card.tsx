@@ -1,7 +1,9 @@
 import React from 'react';
-import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
 
+import type { HapticTone } from '@/motion/haptics';
 import { useTheme } from '@/theme/ThemeProvider';
+import { Touchable } from './Touchable';
 
 export interface CardProps {
   children?: React.ReactNode;
@@ -10,10 +12,19 @@ export interface CardProps {
   padding?: number;
   radius?: number;
   onPress?: () => void;
+  haptic?: HapticTone | null;
   style?: StyleProp<ViewStyle>;
 }
 
-export function Card({ children, variant = 'surface', padding, radius, onPress, style }: CardProps) {
+export function Card({
+  children,
+  variant = 'surface',
+  padding,
+  radius,
+  onPress,
+  haptic = 'light',
+  style,
+}: CardProps) {
   const { palette, radius: r, layout, elevation } = useTheme();
 
   const surface: ViewStyle =
@@ -36,8 +47,8 @@ export function Card({ children, variant = 'surface', padding, radius, onPress, 
   if (!onPress) return <View style={base}>{children}</View>;
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [base, pressed && { opacity: 0.85 }]}>
+    <Touchable onPress={onPress} weight="card" haptic={haptic} style={base}>
       {children}
-    </Pressable>
+    </Touchable>
   );
 }

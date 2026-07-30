@@ -48,6 +48,8 @@ export interface CaptureOption {
   id: string;
   label: string;
   glyph: GlyphName;
+  /** Matches the mockup's per-option icon colour. */
+  tint: 'accent' | 'warm' | 'muted';
 }
 
 export interface TaskItem {
@@ -138,14 +140,14 @@ export const SPACE_DETAIL = {
 };
 
 export const CAPTURE_OPTIONS: CaptureOption[] = [
-  { id: 'link', label: 'Paste Link', glyph: 'roundedSquare' },
-  { id: 'scan', label: 'Scan Doc', glyph: 'bars' },
-  { id: 'camera', label: 'Camera', glyph: 'ring' },
-  { id: 'screenshot', label: 'Screenshot', glyph: 'square' },
-  { id: 'voice', label: 'Voice Note', glyph: 'capsule' },
-  { id: 'file', label: 'Upload File', glyph: 'arch' },
-  { id: 'note', label: 'Text Note', glyph: 'page' },
-  { id: 'import', label: 'Import', glyph: 'diamond' },
+  { id: 'link', label: 'Paste Link', glyph: 'link', tint: 'accent' },
+  { id: 'scan', label: 'Scan Doc', glyph: 'fileText', tint: 'muted' },
+  { id: 'camera', label: 'Camera', glyph: 'camera', tint: 'warm' },
+  { id: 'screenshot', label: 'Screenshot', glyph: 'corners', tint: 'muted' },
+  { id: 'voice', label: 'Voice Note', glyph: 'mic', tint: 'accent' },
+  { id: 'file', label: 'Upload File', glyph: 'upload', tint: 'muted' },
+  { id: 'note', label: 'Text Note', glyph: 'textNote', tint: 'warm' },
+  { id: 'import', label: 'Import', glyph: 'download', tint: 'muted' },
 ];
 
 export const CAPTURE_SUBTITLE =
