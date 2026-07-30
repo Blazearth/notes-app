@@ -35,8 +35,9 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Supabase JWT auth | **real, verified** | Issuer + audience checked explicitly. Both paths exercised: rejection (401) and accept, with a real **ES256** token |
 | `POST /v1/saves` | **real, verified** | `202` with a real JWT; row committed and readable. Exercises `@CurrentUser`, the lazy profile upsert, and the JSONB mapping |
 | `GET /v1/saves`, `/{id}` | **real, verified** | `200` on both; `/{id}` returns the created save, the list returns it too |
-| Job queue | **enqueue only** | The enqueue runs as part of the verified create path. Nothing consumes the rows yet |
-| Job runner | **absent** | Phase 2 — `SKIP LOCKED` claim, retry, `group_id` round-robin |
+| Job queue | **real, verified** | Enqueue runs as part of the create path; the runner drains it |
+| Job runner | **real, verified** | `SKIP LOCKED` claim, per-group exclusion, three error paths, stale-claim sweep. Claimed and completed a real job against live Supabase |
+| Extraction cascade handler | **stub** | `process_save` records an `accepted` stage and stops. Saves stay `processing` — see below |
 | Text-extraction cascade | **absent** | Phase 2 — yt-dlp / ffmpeg / ASR |
 | Any Gemini call | **absent** | Phase 3. `gemini_calls` and `ai_budget_days` tables exist and are empty |
 | OCR tier | **absent** | Phase 4 |
@@ -55,7 +56,7 @@ no mock responses or placeholder implementations in the codebase.
 Against the live Supabase project: `V1` migrated (11.7s) · app started · Flyway
 on the session pooler and Hikari on the transaction pooler, confirmed distinct
 in the logs · `GET /actuator/health` 200 · unauthenticated and
-malformed-token requests rejected 401 · `./mvnw clean verify` green, 11/11 tests.
+malformed-token requests rejected 401 · `./mvnw clean verify` green, 22/22 tests.
 
 Expo app: `tsc --noEmit` clean · `expo export --platform android` bundles (3.8 MB
 Hermes bytecode, every route resolved) · all 78 palette combinations audited for
@@ -74,9 +75,15 @@ One bug surfaced and was fixed on the way: `NimbusJwtDecoder.withJwkSetUri()`
 accepts **RS256 only** by default, and Supabase signs with **ES256**, so every
 valid token was being rejected as "no matching key(s) found" (`4299a48`).
 
-**Still unverified:** the `jobs` row itself. The enqueue ran without error as
-part of the create path, but nobody has looked at the row — it is the Phase 2
-runner's first job to prove it.
+**The queue is now verified too, by draining it.** The job runner started against
+live Supabase, claimed the row that create path had left behind
+(`process_save` for save `6d6a3ce3-…`), ran the handler, wrote its `save_stages`
+row and marked the job `succeeded` in 1.5s. That exercises the whole claim
+path — `FOR UPDATE SKIP LOCKED`, the `returning` projection, JSONB payload
+decoding and the stage upsert — none of which unit tests can reach.
+
+The save itself is still `processing`, and correctly so: the handler is a stub
+until the extraction cascade exists.
 
 ## Running the app
 
@@ -133,8 +140,9 @@ A brand-new user needs its email confirmed before password grant works — do th
 with the admin API (service-role key) rather than clicking a link in an inbox.
 
 Expect `202` with a body containing `"status":"processing"` and a `Location`
-header. A row appears in `saves`, and a matching row in `jobs` waiting for the
-Phase 2 runner.
+header. A row appears in `saves`, and a matching row in `jobs` — which the job
+runner claims within a couple of seconds, logging `Job … succeeded`. The save
+stays `processing`, because the handler behind that job is still a stub.
 
 ## Things that will bite you
 
@@ -219,10 +227,12 @@ HTTP ping to a static endpoint.
 
 **Deferred by design, but easy to mistake for bugs**
 
-- **A save never leaves `processing`.** Nothing consumes the job queue until the
-  Phase 2 runner exists. The app deliberately does not poll — it would spin
-  forever without observing a transition — so a freshly created save sits in the
-  feed with a "Processing" pill until pull-to-refresh, and then still does.
+- **A save never leaves `processing`.** The job runner now claims and completes
+  the job, but its handler is a stub: it records an `accepted` stage and stops,
+  because nothing yet fetches captions, metadata or audio. The app deliberately
+  does not poll — it would spin without observing a transition — so a freshly
+  created save keeps its "Processing" pill. Both halves are intentional; the
+  cascade is what changes it.
 - **Auth is email/password, not anonymous.** §10 of the plan called for anonymous
   auth in Phase 1. Password sign-in was chosen instead because it is the path
   already proven end-to-end, and anonymous sign-in needs a dashboard toggle that

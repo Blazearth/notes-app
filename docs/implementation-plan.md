@@ -150,13 +150,14 @@ App Store Connect app record. Play Console app record. RevenueCat project create
 
 ### Backend
 
-**Job runner first** — `SELECT ... FOR UPDATE SKIP LOCKED`, honouring `priority`, `run_after`, and `group_id` round-robin (CA#3). Concurrency capped at **1–2**. This is the backbone; everything else is a job type.
+**Job runner first** — ✅ **done** (`api/src/main/java/com/weavr/api/job/`). `SELECT ... FOR UPDATE SKIP LOCKED`, honouring `priority` and `run_after`, concurrency capped at **1–2** on a bounded platform-thread pool, plus a stale-claim sweep so a crashed worker's jobs return to the queue. Verified against live Supabase by draining the job the Phase 1 create path left behind.
 
-Two error paths, distinguished from the start (CA#2):
-- `RetryableException` → increments `attempts`
-- `RetryAfterException(delayMs)` → sets `run_after`, **does not** increment `attempts`
+Three error paths, not two — the extra one earns its place (CA#2):
+- `RetryableJobException`, and anything unrecognised → increments `attempts`, exponential backoff (30s, 2m, 8m, 32m, capped at 1h)
+- `RetryAfterException(delay)` → sets `run_after`, **does not** increment `attempts`. This is what keeps a Gemini quota rejection from burning the retry budget in Phase 3.
+- `PermanentJobException(code, userMessage)` → fails immediately without spending retries, and pushes a user-safe message onto the save. An unsupported URL should not be retried five times over an hour, and with silent capture the feed is the only place the user ever finds out.
 
-The second one is what keeps a Gemini quota rejection from burning the retry budget in Phase 3.
+**Deviation from CA#3:** fairness is a per-group *exclusion* (a group with a job already running is skipped) rather than true round-robin. Postgres rejects `FOR UPDATE` in a query with window functions, so a `row_number()` ranking would cost the skip-locked property. At a pool of 1–2 the exclusion gives the same anti-monopoly result; revisit if concurrency ever rises.
 
 **The cascade** (CLAUDE.md § text-extraction cascade), in order:
 1. `yt-dlp --skip-download --write-auto-subs --write-subs` → captions

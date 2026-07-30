@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Monorepo: `api/` (Spring Boot), `app/` (Expo SDK 57 + expo-router), `docs/`. Git-initialised.
 
-**Phase 1 backend is done and verified end-to-end.** Flyway `V1__init.sql` (full schema), Supabase JWT resource server, `POST/GET /v1/saves`, job *enqueue*. Not yet: the job runner (Phase 2), any Gemini call (Phase 3).
+**Phase 1 backend is done and verified end-to-end, and the Phase 2 job runner is in.** Flyway `V1__init.sql` (full schema), Supabase JWT resource server, `POST/GET /v1/saves`, and a Postgres-backed queue that is now drained by a real runner — `FOR UPDATE SKIP LOCKED`, per-group exclusion so one user cannot occupy a 1–2 slot pool, three error paths, and a stale-claim sweep. Not yet: the extraction cascade behind it (`process_save` is a stub that records a stage and stops), any Gemini call (Phase 3).
+
+**Everything downstream is a `JobHandler`, not a change to the runner.** The cascade, the Gemini call, enrichment and embedding each register a handler keyed by `jobs.type`. Outcomes are signalled by exception: `RetryAfterException` reschedules *without* spending an attempt (this is what stops a quota rejection from burning the retry budget), `PermanentJobException` fails immediately with a user-safe message, anything else costs an attempt and backs off exponentially.
 
 The full create path has run against live Supabase: sign in (ES256 JWT) → `POST /v1/saves` 202 → `GET /v1/saves/{id}` 200 → list 200. That covers the `@CurrentUser` resolver, the lazy profile upsert, the JSONB mapping, and a commit through the transaction pooler. **Supabase signs with ES256, and `NimbusJwtDecoder` accepts RS256 only by default** — the explicit `.jwsAlgorithm()` call in `SecurityConfig` is load-bearing, and the failure mode is a misleading "no matching key(s) found". Per-area status is in [README.md](README.md#whats-real-vs-stubbed).
 

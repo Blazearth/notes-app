@@ -74,6 +74,24 @@ server:
     include-stacktrace: never
 
 weavr:
+  # --------------------------------------------------------------------------
+  # Job runner — the pipeline backbone.
+  # --------------------------------------------------------------------------
+  # concurrency stays at 1-2 on a free-tier instance. The work is yt-dlp, ffmpeg
+  # and OCR as external processes: they are CPU- and memory-hungry, and parallel
+  # jobs OOM rather than queue. The property is capped at 4 to make raising it
+  # a deliberate act.
+  jobs:
+    enabled: ${WEAVR_JOBS_ENABLED:true}
+    concurrency: ${WEAVR_JOBS_CONCURRENCY:2}
+    poll-interval: 2s
+    # Exponential from here: 30s, 2m, 8m, 32m, then capped.
+    retry-base-delay: 30s
+    retry-max-delay: 1h
+    # A job still `running` after this is assumed to belong to a dead process
+    # and is returned to the queue.
+    stale-after: 15m
+
   supabase:
     # e.g. https://sgjpiordywdklzhlhmwq.supabase.co
     url: ${WEAVR_SUPABASE_URL}
