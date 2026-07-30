@@ -27,6 +27,8 @@ cd app && npx expo export --platform android   # bundles without a device
 
 Secrets live in a gitignored `.env` at the repo root; [.env.example](.env.example) is the tracked template.
 
+**[docs/testing.md](docs/testing.md) is the testing guide** — what each check proves, the traps (two DB URLs, a stale server on 8080, `EXPO_PUBLIC_*` inlined at build time), and the honest list of what is not covered. Read it before claiming something works: *typechecks*, *bundles*, *boots* and *runs on a device* are four different claims, and only the first three can currently be made about the app.
+
 **Spring Boot 4, not 3** — most tutorials you'll find are wrong in two ways: Jackson 3 moved `ObjectMapper` to `tools.jackson.databind` (annotations stayed on `com.fasterxml.jackson.annotation`), and the starters were renamed (`-webmvc`, `-security-oauth2-resource-server`, plus a `-test` companion per starter).
 
 **The spec is partly superseded.** Stack decisions below override it — see [Where the spec is stale](#where-the-spec-is-stale).

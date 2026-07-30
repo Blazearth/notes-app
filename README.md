@@ -10,6 +10,7 @@ Built for the RevenueCat Shipaton 2026 (Aug 1 – Sep 30, 2026).
 
 - [CLAUDE.md](CLAUDE.md) — architecture and the constraints that drive it
 - [docs/implementation-plan.md](docs/implementation-plan.md) — the phase plan
+- [docs/testing.md](docs/testing.md) — how to check work, and what each check does not prove
 - [docs/competitive-analysis.md](docs/competitive-analysis.md) — teardown and steal list
 - [save-anything-app-spec.md](save-anything-app-spec.md) — original product spec (partly superseded)
 
