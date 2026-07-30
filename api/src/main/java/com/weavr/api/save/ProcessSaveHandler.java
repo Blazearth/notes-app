@@ -1,5 +1,6 @@
 package com.weavr.api.save;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -7,6 +8,7 @@ import com.weavr.api.job.JobHandler;
 import com.weavr.api.job.JobRecord;
 import com.weavr.api.job.JobType;
 import com.weavr.api.job.PermanentJobException;
+import com.weavr.api.pipeline.ExtractionCascade;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -14,32 +16,37 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Entry point for a new save.
+ * Entry point for a new save: run the extraction cascade and park the result.
  *
- * <p><b>The cascade is not here yet.</b> Today this claims the save, records that
- * the runner reached it, and stops — leaving {@code status = 'processing'}. That
- * is deliberate: the runner is the backbone and is worth shipping and watching on
- * its own, but nothing yet fetches captions, metadata or audio, so pretending a
- * save is `ready` would be a lie the whole UI would repeat.
- *
- * <p>Phase 2 fills in the ordered cascade — platform captions, then post
- * metadata, then ASR, then keyframes — each writing its own {@code save_stages}
- * row, and only then does the save advance.
+ * <p><b>The save still does not reach {@code ready} here.</b> Extraction produces
+ * text; turning that text into a knowledge type and structured fields is the
+ * single Gemini call in Phase 3. Marking a save ready without it would be a lie
+ * the whole UI repeats — so the text lands in {@code save_stages} and the save
+ * waits.
  */
 @Component
 class ProcessSaveHandler implements JobHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessSaveHandler.class);
 
-    static final String STAGE_ACCEPTED = "accepted";
+    static final String STAGE_EXTRACTED = "extracted";
+
+    /**
+     * Enough for any transcript worth reading, and a bound on what a runaway
+     * caption file can push into a JSONB column.
+     */
+    private static final int MAX_STORED_TEXT = 200_000;
 
     private final SaveRepository saves;
     private final SaveStageWriter stages;
+    private final ExtractionCascade cascade;
     private final JdbcClient jdbc;
 
-    ProcessSaveHandler(SaveRepository saves, SaveStageWriter stages, JdbcClient jdbc) {
+    ProcessSaveHandler(SaveRepository saves, SaveStageWriter stages,
+                       ExtractionCascade cascade, JdbcClient jdbc) {
         this.saves = saves;
         this.stages = stages;
+        this.cascade = cascade;
         this.jdbc = jdbc;
     }
 
@@ -55,15 +62,47 @@ class ProcessSaveHandler implements JobHandler {
         Save save = saves.findById(saveId).orElseThrow(() -> new PermanentJobException(
                 "save_deleted", "This save no longer exists."));
 
-        // Safe to run twice: the stage write is an upsert, and nothing here
-        // mutates the save. The stale-claim reaper can and will re-deliver.
-        stages.record(saveId, STAGE_ACCEPTED, Map.of(
-                "sourceType", save.getSourceType().db(),
-                "hasUrl", save.getSourceUrl() != null,
-                "attempt", job.attempts() + 1));
+        String text = switch (save.getSourceType()) {
+            case URL -> extractFromUrl(saveId, save);
+            // Text the client already holds — a typed note, a shared caption, or
+            // on-device OCR output. Nothing to fetch.
+            case TEXT -> requireText(save);
+            // Each needs its own acquisition path: Storage download plus OCR for
+            // images, text extraction for PDFs, ASR for audio.
+            case IMAGE, PDF, AUDIO -> throw new PermanentJobException(
+                    "unsupported_source_type",
+                    "Weavr can't process this kind of save yet.");
+        };
 
-        log.info("Save {} reached the runner (type={}). Extraction cascade is not implemented yet — "
-                + "leaving status=processing.", saveId, save.getSourceType().db());
+        log.info("Save {} extracted {} chars, waiting on the Phase 3 model call", saveId, text.length());
+    }
+
+    private String extractFromUrl(UUID saveId, Save save) {
+        if (save.getSourceUrl() == null || save.getSourceUrl().isBlank()) {
+            throw new PermanentJobException("bad_payload", "That save has no link to open.");
+        }
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(save.getSourceUrl());
+
+        // Safe to run twice — the stage write is an upsert, and the stale-claim
+        // reaper can re-deliver this job at any point.
+        Map<String, Object> payload = new HashMap<>(ExtractionCascade.stagePayload(extraction));
+        payload.put("text", truncate(extraction.text()));
+        stages.record(saveId, STAGE_EXTRACTED, payload);
+
+        return extraction.text();
+    }
+
+    private String requireText(Save save) {
+        String text = save.getRawCaption();
+        if (text == null || text.isBlank()) {
+            throw new PermanentJobException("no_text_extracted", "That save is empty.");
+        }
+        return text;
+    }
+
+    private static String truncate(String text) {
+        return text.length() <= MAX_STORED_TEXT ? text : text.substring(0, MAX_STORED_TEXT);
     }
 
     /**

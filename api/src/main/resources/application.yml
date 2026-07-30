@@ -92,6 +92,23 @@ weavr:
     # and is returned to the queue.
     stale-after: 15m
 
+  # --------------------------------------------------------------------------
+  # yt-dlp — the free half of the extraction cascade.
+  # --------------------------------------------------------------------------
+  # The container MUST install this; a plain JRE base image has neither yt-dlp
+  # nor ffmpeg. Neither call downloads media: both pass --skip-download, and the
+  # probe writes nothing to disk at all.
+  #
+  # Pin vs update-on-start is a real trade: extractors break whenever a platform
+  # changes, so pinning is reproducible but rots. For a two-month hackathon,
+  # update-on-start is usually right.
+  ytdlp:
+    binary: ${WEAVR_YTDLP_BINARY:yt-dlp}
+    probe-timeout: 60s
+    caption-timeout: 90s
+    # The probe reports what a video actually offers; this is the ask.
+    subtitle-langs: ${WEAVR_YTDLP_SUB_LANGS:en.*,en}
+
   supabase:
     # e.g. https://sgjpiordywdklzhlhmwq.supabase.co
     url: ${WEAVR_SUPABASE_URL}

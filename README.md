@@ -37,8 +37,9 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | `GET /v1/saves`, `/{id}` | **real, verified** | `200` on both; `/{id}` returns the created save, the list returns it too |
 | Job queue | **real, verified** | Enqueue runs as part of the create path; the runner drains it |
 | Job runner | **real, verified** | `SKIP LOCKED` claim, per-group exclusion, three error paths, stale-claim sweep. Claimed and completed a real job against live Supabase |
-| Extraction cascade handler | **stub** | `process_save` records an `accepted` stage and stops. Saves stay `processing` — see below |
-| Text-extraction cascade | **absent** | Phase 2 — yt-dlp / ffmpeg / ASR |
+| Extraction cascade — metadata + captions | **real, unverified against yt-dlp** | `--dump-single-json` probe then `--write-auto-subs`, VTT to prose, error classification. Neither yt-dlp nor ffmpeg is installed on the dev machine, so the binary calls have never run |
+| Extraction cascade — ASR | **absent** | ffmpeg → 16 kHz mono → Groq Whisper. A different provider with its own key |
+| `process_save` handler | **real** | Runs the cascade and parks the text in `save_stages`. Saves stay `processing` — the Phase 3 model call is what advances them |
 | Any Gemini call | **absent** | Phase 3. `gemini_calls` and `ai_budget_days` tables exist and are empty |
 | OCR tier | **absent** | Phase 4 |
 | Search (FTS + vector) | **schema only** | `search_tsv` and `embedding` columns exist and are populated by nobody. Phase 5 |
@@ -56,7 +57,7 @@ no mock responses or placeholder implementations in the codebase.
 Against the live Supabase project: `V1` migrated (11.7s) · app started · Flyway
 on the session pooler and Hikari on the transaction pooler, confirmed distinct
 in the logs · `GET /actuator/health` 200 · unauthenticated and
-malformed-token requests rejected 401 · `./mvnw clean verify` green, 22/22 tests.
+malformed-token requests rejected 401 · `./mvnw clean verify` green, 56/56 tests.
 
 Expo app: `tsc --noEmit` clean · `expo export --platform android` bundles (3.8 MB
 Hermes bytecode, every route resolved) · all 78 palette combinations audited for
@@ -197,6 +198,17 @@ judging is a demo-day failure. The keep-warm job must issue a real query, not an
 HTTP ping to a static endpoint.
 
 ## Known gaps
+
+**Unverified because the tooling is missing locally**
+
+- **yt-dlp and ffmpeg are not installed on the dev machine.** The extraction
+  cascade is written and its pure logic is well covered — VTT parsing, error
+  classification, and the ordering decisions all have tests — but no yt-dlp
+  process has ever been spawned. The `ExternalProcess` wrapper underneath it *is*
+  verified against real child processes, including the pipe-deadlock and
+  hang-timeout cases. Installing yt-dlp locally is what closes this.
+- **The container must install both.** A plain JRE base image has neither, and
+  the failure mode is every save retrying until it exhausts `max_attempts`.
 
 **Blocking the Phase 1 exit**
 
