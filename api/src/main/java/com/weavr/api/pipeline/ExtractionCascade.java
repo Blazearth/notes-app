@@ -3,14 +3,17 @@ package com.weavr.api.pipeline;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
 import com.weavr.api.pipeline.audio.AsrTranscriber;
+import com.weavr.api.pipeline.ocr.VisualTextExtractor;
 import com.weavr.api.pipeline.ytdlp.SourceMetadata;
 import com.weavr.api.pipeline.ytdlp.YtDlpClient;
 import com.weavr.api.pipeline.ytdlp.YtDlpErrors;
@@ -34,6 +37,10 @@ import org.springframework.stereotype.Component;
  *       YouTube and many Reels and TikToks. A primary path, not a fallback.</li>
  *   <li><b>ASR</b> — audio only, bounded, a different provider (Groq Whisper),
  *       reached only when both free sources above come up empty.</li>
+ *   <li><b>The visual tier</b> — keyframes and local OCR, last because it is
+ *       the only step that downloads video. This is the overlay-text-only case:
+ *       a recipe Reel whose ingredients exist purely as burned-in pixels
+ *       defeats every step above, and is common.</li>
  *   <li><b>Readable-text / PDF</b> — a parallel branch, not a further fallback:
  *       reached when the probe finds no yt-dlp extractor at all (a plain
  *       article) or the URL is obviously a PDF, in which case none of the
@@ -54,13 +61,15 @@ public class ExtractionCascade {
 
     private final YtDlpClient ytDlp;
     private final AsrTranscriber asr;
+    private final VisualTextExtractor visual;
     private final LinkExtractor linkExtractor;
     private final PdfExtractor pdfExtractor;
 
-    ExtractionCascade(YtDlpClient ytDlp, AsrTranscriber asr,
+    ExtractionCascade(YtDlpClient ytDlp, AsrTranscriber asr, VisualTextExtractor visual,
                       LinkExtractor linkExtractor, PdfExtractor pdfExtractor) {
         this.ytDlp = ytDlp;
         this.asr = asr;
+        this.visual = visual;
         this.linkExtractor = linkExtractor;
         this.pdfExtractor = pdfExtractor;
     }
@@ -69,11 +78,24 @@ public class ExtractionCascade {
      * @param text     the assembled blob, ready for the model
      * @param source   which cascade step produced it
      * @param metadata the probe result, kept for enrichment and the thumbnail
+     * @param detail   extra breadcrumbs from the step that won, or empty. Only
+     *                 the visual tier fills this in — its escalation rate is the
+     *                 number Phase 4 has to watch, and it is invisible unless
+     *                 the winning step records how it did
      */
-    public record Extraction(String text, String source, SourceMetadata metadata) {
+    public record Extraction(String text, String source, SourceMetadata metadata,
+                             Map<String, Object> detail) {
+
+        public Extraction(String text, String source, SourceMetadata metadata) {
+            this(text, source, metadata, Map.of());
+        }
     }
 
-    public Extraction extractFromUrl(String url) {
+    /**
+     * @param saveId needed only so a vision escalation inside the visual tier
+     *               can attribute its request in {@code gemini_calls}
+     */
+    public Extraction extractFromUrl(String url, UUID saveId) {
         if (looksLikePdf(url)) {
             return extractPdf(url);
         }
@@ -107,11 +129,29 @@ public class ExtractionCascade {
             return new Extraction(metadataText, "metadata", metadata);
         }
 
-        // Last resort: audio only, bounded, a different provider (Groq
-        // Whisper) — reached only when both free sources above came up empty.
+        // Audio only, bounded, a different provider (Groq Whisper) — reached
+        // only when both free sources above came up empty.
         Optional<String> transcript = asr.transcribe(url);
         if (transcript.isPresent() && transcript.get().length() >= USABLE_TEXT_THRESHOLD) {
             return new Extraction(combine(transcript.get(), metadata), "asr", metadata);
+        }
+
+        // The visual tier, last because it is the only step that downloads
+        // video. Everything above has now come back empty, which for a video
+        // post overwhelmingly means the content is on the screen rather than in
+        // the audio or the caption — a recipe card, a workout list, a product
+        // shot. That is the hard case, and it is common.
+        //
+        // The threshold check the other steps get is deliberately absent here.
+        // OCR output has already been through a quality gate that judges it on
+        // confidence rather than length, and a short-but-clean ingredient list
+        // is a perfectly good extraction that a 40-character floor would throw
+        // away.
+        Optional<VisualTextExtractor.VisualText> visualText = visual.extract(url, saveId);
+        if (visualText.isPresent() && !visualText.get().text().isBlank()) {
+            VisualTextExtractor.VisualText v = visualText.get();
+            return new Extraction(combine(v.text(), metadata), v.source(), metadata,
+                    VisualTextExtractor.stagePayload(v));
         }
 
         throw new PermanentJobException("no_text_extracted",
@@ -196,11 +236,15 @@ public class ExtractionCascade {
     /** Stage payload for {@code save_stages}, kept small — it is a breadcrumb. */
     public static Map<String, Object> stagePayload(Extraction extraction) {
         SourceMetadata metadata = extraction.metadata();
-        return Map.of(
-                "source", extraction.source(),
-                "textLength", extraction.text().length(),
-                "title", metadata.title() == null ? "" : metadata.title(),
-                "uploader", metadata.uploader() == null ? "" : metadata.uploader(),
-                "hasCaptions", metadata.hasCaptions());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", extraction.source());
+        payload.put("textLength", extraction.text().length());
+        payload.put("title", metadata.title() == null ? "" : metadata.title());
+        payload.put("uploader", metadata.uploader() == null ? "" : metadata.uploader());
+        payload.put("hasCaptions", metadata.hasCaptions());
+        // "source" is the step name in both maps and carries the same value, so
+        // the visual tier's detail is merged rather than nested.
+        payload.putAll(extraction.detail());
+        return payload;
     }
 }

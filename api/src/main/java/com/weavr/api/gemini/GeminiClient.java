@@ -1,6 +1,7 @@
 package com.weavr.api.gemini;
 
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -148,6 +149,120 @@ public class GeminiClient {
         }
     }
 
+    /**
+     * Tier 2 of the visual cascade: read the text off these frames when local
+     * OCR came back below the repair floor.
+     *
+     * <p><b>This returns text, not a classification, and that is deliberate.</b>
+     * The frames go in, a verbatim transcription comes out, and it then flows
+     * through the ordinary single classify call like any other save — so the
+     * knowledge-type schema, the few-shot examples and the confidence routing
+     * all keep working unchanged, and the vision model is asked to do the one
+     * thing it is here for.
+     *
+     * <p>It does mean an escalating save costs two requests rather than one.
+     * That is the accepted price of the escalation path existing at all: the
+     * alternative — making the classify call itself multimodal — needs the
+     * frames to survive from {@code process_save} into {@code classify_save},
+     * which means either persisting base64 images into JSONB or downloading the
+     * video a second time. Both are worse than one extra Flash request on the
+     * minority of saves that get here, and the fallback pool's small RPD caps
+     * how many that can ever be.
+     *
+     * @param frames JPEG bytes, in reading order, already ranked and trimmed by
+     *               the caller — this method does not decide how many to send
+     * @return the transcribed text, possibly blank if the frames carry none
+     */
+    public String transcribeFrames(UUID saveId, List<byte[]> frames, BudgetApproved budget) {
+        String model = budget.model();
+        Instant callStart = Instant.now();
+        String outcome = "success";
+        int inputTokens = 0;
+        int outputTokens = 0;
+
+        try {
+            String url = GEMINI_BASE + model + ":generateContent?key=" + props.apiKey();
+
+            log.debug("Gemini vision OCR: save={} model={} frames={}", saveId, model, frames.size());
+
+            byte[] rawResponse = http.post()
+                    .uri(url)
+                    .body(objectMapper.writeValueAsString(buildVisionRequest(frames)))
+                    .retrieve()
+                    // Raw bytes, not String — same reason as classify() above.
+                    .body(byte[].class);
+
+            JsonNode root = objectMapper.readTree(rawResponse);
+            JsonNode usage = root.path("usageMetadata");
+            inputTokens = usage.path("promptTokenCount").asInt(0);
+            outputTokens = usage.path("candidatesTokenCount").asInt(0);
+
+            String text = root
+                    .path("candidates").get(0)
+                    .path("content").path("parts").get(0)
+                    .path("text").asText();
+
+            log.info("Gemini vision OCR save={} read {} chars from {} frames in={}tok out={}tok",
+                    saveId, text.length(), frames.size(), inputTokens, outputTokens);
+
+            return text == null ? "" : text.strip();
+
+        } catch (HttpClientErrorException e) {
+            outcome = "client_error_" + e.getStatusCode().value();
+            if (e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
+                throw new RetryableJobException("Gemini rate limit hit (429) on vision OCR.", e);
+            }
+            throw new RetryableJobException(
+                    "Gemini vision OCR returned " + e.getStatusCode(), e);
+        } catch (HttpServerErrorException e) {
+            outcome = "server_error_" + e.getStatusCode().value();
+            throw new RetryableJobException(
+                    "Gemini is temporarily unavailable (" + e.getStatusCode() + "), will retry.", e);
+        } catch (Exception e) {
+            outcome = "error";
+            throw new RetryableJobException(
+                    "An error occurred calling Gemini vision OCR: " + e.getMessage(), e);
+        } finally {
+            logCall(saveId, model, inputTokens, outputTokens, 0.0, outcome, callStart, "ocr_vision");
+        }
+    }
+
+    /**
+     * Frames plus a transcription instruction. No {@code responseSchema} here —
+     * the output is prose, and forcing JSON would only add an escaping layer
+     * around a string.
+     */
+    private Map<String, Object> buildVisionRequest(List<byte[]> frames) {
+        List<Map<String, Object>> parts = new java.util.ArrayList<>();
+        parts.add(Map.of("text", """
+                These are frames from one short video, in order. Transcribe every \
+                piece of text visible in them — overlay captions, ingredient lists, \
+                on-screen instructions, labels, prices.
+
+                Rules:
+                - Transcribe verbatim. Do not summarise, translate or reword.
+                - The same text often persists across several frames. Write it once.
+                - Preserve the reading order and line breaks of the original layout.
+                - Ignore platform chrome: usernames, follower counts, like and share \
+                  buttons, watermarks, progress bars.
+                - If the frames contain no legible text at all, reply with nothing.
+                """));
+        for (byte[] frame : frames) {
+            parts.add(Map.of("inline_data", Map.of(
+                    "mime_type", MediaType.IMAGE_JPEG_VALUE,
+                    "data", Base64.getEncoder().encodeToString(frame))));
+        }
+
+        return Map.of(
+                "contents", List.of(Map.of("parts", parts)),
+                "generationConfig", Map.of(
+                        // Transcription, not reasoning — thinking budget buys
+                        // nothing here and the frames are already the expensive part.
+                        "temperature", 0.0
+                )
+        );
+    }
+
     /** Builds the full Gemini request body. */
     private Map<String, Object> buildRequest(String text, String model) {
         String systemPrompt = KnowledgeTypeRegistry.buildSystemPrompt();
@@ -175,9 +290,23 @@ public class GeminiClient {
         );
     }
 
-    /** Logs the call to {@code gemini_calls} for observability. */
     private void logCall(UUID saveId, String model, int inputTokens, int outputTokens,
                          double confidence, String outcome, Instant callStart) {
+        logCall(saveId, model, inputTokens, outputTokens, confidence, outcome, callStart,
+                "classify_save");
+    }
+
+    /**
+     * Logs the call to {@code gemini_calls} for observability.
+     *
+     * <p>{@code purpose} separates the classify call from a vision escalation,
+     * which is what makes the escalation rate measurable rather than guessed —
+     * the one number Phase 4 has to watch, since both failure directions
+     * (burning the Flash pool, shipping silent hallucinations) are otherwise
+     * invisible.
+     */
+    private void logCall(UUID saveId, String model, int inputTokens, int outputTokens,
+                         double confidence, String outcome, Instant callStart, String purpose) {
         try {
             long ms = java.time.Duration.between(callStart, Instant.now()).toMillis();
             log.debug("Gemini call: save={} model={} outcome={} latency={}ms", saveId, model, outcome, ms);
@@ -185,10 +314,11 @@ public class GeminiClient {
             jdbc.sql("""
                             insert into gemini_calls
                                 (save_id, model, purpose, input_tokens, output_tokens, confidence, outcome)
-                            values (?, ?, 'classify_save', ?, ?, ?, ?)
+                            values (?, ?, ?, ?, ?, ?, ?)
                             """)
                     .param(saveId)
                     .param(model)
+                    .param(purpose)
                     .param(inputTokens)
                     .param(outputTokens)
                     .param(confidence > 0 ? confidence : null)

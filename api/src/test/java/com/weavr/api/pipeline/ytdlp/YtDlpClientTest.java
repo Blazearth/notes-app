@@ -91,7 +91,7 @@ class YtDlpClientTest {
 
     private static YtDlpProperties properties() {
         return new YtDlpProperties("yt-dlp", Duration.ofSeconds(60), Duration.ofSeconds(90),
-                Duration.ofSeconds(120), null);
+                Duration.ofSeconds(120), Duration.ofSeconds(180), null, null);
     }
 
     private static ExternalProcess.Result ok() {

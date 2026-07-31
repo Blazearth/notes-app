@@ -188,6 +188,44 @@ public class YtDlpClient {
         return Optional.empty();
     }
 
+    /**
+     * The OCR tier's download — the only path in the cascade that fetches video
+     * at all, and it does so grudgingly.
+     *
+     * <p>Reached only when captions, metadata and ASR have all come up empty,
+     * which in practice means the post's payload is burned into the pixels. Two
+     * bounds keep that affordable: the <em>worst</em> stream that still has
+     * legible text ({@code worst[height>=360]}, an order of magnitude smaller
+     * than the default) and the same duration cap the audio path uses.
+     *
+     * <p>The file is deleted with the caller's temp directory as soon as frames
+     * have been cut from it. Nothing video-shaped is ever persisted.
+     *
+     * @return the downloaded file, or empty if the source yielded no video
+     */
+    public Optional<Path> downloadVideo(String url, Path workDir, int maxDurationSeconds) {
+        ExternalProcess.Result result = processes.run(List.of(
+                properties.binary(),
+                "-f", properties.videoFormat(),
+                "--download-sections", "*0-" + maxDurationSeconds,
+                "--no-playlist",
+                "--no-warnings",
+                "-o", "%(id)s.%(ext)s",
+                url), properties.videoTimeout(), workDir);
+
+        // Same reasoning as captions and audio: read the directory before
+        // judging the exit code. yt-dlp can exit non-zero over a fragment it
+        // gave up on while a perfectly usable file already sits on disk.
+        Optional<Path> video = largestFile(workDir);
+        if (video.isPresent()) {
+            return video;
+        }
+        if (!result.succeeded()) {
+            throw new YtDlpFailedException(describe(result), result.stderr());
+        }
+        return Optional.empty();
+    }
+
     /** The audio file's extension depends on the source's best format, so pick by presence, not name. */
     private Optional<Path> largestFile(Path workDir) {
         try (Stream<Path> files = Files.list(workDir)) {

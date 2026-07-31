@@ -116,6 +116,14 @@ weavr:
     # cap on the download itself — this timeout covers slow networks, not
     # long audio.
     audio-timeout: 120s
+    # The OCR tier's video download. Longer than the audio one: a video stream
+    # is an order of magnitude larger even at the worst usable quality.
+    video-timeout: 180s
+    # The video is a means to frames, never something to keep. Overlay text is
+    # sized for phone screens, so the worst stream that still has legible text
+    # is the right one. `/worst` catches sources whose every stream is below
+    # 360p, which would otherwise match nothing and fail.
+    video-format: ${WEAVR_YTDLP_VIDEO_FORMAT:worst[height>=360]/worst}
 
   # --------------------------------------------------------------------------
   # ffmpeg — downmixes ASR audio to 16 kHz mono before it goes to Groq.
@@ -123,6 +131,52 @@ weavr:
   ffmpeg:
     binary: ${WEAVR_FFMPEG_BINARY:ffmpeg}
     timeout: 60s
+
+  # --------------------------------------------------------------------------
+  # OCR — the visual tier. Step 5, reached only when 1-4 produced nothing.
+  # --------------------------------------------------------------------------
+  # The hard case this exists for: a recipe Reel whose ingredients are only
+  # on-screen overlay text — no caption, no description, no voiceover. Common,
+  # and invisible to every step above.
+  #
+  # Do NOT use the vision model as the OCR engine. Vision is the most expensive
+  # path in the system and it burns the scarcer Flash pool. Read the text
+  # locally, then feed the *text* into the cheap classify call like any other
+  # save; vision is the fallback, not the default (CLAUDE.md).
+  #
+  # min-mean-confidence is the LLM repair floor, and it is currently a *guess*.
+  # LLM reconstruction works at roughly 70-80% correct OCR and does not work at
+  # 20% — below the floor the model doesn't repair, it invents plausible
+  # ingredients, which is worse than failing. Phase 4's eval set (30 hand-
+  # labelled Reels) is what turns this number into a measurement.
+  ocr:
+    enabled: ${WEAVR_OCR_ENABLED:true}
+    binary: ${WEAVR_TESSERACT_BINARY:tesseract}
+    language: eng
+    # 6 = one uniform block of text, which is what a burned-in overlay card is.
+    # 11 (sparse text) is the alternative worth measuring on the eval set.
+    page-segmentation: 6
+    timeout: 30s
+    max-video-seconds: ${WEAVR_OCR_MAX_VIDEO_SECONDS:90}
+    # Each frame is its own tesseract process, so this is the real cost knob.
+    max-frames: ${WEAVR_OCR_MAX_FRAMES:12}
+    scene-threshold: 0.25
+    # A static ingredient card has no scene changes at all, so scene detection
+    # alone selects nothing on exactly the videos this tier exists for.
+    periodic-sample-frames: 150
+    # Preprocessing for the OCR branch. Upscale and greyscale only — NO
+    # contrast stage. Overlay text is high-contrast and bimodal by design, and
+    # a global equalisation (histeq, the obvious choice) measurably damages it:
+    # a white-on-near-black card comes back mid-grey with hollowed, speckled
+    # glyphs. Text over a photographic background is a different problem and
+    # may want one; the eval set is what should decide, hence a property.
+    frame-filters: ${WEAVR_OCR_FRAME_FILTERS:scale=iw*2:-2:flags=lanczos,format=gray}
+    min-mean-confidence: ${WEAVR_OCR_MIN_CONFIDENCE:60}
+    min-words: 8
+    min-alpha-ratio: 0.5
+    min-frame-votes: 2
+    vision-escalation: ${WEAVR_OCR_VISION_ESCALATION:true}
+    vision-frames: 4
 
   # --------------------------------------------------------------------------
   # Groq — Whisper ASR. Step 3 of the extraction cascade, the last resort

@@ -1,6 +1,7 @@
 package com.weavr.api.gemini;
 
 import java.time.Duration;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -22,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
@@ -126,6 +128,86 @@ class GeminiClientTest {
         assertThat(response.structuredData())
                 .containsEntry("name", "Café Gaëlle")
                 .containsEntry("type", "café");
+    }
+
+    // -----------------------------------------------------------------------
+    // Tier 2 of the visual cascade: vision OCR on keyframes.
+    // -----------------------------------------------------------------------
+
+    private static byte[] visionEnvelope(String transcribed) {
+        return MAPPER.writeValueAsBytes(Map.of(
+                "candidates", List.of(Map.of(
+                        "content", Map.of("parts", List.of(Map.of("text", transcribed))))),
+                "usageMetadata", Map.of("promptTokenCount", 2200, "candidatesTokenCount", 60)));
+    }
+
+    /**
+     * The frames have to arrive as base64 {@code inline_data} parts with an
+     * image mime type. Sending them any other way is not a compile error and
+     * not an HTTP error — Gemini simply answers about the prompt text alone,
+     * so the tier would silently return nothing useful while looking healthy.
+     */
+    @Test
+    void sendsFramesAsBase64InlineImageParts() {
+        byte[] frameOne = {(byte) 0xFF, (byte) 0xD8, 1, 2};
+        byte[] frameTwo = {(byte) 0xFF, (byte) 0xD8, 3, 4};
+
+        server.expect(requestTo(startsWith("https://generativelanguage.googleapis.com/v1beta/models/")))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.contents[0].parts[0].text").exists())
+                .andExpect(jsonPath("$.contents[0].parts[1].inline_data.mime_type")
+                        .value(MediaType.IMAGE_JPEG_VALUE))
+                .andExpect(jsonPath("$.contents[0].parts[1].inline_data.data")
+                        .value(Base64.getEncoder().encodeToString(frameOne)))
+                .andExpect(jsonPath("$.contents[0].parts[2].inline_data.data")
+                        .value(Base64.getEncoder().encodeToString(frameTwo)))
+                // Transcription, not classification: forcing a JSON schema here
+                // would only wrap a string in an escaping layer.
+                .andExpect(jsonPath("$.generationConfig.responseSchema").doesNotExist())
+                .andRespond(withSuccess(visionEnvelope("400g rigatoni"), MediaType.APPLICATION_JSON));
+
+        String text = client.transcribeFrames(UUID.randomUUID(), List.of(frameOne, frameTwo),
+                new BudgetApproved("gemini-2.5-flash", 20));
+
+        assertThat(text).isEqualTo("400g rigatoni");
+    }
+
+    /** Same missing-charset shape as the classify path — overlay text is not all ASCII. */
+    @Test
+    void decodesVisionTextAsUtf8RegardlessOfMissingCharsetHeader() {
+        server.expect(requestTo(startsWith("https://generativelanguage.googleapis.com/v1beta/models/")))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .body(visionEnvelope("Crème brûlée — 200 g sucre")));
+
+        String text = client.transcribeFrames(UUID.randomUUID(), List.of(new byte[]{1}),
+                new BudgetApproved("gemini-2.5-flash", 20));
+
+        assertThat(text).isEqualTo("Crème brûlée — 200 g sucre");
+    }
+
+    /** "These frames have no legible text" is an answer, not an error. */
+    @Test
+    void returnsBlankWhenVisionFindsNoText() {
+        server.expect(requestTo(startsWith("https://generativelanguage.googleapis.com/v1beta/models/")))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(visionEnvelope("   "), MediaType.APPLICATION_JSON));
+
+        assertThat(client.transcribeFrames(UUID.randomUUID(), List.of(new byte[]{1}),
+                new BudgetApproved("gemini-2.5-flash", 20))).isEmpty();
+    }
+
+    @Test
+    void visionRateLimitIsRetryable() {
+        server.expect(requestTo(startsWith("https://generativelanguage.googleapis.com/v1beta/models/")))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS)
+                        .contentType(MediaType.APPLICATION_JSON).body("{}"));
+
+        assertThatThrownBy(() -> client.transcribeFrames(UUID.randomUUID(), List.of(new byte[]{1}),
+                new BudgetApproved("gemini-2.5-flash", 20)))
+                .isInstanceOf(RetryableJobException.class)
+                .hasMessageContaining("rate limit");
     }
 
     @Test

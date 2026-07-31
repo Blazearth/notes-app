@@ -14,7 +14,8 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 | 1 — Foundation | schema, auth, `POST`/`GET /v1/saves`, whole Expo app | 2 of 4 — backend closed, mobile blocked on a dev build |
 | 2 — Ingestion cascade | job runner, cascade steps 1–4 — captions, metadata, **verified against a real yt-dlp**; ASR (Groq Whisper) and readable-text/PDF extraction, unit-tested but not live-verified | 1 of 4 — captions proven end to end; ASR/link/PDF are code-complete but unproven live. Android's silent-capture receiver is built (config plugin, never run on a device); the iOS share extension — the actual highest-risk spike — is still unbuilt |
 | 3 — AI pipeline v1 | Gemini classify-and-extract call, budget layer, response-schema registry, **verified live against the real API**; type-specific mobile cards | 3 of 4 — a recipe Reel with captions becomes a structured card, budget exhaustion queues rather than fails, the app shows real cards; blocked-download → `unusable` unverified live |
-| 4–8 | — | — |
+| 4 — OCR tier | frames, tesseract, cross-frame voting, escalation gate, sharpness ranking, Flash-vision Tier 2, **live-verified against real ffmpeg + tesseract** | 1 of 4 — an overlay-only card extracts with no vision call; **the eval set does not exist, so every threshold is still a guess**, and both mobile criteria are untouched |
+| 5–8 | — | — |
 
 **The pattern to notice: writing code is running well ahead of proving it.** The
 backend is roughly a phase early, and the app is far ahead of what Phase 1 asked
@@ -389,9 +390,9 @@ Everything here shells out to ffmpeg and tesseract, so it goes through the same
 hang-not-fail cases. The frame-extraction and OCR commands are new; the process
 plumbing is not.
 
-Frames: `select='gt(scene,0.25)',mpdecimate,scale=768:-1` — scene detection plus dedupe so a 5-second ingredient card isn't 5 frames.
+Frames: `select='gt(scene,0.25)',mpdecimate,scale=768:-1` — scene detection plus dedupe so a 5-second ingredient card isn't 5 frames. ⚠️ **Measured wrong — see the 2026-08-01 note below.** That selector yields zero frames on a static card; it needs `+eq(n,0)+not(mod(n,150))`.
 
-OCR: **Tesseract with `tessdata_fast`** as an external process. Preprocess (upscale, grayscale, CLAHE, adaptive threshold) — this matters more the lighter the engine. **Vote across duplicate frames** — the cheapest accuracy win available, with no analogue in a one-shot vision call.
+OCR: **Tesseract with `tessdata_fast`** as an external process. Preprocess (upscale, grayscale, ~~CLAHE, adaptive threshold~~ — ⚠️ **also measured wrong; a contrast stage makes overlay text worse, not better**). **Vote across duplicate frames** — the cheapest accuracy win available, with no analogue in a one-shot vision call.
 
 Escalation gate: per-word confidence **plus** schema sanity (a recipe needs quantities and units). Below the floor → Flash vision. Confidence alone will happily pass a fluent misread.
 
@@ -414,7 +415,58 @@ idempotency that landed 2026-07-31 (✅ above) — the extension just needs to
 generate an `Idempotency-Key` once per share and send it on every retry;
 without that, a re-share still creates a duplicate rather than reporting one.
 
-**Exit criteria:** an overlay-only recipe Reel extracts correctly with no Gemini vision call · eval set measured, threshold set from data, numbers written down · sharing never opens the app · re-sharing shows "Saved again," not an error.
+**2026-08-01: the backend half of this phase landed, and the pattern from Phase
+2 repeated with a twist.** `pipeline/ocr/` holds the tier — bounded
+worst-quality download, one ffmpeg pass cutting deduped keyframes into a colour
+branch and an OCR-prepped grey branch, tesseract per frame in TSV mode for its
+per-word confidence, a vote across frames, and the escalation gate. 57 new
+tests; suite is 184, green.
+
+**The twist: this time the real binaries were run *during* development, and they
+overturned two decisions written into this very document.** Both are recorded in
+[testing.md](testing.md#what-running-the-real-binary-found-the-second-time-visual-tier-2026-08-01):
+
+- **The filter chain specified above selects zero frames on a static card** —
+  frame 0 has nothing to differ from and nothing after it changes, so scene
+  detection never fires on precisely the overlay-only Reel this phase exists
+  for. Corrected to take frame 0 and a periodic sample as well, with
+  `mpdecimate` still collapsing the duplicates that adds.
+- **"Preprocess: upscale, grayscale, CLAHE contrast" is wrong for this input.**
+  Overlay text is high-contrast and bimodal by design; a global histogram remap
+  hollows the glyphs. Real tesseract, same frame: 16/16 words at confidence 95
+  without it, 7 garbled tokens at 22 with it — and 22 is *below* the escalation
+  floor, so the recommended preprocessing would have spent a Flash vision
+  request repairing its own damage.
+
+Neither was a coding error. The code implemented the plan faithfully; the plan
+was wrong, and only the binary knew.
+
+**Two deliberate deviations from the design above.** *Schema sanity* is not in
+the pre-model gate — the knowledge type is what the Gemini call *returns*, so
+the gate cannot know which schema to check, and buying the type first would
+spend the request the gate exists to protect. It is applied for free one stage
+later instead, via the model's own `unusable` verdict. And *Tier 2 returns text,
+not a classification*: the frames go to Flash vision, a verbatim transcription
+comes back, and it flows through the ordinary classify call unchanged. That
+costs an escalating save two requests rather than one — accepted, because the
+alternative (a multimodal classify call) needs frames to survive from
+`process_save` into `classify_save`, which means persisting base64 images into
+JSONB or downloading the video twice. The 20-RPD fallback pool caps how many
+saves can ever take that path.
+
+**Exit criteria:** ✅ an overlay-only recipe Reel extracts correctly with no Gemini vision call *(against a rendered fixture card, end to end through real ffmpeg and tesseract — not yet against a real Reel)* · ⬜ **eval set measured, threshold set from data, numbers written down — not started, and it is now the tier's biggest risk** · ⬜ sharing never opens the app · ⬜ re-sharing shows "Saved again," not an error.
+
+**Where Phase 4 actually stands:** the backend is done and, unusually for this
+repo, live-verified on the same day it was written. What is missing is not code.
+Every threshold in the gate is a guess — `min-mean-confidence: 60` was
+sanity-checked against a clean synthetic card (95) and a textless clip, never
+measured — and everything the tier has read so far is a fixture it generated
+itself. Real text over photographs, motion blur and stylised fonts are where
+tesseract fails hard rather than gracefully, and that is exactly what the thirty
+hand-labelled Reels are for. Dev B owns it, it is product judgement rather than
+code, and without it both failure directions stay invisible. The mobile half of
+this phase (silent capture end to end) still waits on the iOS extension, which
+remains the highest-risk unbuilt thing in the project.
 
 ---
 

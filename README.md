@@ -26,7 +26,7 @@ Supabase is a managed **Postgres + Auth + Storage** host here, not the backend.
 No Edge Functions, no Realtime-driven business logic — Spring Boot owns the API
 surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 
-## Status — Phase 1 done, Phase 2 job runner in, Phase 3 Gemini call live
+## Status — Phase 1 done, Phase 2 job runner in, Phase 3 Gemini call live, Phase 4 OCR tier in
 
 ### What's real vs. stubbed
 
@@ -43,7 +43,9 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Extraction cascade — link / PDF | **built, unverified live** | Readability4J for plain links, PDFBox for PDFs — the non-video branch, reached when yt-dlp has no extractor for the URL or it's a `.pdf`. 7 unit tests, all mocked — no real page or PDF fetched yet |
 | `process_save` handler | **real** | Runs the cascade and parks the text in `save_stages` for `classify_save` to pick up |
 | Gemini classify-and-extract call | **real, verified live** | `classify_save` handler + `GeminiClient`/`GeminiBudgetService`/`KnowledgeTypeRegistry`. Ran against the real API and produced real structured saves on 2026-07-30 — see below. 25 unit tests (`GeminiClientTest`, `GeminiBudgetServiceTest`, `KnowledgeTypeRegistryTest`, `ClassifySaveHandlerTest`) |
-| OCR tier | **absent** | Phase 4 |
+| OCR tier — frames, tesseract, voting, gate | **real, verified live** | `pipeline/ocr/`. Bounded worst-quality download → one ffmpeg pass cutting deduped keyframes into a colour and a grey branch → tesseract per frame (TSV, for per-word confidence) → vote across frames → quality gate. Driven end to end against real ffmpeg 8.0 and tesseract 5.5.0 by the opt-in `OcrLiveTest`, which needs **no network** — it renders its own fixtures. That run overturned two decisions the plan had specified; see below |
+| OCR tier — Flash vision escalation | **built, unverified live** | `GeminiClient.transcribeFrames` sends the sharpest frames as base64 `inline_data` and gets back a verbatim transcription, which then flows through the ordinary classify call. Request shape is pinned by `MockRestServiceServer`; no real vision call has been made |
+| Thumbnail / frame ranking | **real** | Variance-of-Laplacian, end-weighted, pure Java, no model call (CA#15). Used today to pick which frames a vision escalation carries; nominating a stored thumbnail needs a Storage path that does not exist yet |
 | Search (FTS + vector) | **schema only** | `search_tsv` and `embedding` columns exist and are populated by nobody. Phase 5 |
 | RevenueCat / entitlements | **schema only** | `subscriptions`, `usage_counters` tables exist. Phase 5 |
 | `POST /v1/saves` idempotency | **real, verified** | Repeated `Idempotency-Key` header returns the existing save, including under a concurrent-retry race (`V2__save_idempotency.sql`, `SaveServiceTest`). No caller sends the header yet — it exists for the still-unbuilt iOS share extension |
@@ -217,6 +219,59 @@ Verified: `expo prebuild -p android --clean` produces the activity in
 `build.gradle`, and the three Kotlin sources under `.../share/`; a second
 prebuild run doesn't duplicate any of them. `tsc --noEmit` is clean. **Not run
 on a device or emulator — this machine has no Android SDK.**
+
+### Verified on 2026-08-01 — the visual tier, and two wrong plan decisions
+
+**Phase 4's OCR tier is built, and this time the real binaries were run
+*during* development rather than after it.** They overturned two decisions that
+were already written into the plan — neither of which a code review could have
+caught, because the code faithfully implemented what the plan said.
+
+**The specified filter chain selects zero frames on the content the tier exists
+for.** `select='gt(scene,0.25)',mpdecimate` is what CLAUDE.md and the phase plan
+both call for. Run against a 12-second video that is one static ingredient card
+start to finish, it produces **no frames at all**: frame 0 has no predecessor to
+differ from, and nothing afterwards changes. An overlay-only recipe Reel *is* a
+static card, so the tier would have silently found nothing on its primary use
+case while every mocked test stayed green. Fixed with two extra selector terms —
+frame 0 and a periodic sample — and pinned by a live test that runs both chains
+side by side (0 frames vs 1, same fixture).
+
+**The recommended preprocessing makes OCR dramatically worse.** "Upscale,
+grayscale, CLAHE contrast" assumes a photographic background with a gradient to
+flatten. Overlay text is high-contrast and bimodal by design, and ffmpeg's
+`histeq` crushes exactly that. Same frame, real tesseract 5.5.0:
+
+| Chain | Words read | Mean confidence |
+|---|---|---|
+| upscale + greyscale (now the default) | **16 of 16** | **95** |
+| the same plus `histeq` | 7 garbled tokens, one line lost | 22 |
+
+`nigatoni`, `(icupiheavy`, `Siclovesiganic`. And 22 is *below* the escalation
+floor of 60, so the recommended preprocessing would not merely have degraded the
+text — it would have spent a Flash vision request from a 20-per-day pool
+repairing damage it had just caused.
+
+**The gate's third signal was confirmed on real content rather than reasoned
+about.** Against a real 90-second talking-head video, tesseract returned `|` at
+confidence 72, `=` at 91, `—` at 74 — **confident** symbol soup, not something a
+confidence threshold can catch. A gate watching per-word confidence alone, which
+is the natural reading of "use tesseract's confidence", would pass that to the
+model, which would classify the noise into something plausible. The
+alphabetic-token-ratio signal rejects it.
+
+Suite: `./mvnw test` green, **184 tests** (5 skipped — the two opt-in live
+groups), up from 127. The app was also booted against live Supabase with the new
+beans wired in — `Started WeavrApiApplication`, `/actuator/health` 200, an
+unauthenticated `POST /v1/saves` 401 — because the last phase shipped a missing
+dependency that no unit test could catch, since none of them boot a context.
+
+**What is not verified:** every threshold in the gate is still a guess.
+`min-mean-confidence: 60` has been sanity-checked against two extremes and never
+measured, and everything the tier has read so far is a fixture it generated
+itself. Real text over photographs, motion blur and stylised fonts — where
+tesseract fails hard rather than gracefully — are exactly what the thirty-Reel
+eval set is for, and it does not exist yet.
 
 ## Running the app
 

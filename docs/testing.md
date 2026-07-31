@@ -24,6 +24,7 @@ position, one level lower: it typechecks and bundles, and nothing has run.
 | Booting the API | Context wiring, every bean, Flyway, both pooler URLs | That endpoints behave correctly |
 | `curl` against a running API | Real request/response shapes and status codes | Anything on a device |
 | `WEAVR_LIVE_YTDLP=1 ./mvnw test -Dtest=YtDlpLiveTest` | **The real binary.** That yt-dlp accepts our argument lists, that the JSON field names exist, and that subtitle files land where we look | Any platform except the one you passed |
+| `WEAVR_LIVE_OCR=1 ./mvnw test -Dtest=OcrLiveTest` | **The real ffmpeg and tesseract.** That the filter graph selects frames at all, that tesseract accepts our flags and TSV columns, and that a clean card clears the gate while a textless clip does not | Anything about real-world visual noise — that is the eval set's job |
 | `tsc --noEmit` (app) | Types line up, including against the Java DTOs | That a single screen renders |
 | `expo export` (app) | Every module resolves; the bundle builds | Same — nothing has run |
 | `expo run:android` | **Actual runtime.** Nothing on the app side has reached this row | — |
@@ -33,19 +34,35 @@ app-side claim accordingly.
 
 ### External binaries
 
-The cascade shells out to yt-dlp and ffmpeg. Neither is a Java dependency, so
-Maven will not tell you they are missing — the symptom is every save retrying
-until it exhausts `max_attempts`.
+The cascade shells out to yt-dlp, ffmpeg and — since the visual tier landed —
+tesseract. None is a Java dependency, so Maven will not tell you they are
+missing; the symptom is every save retrying until it exhausts `max_attempts`.
 
 ```bash
-yt-dlp --version && ffmpeg -version | head -1
+yt-dlp --version && ffmpeg -version | head -1 && tesseract --version | head -1
 ```
 
-On the dev machine both live in `C:\Users\Saksham\tools\bin`, on the user PATH:
-yt-dlp is the standalone `.exe` from GitHub releases, ffmpeg the gyan.dev
-"essentials" build. That build is statically linked, hence ~94 MB per binary —
-**do not copy that approach into the Docker image**; use the distro package.
-Override the binary location with `WEAVR_YTDLP_BINARY` if it is not on PATH.
+On the dev machine yt-dlp and ffmpeg live in `C:\Users\Saksham\tools\bin`, on
+the user PATH: yt-dlp is the standalone `.exe` from GitHub releases, ffmpeg the
+gyan.dev "essentials" build. That build is statically linked, hence ~94 MB per
+binary — **do not copy that approach into the Docker image**; use the distro
+package. Override the binary location with `WEAVR_YTDLP_BINARY` /
+`WEAVR_FFMPEG_BINARY` if it is not on PATH.
+
+**tesseract 5.5.0** came from `winget install tesseract-ocr.tesseract` (the
+UB-Mannheim build) and installs to `C:\Program Files\Tesseract-OCR`, which the
+installer does **not** add to PATH. Either add it or set
+`WEAVR_TESSERACT_BINARY` to the full path; `OcrLiveTest` reads the same
+variable. Confirm the language data is actually there — an install with no
+`eng` reads every frame as nothing, silently:
+
+```bash
+tesseract --list-langs      # must include eng
+```
+
+In the container, use `tesseract-ocr` plus `tesseract-ocr-eng` from the distro
+and keep `tessdata_fast`: OCR only has to be good enough for the model to
+repair, and the fast English model is ~2 MB against ~15 MB for the accurate one.
 
 ---
 
@@ -55,28 +72,40 @@ Override the binary location with `WEAVR_YTDLP_BINARY` if it is not on PATH.
 
 ```bash
 cd api
-./mvnw test           # 67 tests, ~15s, NO database or .env needed (2 skip: see below)
+./mvnw test           # 184 tests, ~30s, NO database or .env needed (5 skip: see below)
 ./mvnw clean verify   # the above plus packaging
 ```
 
-The two skipped tests are `YtDlpLiveTest`, which talks to YouTube. They are
-opt-in rather than default because a red build caused by a third party
-rate-limiting us is worse than no signal:
+Five tests skip by default, in two opt-in groups. Both are gated rather than
+deleted because a red build caused by a third party rate-limiting us is worse
+than no signal — but an ungated *absence* of the check is worse than either.
+
+`YtDlpLiveTest` (2) talks to YouTube:
 
 ```bash
 WEAVR_LIVE_YTDLP=1 ./mvnw test -Dtest=YtDlpLiveTest
 WEAVR_LIVE_YTDLP=1 WEAVR_LIVE_URL=https://... ./mvnw test -Dtest=YtDlpLiveTest
 ```
 
-Run them after touching anything under `pipeline/ytdlp/`, and expect an
-occasional 429 that is not your fault.
+`OcrLiveTest` (3) needs ffmpeg and tesseract but **no network** — it renders its
+own fixture videos with ffmpeg, so it is safe to run in a container build and is
+the cheapest way to prove the toolchain is actually installed:
+
+```bash
+WEAVR_LIVE_OCR=1 ./mvnw test -Dtest=OcrLiveTest
+```
+
+Run the yt-dlp pair after touching anything under `pipeline/ytdlp/` and expect
+an occasional 429 that is not your fault; run the OCR trio after touching
+anything under `pipeline/ocr/`, and especially after changing the ffmpeg filter
+graph or the tesseract flags, neither of which any mocked test can judge.
 
 The default suite needs no configuration at all — there is no `@SpringBootTest`,
-so no context loads and nothing reads `.env`. The only environment variable any
-test consults is `WEAVR_LIVE_YTDLP`, and its sole effect is to enable the live
-pair above. If a test ever starts needing database or Supabase credentials, that
-is a signal it has become an integration test and should be named — and gated —
-like one.
+so no context loads and nothing reads `.env`. The only environment variables any
+test consults are `WEAVR_LIVE_YTDLP` and `WEAVR_LIVE_OCR`, whose sole effect is
+to enable the live groups above. If a test ever starts needing database or
+Supabase credentials, that is a signal it has become an integration test and
+should be named — and gated — like one.
 
 To exercise the database, boot the service:
 
@@ -298,6 +327,72 @@ their parsed content.
 
 ---
 
+## What running the real binary found, the second time (visual tier, 2026-08-01)
+
+The visual tier was built the same way and checked the same way, except this
+time the real binaries were run *during* development rather than after it — and
+they overturned two decisions that had already been written down as plan.
+
+**1. The planned filter chain selects zero frames on exactly the content the
+tier exists for.**
+
+CLAUDE.md and the phase plan both specify
+`select='gt(scene,0.25)',mpdecimate`. Run against a 12-second video that is one
+static ingredient card start to finish, it produces **no frames at all**: frame
+0 has no predecessor to differ from, and nothing afterwards changes, so scene
+detection never fires. An overlay-only recipe Reel is precisely a static card,
+so the tier would have silently found nothing on its primary use case while
+every mocked test stayed green.
+
+The fix is two extra selector terms — `+eq(n,0)` for the opening frame and
+`+not(mod(n,150))` for a periodic sample — with `mpdecimate` left in place to
+collapse the duplicates that introduces. Measured on the same fixture: 0 frames
+before, 1 after. `OcrLiveTest.sceneDetectionAloneSelectsNothingFromAStaticCard`
+runs both chains side by side so this cannot quietly regress.
+
+**2. The obvious preprocessing makes OCR dramatically worse, not better.**
+
+"Upscale, grayscale, CLAHE contrast, adaptive threshold" is the documented
+advice, and ffmpeg's nearest equivalent to CLAHE is `histeq`. Applied to a
+white-on-near-black card and read by real tesseract 5.5.0, against the same
+frame with no contrast stage at all:
+
+| Chain | Words read | Mean confidence | Sample |
+|---|---|---|---|
+| `scale=iw*2,format=gray` | **16 of 16** | **95** | `400g` `rigatoni` `2` `tbsp` `olive` `oil` |
+| `…,histeq` | 7 garbled tokens, one line lost | 22 | `nigatoni`, `(icupiheavy`, `Siclovesiganic` |
+
+The reason is that the advice assumes a photographic background with a gradient
+to flatten. Overlay text is high-contrast and bimodal *by design*, and a global
+histogram remap crushes exactly that — the rendered frame comes back mid-grey
+with hollowed, speckled glyphs. **And it is worse than a quality regression:**
+22 is below the escalation floor of 60, so the "recommended" preprocessing would
+have spent a Flash vision request on content the plain chain reads perfectly —
+burning the scarcest pool in the system to fix damage it had just caused.
+
+The default chain therefore does no contrast work, and `weavr.ocr.frame-filters`
+exists so the eval set can add one for genuinely low-contrast sources without a
+code change.
+
+**3. The gate's third signal was confirmed on real content, not reasoned about.**
+
+Run against a real 90-second talking-head video with no overlay text, tesseract
+returned tokens like `|` at confidence 72, `=` at 91 and `—` at 74. That is the
+failure shape that matters: **confident** symbol soup, not a low-confidence
+signal anything could filter on. A gate watching per-word confidence alone —
+which is what "use tesseract's confidence" naturally means — would pass it
+straight to the model, which would then classify the noise into something
+plausible. The alphabetic-token-ratio signal is what rejects it, and
+`OcrLiveTest.doesNotPassTextlessVideoOffAsAnExtraction` pins that against a
+generated noise clip.
+
+**What is different about this round:** two of the three findings are cases where
+the *written plan* was wrong, not where the code drifted from it. Nothing in a
+code review would have caught them, because the code faithfully implemented what
+the plan said. Only the binary knew.
+
+---
+
 ## Traps
 
 **Two database URLs, and they are not interchangeable.** `WEAVR_DB_URL` is the
@@ -346,7 +441,9 @@ Honest gaps, roughly in order of how much they would cost to discover late.
 |---|---|
 | **Nothing in the app has run on a device.** No screen rendered, no request sent, sign-in never succeeded | `npx expo run:android` with `app/.env` filled in |
 | **Only YouTube has been exercised live.** Instagram, TikTok and Reels paths are unproven, and Instagram increasingly requires auth | Run `YtDlpLiveTest` with `WEAVR_LIVE_URL` set to one URL per platform |
-| **ffmpeg is installed but nothing calls it.** ASR and keyframe extraction are unwritten, so the binary is staged, not used | Phase 2 ASR / Phase 4 keyframes |
+| **ASR has never run against a real Groq call.** Download, downmix and transcription are all mocked | `WEAVR_GROQ_API_KEY` set, and a real video with no captions |
+| **The OCR thresholds are guesses.** `min-mean-confidence: 60` and friends have never been measured — only sanity-checked against a synthetic card (95) and a textless clip | The thirty-Reel eval set: measure tesseract against Flash and set the floor from data |
+| **The visual tier has only read synthetic fixtures.** Real-world text over photographs, motion blur and stylised fonts are untested, and that is where tesseract fails hard rather than gracefully | Same eval set |
 | **No integration tests against a real database.** Every SQL statement is validated only by booting the app | Testcontainers with a `pgvector/pgvector` image |
 | **No automated contrast check.** The 78-combination audit is a manual script | A test runner in `app/`, then promote the script above |
 | **No test covers `JobStore`'s SQL.** The claim query's correctness rests on one manual run | Same Testcontainers setup |
@@ -369,12 +466,14 @@ cd app && npm run typecheck && npx expo export --platform android
 
 If you touched `palettes.ts` or `contrast.ts`, run the contrast audit too.
 
-If you touched anything under `pipeline/ytdlp/`, run the live test —
-`verify` mocks the process away, which is precisely how three defects survived
-27 green tests:
+If you touched anything under `pipeline/ytdlp/` or `pipeline/ocr/`, run the live
+tests — `verify` mocks the process away, which is precisely how three defects
+survived 27 green tests in the caption path and two wrong *plan* decisions
+survived 47 in the visual tier:
 
 ```bash
 cd api && WEAVR_LIVE_YTDLP=1 ./mvnw test -Dtest=YtDlpLiveTest
+cd api && WEAVR_LIVE_OCR=1 ./mvnw test -Dtest=OcrLiveTest    # no network needed
 ```
 
 If you touched SQL, boot the service against Supabase — `verify` will not catch

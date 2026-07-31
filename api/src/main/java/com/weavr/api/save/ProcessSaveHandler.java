@@ -108,7 +108,8 @@ class ProcessSaveHandler implements JobHandler {
             throw new PermanentJobException("bad_payload", "That save has no link to open.");
         }
 
-        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(save.getSourceUrl());
+        ExtractionCascade.Extraction extraction =
+                cascade.extractFromUrl(save.getSourceUrl(), saveId);
 
         // Safe to run twice — the stage write is an upsert, and the stale-claim
         // reaper can re-deliver this job at any point.
