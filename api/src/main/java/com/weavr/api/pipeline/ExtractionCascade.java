@@ -3,13 +3,14 @@ package com.weavr.api.pipeline;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Stream;
 
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
+import com.weavr.api.pipeline.audio.AsrTranscriber;
 import com.weavr.api.pipeline.ytdlp.SourceMetadata;
 import com.weavr.api.pipeline.ytdlp.YtDlpClient;
 import com.weavr.api.pipeline.ytdlp.YtDlpErrors;
@@ -31,12 +32,17 @@ import org.springframework.stereotype.Component;
  *       response reports which caption tracks exist.</li>
  *   <li><b>Platform captions</b> — free, zero model requests, covers most of
  *       YouTube and many Reels and TikToks. A primary path, not a fallback.</li>
- *   <li><b>ASR</b> — not implemented. See the note below.</li>
+ *   <li><b>ASR</b> — audio only, bounded, a different provider (Groq Whisper),
+ *       reached only when both free sources above come up empty.</li>
+ *   <li><b>Readable-text / PDF</b> — a parallel branch, not a further fallback:
+ *       reached when the probe finds no yt-dlp extractor at all (a plain
+ *       article) or the URL is obviously a PDF, in which case none of the
+ *       video-platform steps above apply.</li>
  * </ol>
  *
- * <p>Nothing here downloads video, so nothing here needs cleaning up beyond the
- * subtitle temp directory — which is deleted in a {@code finally}, because a
- * small instance's ephemeral disk is what fills first.
+ * <p>Nothing here keeps a downloaded byte longer than the call that needed it —
+ * every temp directory is deleted in a {@code finally} ({@link TempDirs}),
+ * because a small instance's ephemeral disk is what fills first.
  */
 @Component
 public class ExtractionCascade {
@@ -47,9 +53,16 @@ public class ExtractionCascade {
     private static final int USABLE_TEXT_THRESHOLD = 40;
 
     private final YtDlpClient ytDlp;
+    private final AsrTranscriber asr;
+    private final LinkExtractor linkExtractor;
+    private final PdfExtractor pdfExtractor;
 
-    ExtractionCascade(YtDlpClient ytDlp) {
+    ExtractionCascade(YtDlpClient ytDlp, AsrTranscriber asr,
+                      LinkExtractor linkExtractor, PdfExtractor pdfExtractor) {
         this.ytDlp = ytDlp;
+        this.asr = asr;
+        this.linkExtractor = linkExtractor;
+        this.pdfExtractor = pdfExtractor;
     }
 
     /**
@@ -61,7 +74,23 @@ public class ExtractionCascade {
     }
 
     public Extraction extractFromUrl(String url) {
-        SourceMetadata metadata = probe(url);
+        if (looksLikePdf(url)) {
+            return extractPdf(url);
+        }
+
+        SourceMetadata metadata;
+        try {
+            metadata = probe(url);
+        } catch (PermanentJobException e) {
+            // Not a video platform at all — a plain article link. This is a
+            // different branch, not a further fallback: none of the
+            // caption/metadata/ASR steps below apply to a page yt-dlp has no
+            // extractor for.
+            if ("unsupported_source".equals(e.errorCode())) {
+                return extractLink(url);
+            }
+            throw e;
+        }
 
         // Captions first when the probe says they exist: they carry the actual
         // spoken content, where a description only sometimes does.
@@ -78,11 +107,13 @@ public class ExtractionCascade {
             return new Extraction(metadataText, "metadata", metadata);
         }
 
-        // Step 3 would be ffmpeg -> 16 kHz mono -> a hosted Whisper endpoint.
-        // Deliberately absent: it is a different provider with its own key and
-        // its own failure modes, and it is only reached when both free sources
-        // come up empty. Failing loudly here beats silently handing the model a
-        // title and calling it a transcript.
+        // Last resort: audio only, bounded, a different provider (Groq
+        // Whisper) — reached only when both free sources above came up empty.
+        Optional<String> transcript = asr.transcribe(url);
+        if (transcript.isPresent() && transcript.get().length() >= USABLE_TEXT_THRESHOLD) {
+            return new Extraction(combine(transcript.get(), metadata), "asr", metadata);
+        }
+
         throw new PermanentJobException("no_text_extracted",
                 "Weavr couldn't find any text in that post to work with.");
     }
@@ -91,7 +122,7 @@ public class ExtractionCascade {
         try {
             return ytDlp.probe(url);
         } catch (YtDlpFailedException e) {
-            throw translate(e);
+            throw YtDlpErrors.toException(e);
         } catch (ProcessExecutionException e) {
             // yt-dlp missing from PATH is a deployment fault, not the save's.
             // Retryable so the work survives a container that is rebuilt with it.
@@ -114,44 +145,52 @@ public class ExtractionCascade {
         } catch (ProcessExecutionException e) {
             throw new RetryableJobException("yt-dlp is not runnable: " + e.getMessage(), e);
         } finally {
-            deleteQuietly(workDir);
+            TempDirs.deleteQuietly(workDir);
         }
+    }
+
+    private Extraction extractLink(String url) {
+        Optional<LinkExtractor.LinkExtraction> extraction = linkExtractor.extract(url);
+        if (extraction.isPresent() && extraction.get().text().length() >= USABLE_TEXT_THRESHOLD) {
+            LinkExtractor.LinkExtraction le = extraction.get();
+            SourceMetadata metadata = emptyMetadata(le.title());
+            return new Extraction(le.text(), "link", metadata);
+        }
+        throw new PermanentJobException("no_text_extracted",
+                "Weavr couldn't find any readable text at that link.");
+    }
+
+    private Extraction extractPdf(String url) {
+        Optional<String> text = pdfExtractor.extract(url);
+        if (text.isPresent() && text.get().length() >= USABLE_TEXT_THRESHOLD) {
+            return new Extraction(text.get(), "pdf", emptyMetadata(null));
+        }
+        throw new PermanentJobException("no_text_extracted",
+                "Weavr couldn't find any readable text in that PDF.");
+    }
+
+    /** Neither a plain link nor a PDF has a yt-dlp probe result behind it. */
+    private static SourceMetadata emptyMetadata(String title) {
+        return new SourceMetadata(null, title, null, null, null, null, List.of(), List.of());
+    }
+
+    private static boolean looksLikePdf(String url) {
+        String path = url;
+        int query = path.indexOf('?');
+        if (query >= 0) {
+            path = path.substring(0, query);
+        }
+        int fragment = path.indexOf('#');
+        if (fragment >= 0) {
+            path = path.substring(0, fragment);
+        }
+        return path.toLowerCase(Locale.ROOT).endsWith(".pdf");
     }
 
     /** Captions carry the speech; the title and uploader give the model context. */
     private static String combine(String captions, SourceMetadata metadata) {
         String header = metadata.asText();
         return header.isBlank() ? captions : header + "\n\n" + captions;
-    }
-
-    private static RuntimeException translate(YtDlpFailedException e) {
-        YtDlpErrors.Classification classification = YtDlpErrors.classify(e.stderr());
-        if (classification.permanent()) {
-            return new PermanentJobException(classification.errorCode(), classification.userMessage(), e);
-        }
-        return new RetryableJobException(
-                classification.errorCode() + ": " + classification.userMessage(), e);
-    }
-
-    /**
-     * Storage cost, legal exposure and a ~1 GB free-tier ceiling all argue the
-     * same way: nothing from a temp dir survives the job.
-     */
-    private static void deleteQuietly(Path directory) {
-        if (directory == null) {
-            return;
-        }
-        try (Stream<Path> paths = Files.walk(directory)) {
-            paths.sorted(Comparator.reverseOrder()).forEach(path -> {
-                try {
-                    Files.deleteIfExists(path);
-                } catch (IOException ignored) {
-                    // Best effort; the OS reclaims temp space regardless.
-                }
-            });
-        } catch (IOException e) {
-            log.warn("Could not clean temp directory {}", directory, e);
-        }
     }
 
     /** Stage payload for {@code save_stages}, kept small — it is a breadcrumb. */

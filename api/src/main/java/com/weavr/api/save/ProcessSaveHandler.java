@@ -67,12 +67,16 @@ class ProcessSaveHandler implements JobHandler {
 
         String text = switch (save.getSourceType()) {
             case URL -> extractFromUrl(saveId, save);
-            // Text the client already holds — a typed note, a shared caption, or
-            // on-device OCR output. Nothing to fetch.
-            case TEXT -> requireText(save);
-            // Each needs its own acquisition path: Storage download plus OCR for
-            // images, text extraction for PDFs, ASR for audio.
-            case IMAGE, PDF, AUDIO -> throw new PermanentJobException(
+            // Text the client already holds — nothing to fetch. A screenshot
+            // carries on-device OCR output the same way a typed note carries
+            // its caption (SourceType.IMAGE's own doc comment), so it takes
+            // the identical path.
+            case TEXT, IMAGE -> requireText(save);
+            // Both need a Storage upload path that does not exist yet — the
+            // client posts a link or text today, never a file. PDF-by-URL
+            // already works: that is a URL save, and ExtractionCascade routes
+            // a .pdf link straight to PdfExtractor without touching yt-dlp.
+            case PDF, AUDIO -> throw new PermanentJobException(
                     "unsupported_source_type",
                     "Weavr can't process this kind of save yet.");
         };

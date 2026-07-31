@@ -90,7 +90,8 @@ class YtDlpClientTest {
             new YtDlpClient(processes, new ObjectMapper(), properties());
 
     private static YtDlpProperties properties() {
-        return new YtDlpProperties("yt-dlp", Duration.ofSeconds(60), Duration.ofSeconds(90), null);
+        return new YtDlpProperties("yt-dlp", Duration.ofSeconds(60), Duration.ofSeconds(90),
+                Duration.ofSeconds(120), null);
     }
 
     private static ExternalProcess.Result ok() {
@@ -235,6 +236,50 @@ class YtDlpClientTest {
                 "", false, false));
 
         assertThat(client.probe("https://example.com/v").hasCaptions()).isFalse();
+    }
+
+    /** The download itself: audio only, bounded, and the extension isn't known ahead of time. */
+    @Test
+    void downloadAudioReturnsWhicheverFileLandedInTheWorkDir(@TempDir Path workDir) {
+        runWrites(ok(), "v.m4a", "not real audio, just bytes to find");
+
+        Optional<Path> audio = client.downloadAudio("https://example.com/v", workDir, 90);
+
+        assertThat(audio).isPresent();
+        assertThat(audio.get().getFileName().toString()).isEqualTo("v.m4a");
+    }
+
+    /** Succeeded but wrote nothing: this source has no audio track. Not an error. */
+    @Test
+    void downloadAudioReturnsEmptyWhenTheRunSucceededButWroteNothing(@TempDir Path workDir) {
+        when(processes.run(anyList(), any(Duration.class), any(Path.class))).thenReturn(ok());
+
+        assertThat(client.downloadAudio("https://example.com/v", workDir, 90)).isEmpty();
+    }
+
+    @Test
+    void downloadAudioThrowsWhenTheRunFailedAndWroteNothing(@TempDir Path workDir) {
+        when(processes.run(anyList(), any(Duration.class), any(Path.class)))
+                .thenReturn(failed("ERROR: This video has been removed by the uploader"));
+
+        assertThatThrownBy(() -> client.downloadAudio("https://example.com/v", workDir, 90))
+                .isInstanceOf(YtDlpFailedException.class);
+    }
+
+    /** Bounded per CLAUDE.md § bound everything: long-form video costs the same as short. */
+    @Test
+    void downloadAudioPassesTheDurationCapAndNeverTheVideoTrack(@TempDir Path workDir) {
+        runWrites(ok(), "v.m4a", "audio bytes");
+
+        client.downloadAudio("https://example.com/v", workDir, 90);
+
+        org.mockito.ArgumentCaptor<List<String>> command =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(processes)
+                .run(command.capture(), any(Duration.class), any(Path.class));
+        assertThat(command.getValue())
+                .contains("-f", "bestaudio", "--download-sections", "*0-90")
+                .doesNotContain("--write-subs");
     }
 
     /** Sanity: the command really does pass --skip-download on both paths. */

@@ -45,6 +45,7 @@ class YtDlpLiveTest {
                     System.getenv().getOrDefault("WEAVR_YTDLP_BINARY", "yt-dlp"),
                     Duration.ofSeconds(60),
                     Duration.ofSeconds(120),
+                    Duration.ofSeconds(120),
                     null));
 
     private static String url() {

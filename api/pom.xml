@@ -64,6 +64,35 @@
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+
+		<!-- Step 4 of the extraction cascade: readable-text for plain links,
+		     text extraction for PDFs. Neither downloads video, so neither goes
+		     through yt-dlp. -->
+		<dependency>
+			<groupId>net.dankito.readability4j</groupId>
+			<artifactId>readability4j</artifactId>
+			<version>1.0.8</version>
+		</dependency>
+		<dependency>
+			<groupId>org.jsoup</groupId>
+			<artifactId>jsoup</artifactId>
+			<version>1.18.3</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>3.0.5</version>
+		</dependency>
+		<!-- MultipartBodyBuilder.PartBuilder references org.reactivestreams.Publisher
+		     (its asyncPart() overload) even when unused, so the class fails to
+		     verify at load time without this on the classpath. Small, no
+		     transitive deps. -->
+		<dependency>
+			<groupId>org.reactivestreams</groupId>
+			<artifactId>reactive-streams</artifactId>
+			<version>1.0.4</version>
+		</dependency>
+
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator-test</artifactId>

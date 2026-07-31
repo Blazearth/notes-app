@@ -151,6 +151,63 @@ public class YtDlpClient {
         }
     }
 
+    /**
+     * Step 3's download: audio only, never the video track (CLAUDE.md — "for
+     * ASR, download audio only, never the video"), and bounded by
+     * {@code --download-sections} so a long-form video costs the same as a
+     * short one. Called only after the probe has already confirmed this URL
+     * matches a yt-dlp extractor, so a failure here is "this specific video
+     * has no audio / is blocked", not "unsupported site".
+     *
+     * <p>Like captions, the file has to land on disk — yt-dlp has no "pipe the
+     * audio" mode without a shell pipeline, and audio at a 90-second cap is
+     * small enough that a temp file costs nothing worth avoiding. The caller
+     * owns cleanup.
+     *
+     * @param maxDurationSeconds upper bound on how much of the source is
+     *                           downloaded, e.g. {@code 90} for {@code "*0-90"}
+     */
+    public Optional<Path> downloadAudio(String url, Path workDir, int maxDurationSeconds) {
+        ExternalProcess.Result result = processes.run(List.of(
+                properties.binary(),
+                "-f", "bestaudio",
+                "--download-sections", "*0-" + maxDurationSeconds,
+                "--no-playlist",
+                "--no-warnings",
+                "-o", "%(id)s.%(ext)s",
+                url), properties.audioTimeout(), workDir);
+
+        Optional<Path> audio = largestFile(workDir);
+        if (audio.isPresent()) {
+            return audio;
+        }
+        if (!result.succeeded()) {
+            throw new YtDlpFailedException(describe(result), result.stderr());
+        }
+        // Succeeded but wrote nothing: no audio stream on this source.
+        return Optional.empty();
+    }
+
+    /** The audio file's extension depends on the source's best format, so pick by presence, not name. */
+    private Optional<Path> largestFile(Path workDir) {
+        try (Stream<Path> files = Files.list(workDir)) {
+            return files
+                    .filter(Files::isRegularFile)
+                    .max(Comparator.comparingLong(YtDlpClient::sizeQuietly));
+        } catch (IOException e) {
+            log.warn("Could not read audio download from {}", workDir, e);
+            return Optional.empty();
+        }
+    }
+
+    private static long sizeQuietly(Path path) {
+        try {
+            return Files.size(path);
+        } catch (IOException e) {
+            return 0L;
+        }
+    }
+
     private static List<String> languageKeys(JsonNode node) {
         if (node == null || !node.isObject()) {
             return List.of();

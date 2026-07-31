@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
+import com.weavr.api.pipeline.audio.AsrTranscriber;
 import com.weavr.api.pipeline.ytdlp.SourceMetadata;
 import com.weavr.api.pipeline.ytdlp.YtDlpClient;
 import com.weavr.api.pipeline.ytdlp.YtDlpFailedException;
@@ -31,7 +32,11 @@ import static org.mockito.Mockito.when;
 class ExtractionCascadeTest {
 
     private final YtDlpClient ytDlp = mock(YtDlpClient.class);
-    private final ExtractionCascade cascade = new ExtractionCascade(ytDlp);
+    private final AsrTranscriber asr = mock(AsrTranscriber.class);
+    private final LinkExtractor linkExtractor = mock(LinkExtractor.class);
+    private final PdfExtractor pdfExtractor = mock(PdfExtractor.class);
+    private final ExtractionCascade cascade =
+            new ExtractionCascade(ytDlp, asr, linkExtractor, pdfExtractor);
 
     private static SourceMetadata metadata(String title, String description, List<String> autoCaptions) {
         return new SourceMetadata("vid1", title, description, "someone", 42.0,
@@ -51,6 +56,7 @@ class ExtractionCascadeTest {
         assertThat(extraction.text())
                 .contains("Miso ramen")
                 .contains("first brown the onions");
+        verify(asr, never()).transcribe(anyString());
     }
 
     /** The cheap path: a rich description means no caption fetch at all. */
@@ -65,6 +71,7 @@ class ExtractionCascadeTest {
 
         assertThat(extraction.source()).isEqualTo("metadata");
         verify(ytDlp, never()).fetchCaptions(anyString(), any(Path.class));
+        verify(asr, never()).transcribe(anyString());
     }
 
     @Test
@@ -80,29 +87,96 @@ class ExtractionCascadeTest {
         assertThat(extraction.source()).isEqualTo("metadata");
     }
 
-    /**
-     * The honest-failure case. With ASR not implemented, a post with neither
-     * captions nor a description has nothing to extract — and inventing a save
-     * out of a five-word title would be worse than failing.
-     */
+    /** Neither free source produced anything, so the last resort — ASR — runs. */
     @Test
-    void failsPermanentlyWhenNothingUsableExists() {
+    void fallsBackToAsrWhenCaptionsAndMetadataAreBothThin() {
         when(ytDlp.probe(anyString())).thenReturn(metadata("Reel", "", List.of()));
+        when(asr.transcribe(anyString())).thenReturn(
+                Optional.of("first you brown the onions then add the stock and simmer for ten minutes"));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl("https://example.com/v");
+
+        assertThat(extraction.source()).isEqualTo("asr");
+        assertThat(extraction.text()).contains("brown the onions");
+    }
+
+    /** The honest-failure case: not even ASR produced anything usable. */
+    @Test
+    void failsPermanentlyWhenNothingUsableExistsEvenAfterAsr() {
+        when(ytDlp.probe(anyString())).thenReturn(metadata("Reel", "", List.of()));
+        when(asr.transcribe(anyString())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> cascade.extractFromUrl("https://example.com/v"))
                 .isInstanceOf(PermanentJobException.class)
                 .hasMessageContaining("no_text_extracted");
     }
 
+    /**
+     * "Unsupported site" is not a final failure any more — it means "not a
+     * video platform", so the cascade tries readable-text extraction instead
+     * of giving up.
+     */
     @Test
-    void translatesUnsupportedSitesIntoPermanentFailure() {
+    void fallsBackToLinkExtractionWhenNoYtDlpExtractorMatches() {
         when(ytDlp.probe(anyString()))
                 .thenThrow(new YtDlpFailedException("yt-dlp exited 1",
-                        "ERROR: Unsupported URL: https://example.com/x"));
+                        "ERROR: Unsupported URL: https://example.com/article"));
+        when(linkExtractor.extract(anyString())).thenReturn(Optional.of(
+                new LinkExtractor.LinkExtraction("10 Rules for Writing Software",
+                        "Make it work, make it right, make it fast. " +
+                                "Premature optimization is the root of all evil in programming.")));
 
-        assertThatThrownBy(() -> cascade.extractFromUrl("https://example.com/x"))
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl("https://example.com/article");
+
+        assertThat(extraction.source()).isEqualTo("link");
+        assertThat(extraction.text()).contains("Premature optimization");
+        assertThat(extraction.metadata().title()).isEqualTo("10 Rules for Writing Software");
+        verify(asr, never()).transcribe(anyString());
+    }
+
+    @Test
+    void failsPermanentlyWhenLinkExtractionAlsoFindsNothing() {
+        when(ytDlp.probe(anyString()))
+                .thenThrow(new YtDlpFailedException("yt-dlp exited 1",
+                        "ERROR: Unsupported URL: https://example.com/article"));
+        when(linkExtractor.extract(anyString())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> cascade.extractFromUrl("https://example.com/article"))
                 .isInstanceOf(PermanentJobException.class)
-                .hasMessageContaining("unsupported_source");
+                .hasMessageContaining("no_text_extracted");
+    }
+
+    /** A save whose URL is obviously a PDF skips yt-dlp entirely. */
+    @Test
+    void routesPdfUrlsStraightToThePdfExtractorWithoutProbing() {
+        when(pdfExtractor.extract(anyString())).thenReturn(Optional.of(
+                "Section 1: Introduction. This paper presents a novel approach to widget design."));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl("https://example.com/paper.pdf");
+
+        assertThat(extraction.source()).isEqualTo("pdf");
+        assertThat(extraction.text()).contains("widget design");
+        verify(ytDlp, never()).probe(anyString());
+    }
+
+    @Test
+    void pdfDetectionIgnoresQueryStringAndFragment() {
+        when(pdfExtractor.extract(anyString())).thenReturn(Optional.of(
+                "Section 1: Introduction. This paper presents a novel approach to widget design."));
+
+        cascade.extractFromUrl("https://example.com/paper.pdf?utm_source=share#page=2");
+
+        verify(pdfExtractor).extract("https://example.com/paper.pdf?utm_source=share#page=2");
+        verify(ytDlp, never()).probe(anyString());
+    }
+
+    @Test
+    void failsPermanentlyWhenThePdfHasNoExtractableText() {
+        when(pdfExtractor.extract(anyString())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> cascade.extractFromUrl("https://example.com/scan.pdf"))
+                .isInstanceOf(PermanentJobException.class)
+                .hasMessageContaining("no_text_extracted");
     }
 
     @Test

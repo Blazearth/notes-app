@@ -10,6 +10,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                      ffmpeg
  * @param probeTimeout  bound on the metadata probe, which does no downloading
  * @param captionTimeout bound on the caption fetch
+ * @param audioTimeout  bound on the ASR audio download. Generous relative to
+ *                      the duration cap on the download itself — the timeout
+ *                      covers slow networks, not long audio
  * @param subtitleLangs `--sub-langs` value. Exact codes, never a regex — see
  *                      the constructor default
  */
@@ -18,6 +21,7 @@ public record YtDlpProperties(
         String binary,
         Duration probeTimeout,
         Duration captionTimeout,
+        Duration audioTimeout,
         String subtitleLangs
 ) {
 
@@ -25,6 +29,7 @@ public record YtDlpProperties(
         if (binary == null || binary.isBlank()) binary = "yt-dlp";
         if (probeTimeout == null) probeTimeout = Duration.ofSeconds(60);
         if (captionTimeout == null) captionTimeout = Duration.ofSeconds(90);
+        if (audioTimeout == null) audioTimeout = Duration.ofSeconds(120);
         // Exact codes. `--sub-langs` treats each entry as a regex, and yt-dlp
         // synthesises translated tracks named `<source>-<target>` at download
         // time — so "en.*" matches en-ar, en-ja, en-ru and every other

@@ -3,6 +3,9 @@ package com.weavr.api.pipeline.ytdlp;
 import java.util.List;
 import java.util.Locale;
 
+import com.weavr.api.job.PermanentJobException;
+import com.weavr.api.job.RetryableJobException;
+
 /**
  * Maps yt-dlp's stderr onto something a user can read, and decides whether
  * retrying could ever help.
@@ -93,5 +96,20 @@ public final class YtDlpErrors {
 
     private static boolean matches(String haystack, Rule rule) {
         return rule.needles().stream().anyMatch(haystack::contains);
+    }
+
+    /**
+     * Classifies and converts in one step, so every caller — the caption
+     * fetch, the metadata probe, the audio download for ASR — turns a failed
+     * yt-dlp run into the same job-runner exception without repeating the
+     * classify-then-branch dance.
+     */
+    public static RuntimeException toException(YtDlpFailedException e) {
+        Classification classification = classify(e.stderr());
+        if (classification.permanent()) {
+            return new PermanentJobException(classification.errorCode(), classification.userMessage(), e);
+        }
+        return new RetryableJobException(
+                classification.errorCode() + ": " + classification.userMessage(), e);
     }
 }

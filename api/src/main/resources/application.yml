@@ -112,6 +112,31 @@ weavr:
     # a 429 partway through. `en` is the English track (an uploaded one wins
     # over a machine caption); `en-orig` is the original-language track.
     subtitle-langs: ${WEAVR_YTDLP_SUB_LANGS:en,en-orig}
+    # Bound on the ASR audio download. Generous relative to the 90s duration
+    # cap on the download itself — this timeout covers slow networks, not
+    # long audio.
+    audio-timeout: 120s
+
+  # --------------------------------------------------------------------------
+  # ffmpeg — downmixes ASR audio to 16 kHz mono before it goes to Groq.
+  # --------------------------------------------------------------------------
+  ffmpeg:
+    binary: ${WEAVR_FFMPEG_BINARY:ffmpeg}
+    timeout: 60s
+
+  # --------------------------------------------------------------------------
+  # Groq — Whisper ASR. Step 3 of the extraction cascade, the last resort
+  # before a save fails as unclassifiable.
+  # --------------------------------------------------------------------------
+  # A different provider from Gemini on purpose: its own key, its own
+  # rate-limit pool, so a transcription never spends Gemini's daily RPD.
+  # max-audio-seconds bounds what yt-dlp downloads — CLAUDE.md § bound
+  # everything — so a 3-hour video costs the same as a 90-second Reel.
+  groq:
+    api-key: ${WEAVR_GROQ_API_KEY:}
+    model: whisper-large-v3-turbo
+    timeout: 30s
+    max-audio-seconds: ${WEAVR_GROQ_MAX_AUDIO_SECONDS:90}
 
   # --------------------------------------------------------------------------
   # Gemini — AI classification + extraction.
