@@ -12,7 +12,7 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 |---|---|---|
 | 0 — Pre-flight | repo, Supabase project, decisions closed | ⬜ store records, Apple enrolment, **real Gemini RPD still unverified** |
 | 1 — Foundation | schema, auth, `POST`/`GET /v1/saves`, whole Expo app | 2 of 4 — backend closed, mobile blocked on a dev build |
-| 2 — Ingestion cascade | job runner, cascade steps 1–2, process plumbing, **verified against a real yt-dlp** | 1 of 4 — captions proven end to end; the rest need ASR or the share extension |
+| 2 — Ingestion cascade | job runner, cascade steps 1–4 — captions, metadata, **verified against a real yt-dlp**; ASR (Groq Whisper) and readable-text/PDF extraction, unit-tested but not live-verified | 1 of 4 — captions proven end to end; ASR/link/PDF are code-complete but unproven live, and the share extension is still unbuilt |
 | 3 — AI pipeline v1 | Gemini classify-and-extract call, budget layer, response-schema registry, **verified live against the real API**; type-specific mobile cards | 3 of 4 — a recipe Reel with captions becomes a structured card, budget exhaustion queues rather than fails, the app shows real cards; blocked-download → `unusable` unverified live |
 | 4–8 | — | — |
 
@@ -54,6 +54,32 @@ recipe/movie/place layouts on the Home feed. Still open: OCR (Phase 4), a
 Gemini call against a genuinely blocked/unusable download (only tested with a
 scripted `unusable` response so far), and everything mobile still waits on a
 dev build.
+
+**Same day, later: steps 3 and 4 of the Phase 2 cascade landed** — ASR (yt-dlp
+audio download → ffmpeg 16 kHz mono downmix → Groq Whisper) and the
+non-video branch (readable-text extraction for plain links via Readability4J,
+PDFBox for PDFs). All three are new external dependencies with real API
+surface to get wrong, so each got the same encoding-bug-shaped scrutiny the
+Gemini fix earlier today came from: `GroqClient` reads its response as raw
+bytes, not `String`, from the start — the mistake was made once, on Gemini,
+and applied everywhere else preemptively rather than waiting to hit it a
+second time. `LinkExtractor` hands Jsoup raw bytes with no assumed charset
+for the same reason; an arbitrary web page's declared encoding lives in an
+HTTP header *or* a `<meta>` tag, and guessing either wrong is the same
+mojibake shape. 46 new tests, all mocked (`MockRestServiceServer` for Groq
+and the PDF/link downloads, mocked `ExternalProcess` for ffmpeg) — **nothing
+here has hit the real Groq API or downloaded a real audio track**, which is
+exactly the gap that found three defects in the yt-dlp caption path and nine
+tests' worth of encoding assumptions in Gemini. Whether that repeats a third
+time here is unknown until `WEAVR_GROQ_API_KEY` is set and something actually
+runs it. Two branching decisions worth remembering: an "unsupported URL" from
+yt-dlp's probe is no longer a final failure — it now means "not a video
+platform" and falls through to link extraction — and a `.pdf` URL skips
+yt-dlp entirely rather than wasting a probe on it. Also fixed in passing:
+`ProcessSaveHandler` was hard-failing every `IMAGE` save with
+`unsupported_source_type`, contradicting `SourceType`'s own doc comment that
+an image save carries on-device OCR text — it now takes the same path as
+`TEXT`.
 
 ---
 
@@ -214,10 +240,10 @@ Three error paths, not two — the extra one earns its place (CA#2):
 
 | Step | State |
 |---|---|
-| 1. Platform captions — `--skip-download --write-subs --write-auto-subs` | ✅ built |
-| 2. Post metadata — title, description, uploader | ✅ built |
-| 3. ASR — `ffmpeg` → 16 kHz mono → Groq Whisper | ⬜ absent |
-| 4. Readable-text for links; text extraction for PDFs | ⬜ absent |
+| 1. Platform captions — `--skip-download --write-subs --write-auto-subs` | ✅ built, verified live |
+| 2. Post metadata — title, description, uploader | ✅ built, verified live |
+| 3. ASR — `ffmpeg` → 16 kHz mono → Groq Whisper | ✅ built, 🟡 unit-tested only — no real Groq call made yet |
+| 4. Readable-text for links (Readability4J); text extraction for PDFs (PDFBox) | ✅ built, 🟡 unit-tested only — no real page/PDF fetched yet |
 
 **Steps 1 and 2 are inverted from the order above, deliberately.** The metadata
 probe is `--dump-single-json`: one call, no files, no media — and its response
@@ -247,13 +273,22 @@ spawned JVM rather than a mock:
 - `waitFor(timeout)` + `destroyForcibly()` *(test uses a child that never exits)*
 - Output capped, and the pump keeps draining past the cap — ceasing to read refills the pipe and re-blocks the child
 - stdin closed immediately, so a tool that prompts cannot wait forever
-- Still to come with step 3: `-f 'worst[height>=360]'`, `--download-sections "*0-90"`, pipe to ffmpeg, delete in `finally`
+- Step 3 (ASR) landed 2026-07-31: `-f bestaudio --download-sections "*0-90"`
+  bounds the download; `-f 'worst[height>=360]'` (video frames for OCR) is
+  still Phase 4. **Deviation from the "pipe to ffmpeg" plan**: audio lands in
+  a temp file and ffmpeg reads that, rather than a `yt-dlp | ffmpeg` shell
+  pipeline — audio at a 90s cap is small enough that a temp file costs
+  nothing worth the extra process-wiring complexity a real pipe needs in
+  Java. `delete in finally` — done (`TempDirs`, shared with the caption path).
 
 Steal from the teardown: ✅ caption-language discovery from `subtitles` +
-`automatic_captions` (CA#14) · ⬜ `ffprobe` audio-stream probe before ASR (CA#13)
-· ✅ yt-dlp error → user-message mapping table (CA#9), defaulting *unrecognised*
-failures to retryable because broken extractors are routine · ✅ each stage
-written to `save_stages` (CA#4).
+`automatic_captions` (CA#14) · ⬜ `ffprobe` audio-stream probe before ASR (CA#13) —
+still open; the download is attempted unconditionally and a missing audio
+track is just an empty result, not a pre-flight check · ✅ yt-dlp error →
+user-message mapping table (CA#9), defaulting *unrecognised* failures to
+retryable because broken extractors are routine, now shared by the ASR
+download path too (`YtDlpErrors.toException`) · ✅ each stage written to
+`save_stages` (CA#4).
 
 **A save now reaches `ready` (or `failed`).** Extraction produces text;
 `classify_save` (Phase 3, landed 2026-07-31 — see the note above) turns it into
@@ -283,13 +318,13 @@ needing its own dedupe.
 
 Android: no-display Activity + WorkManager. Straightforward — do it second.
 
-**Exit criteria:** 🟡 share a YouTube Short → captions land in `save_stages` with no Gemini call *(the yt-dlp half is proven live — probe, caption fetch and VTT-to-prose all run against a real video; what is unproven is the share hand-off and the `save_stages` write from a device)* · ⬜ share an Instagram Reel with no captions → Whisper transcript lands *(ASR absent)* · ⬜ a killed extension still completes its upload · 🟡 a yt-dlp failure produces a human-readable message *(the mapping table is tested against captured stderr, and one live `HTTP 429` was classified correctly as retryable `source_blocked`; other live failures untested)*.
+**Exit criteria:** 🟡 share a YouTube Short → captions land in `save_stages` with no Gemini call *(the yt-dlp half is proven live — probe, caption fetch and VTT-to-prose all run against a real video; what is unproven is the share hand-off and the `save_stages` write from a device)* · 🟡 share an Instagram Reel with no captions → Whisper transcript lands *(ASR is built and unit-tested — download, downmix and Groq call all mocked — but has never run against a real video or a real Groq API key; also still gated on the share hand-off from a device, same as above)* · ⬜ a killed extension still completes its upload · 🟡 a yt-dlp failure produces a human-readable message *(the mapping table is tested against captured stderr, and one live `HTTP 429` was classified correctly as retryable `source_blocked`; other live failures untested)*.
 
 **Risks:** Instagram needs curl-cffi impersonation for public Reels (confirmed in the teardown). Budget two days. Treat unauthenticated failure as an acceptable outcome, not a blocker.
 
-**Where Phase 2 actually stands:** the backend half is done and now *proven* — runner, cascade steps 1–2, process plumbing and error classification are written, the runner is verified against live Supabase, and the cascade is verified against a real yt-dlp. What remains is not backend work: the share extension does not exist, and ASR is unwritten. The next move is the extension spike, which is the single highest-risk mobile unknown and has hard lead times.
+**Where Phase 2 actually stands:** the backend half is *written*, and only steps 1–2 are *proven* — runner, all four cascade steps, process plumbing and error classification are written; the runner is verified against live Supabase, and captions/metadata are verified against a real yt-dlp. ASR and the link/PDF branch are new as of 2026-07-31 and unit-tested only. What remains is not backend *code*: the share extension does not exist, and ASR/link/PDF have never touched a real network. The next move is the extension spike, which is the single highest-risk mobile unknown and has hard lead times — but a live pass on ASR (a real `WEAVR_GROQ_API_KEY`, a real video with no captions) is worth doing before trusting it, on the strength of the same lesson twice now.
 
-Worth carrying forward: the cascade had 27 green tests and three real defects, and the gap between those two numbers was entirely "the binary was mocked". The same shape of gap is currently open on `JobStore`'s claim query, which is exercised only by one manual run against Supabase.
+Worth carrying forward: the caption path had 27 green tests and three real defects, and the classify path had 67 and one (the encoding bug) — both times the gap was entirely "the real thing was mocked". The same shape of gap is now open on ASR, link extraction and PDF extraction (46 tests, all mocked), and still open on `JobStore`'s claim query, which is exercised only by one manual run against Supabase.
 
 ---
 

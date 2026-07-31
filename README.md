@@ -39,7 +39,8 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Job queue | **real, verified** | Enqueue runs as part of the create path; the runner drains it |
 | Job runner | **real, verified** | `SKIP LOCKED` claim, per-group exclusion, three error paths, stale-claim sweep. Claimed and completed a real job against live Supabase |
 | Extraction cascade — metadata + captions | **real, verified** | `--dump-single-json` probe then `--write-auto-subs`, VTT to prose, error classification. Run against yt-dlp 2026.07.04 and a live YouTube video by the opt-in `YtDlpLiveTest`; it found and fixed three defects |
-| Extraction cascade — ASR | **absent** | ffmpeg → 16 kHz mono → Groq Whisper. A different provider with its own key |
+| Extraction cascade — ASR | **built, unverified live** | yt-dlp audio download → ffmpeg 16 kHz mono downmix → Groq Whisper. A different provider with its own key, so it costs no Gemini RPD. 9 unit tests, all mocked — no real Groq call made yet |
+| Extraction cascade — link / PDF | **built, unverified live** | Readability4J for plain links, PDFBox for PDFs — the non-video branch, reached when yt-dlp has no extractor for the URL or it's a `.pdf`. 7 unit tests, all mocked — no real page or PDF fetched yet |
 | `process_save` handler | **real** | Runs the cascade and parks the text in `save_stages` for `classify_save` to pick up |
 | Gemini classify-and-extract call | **real, verified live** | `classify_save` handler + `GeminiClient`/`GeminiBudgetService`/`KnowledgeTypeRegistry`. Ran against the real API and produced real structured saves on 2026-07-30 — see below. 25 unit tests (`GeminiClientTest`, `GeminiBudgetServiceTest`, `KnowledgeTypeRegistryTest`, `ClassifySaveHandlerTest`) |
 | OCR tier | **absent** | Phase 4 |
@@ -116,8 +117,7 @@ That fix, the primary→fallback model routing and daily-budget guard, and the
 response-schema/system-prompt registry now have unit test coverage that did
 not exist before today — `KnowledgeTypeRegistryTest` (7), `GeminiBudgetServiceTest`
 (6), `GeminiClientTest` (5), `ClassifySaveHandlerTest` (7). `SaveServiceTest`
-(6) covers the new `POST /v1/saves` idempotency behaviour below. Full suite:
-`./mvnw test` green, 98 tests (2 skipped — the opt-in live yt-dlp pair).
+(6) covers the new `POST /v1/saves` idempotency behaviour below.
 
 **`POST /v1/saves` is now idempotent on a repeated `Idempotency-Key` header.**
 `V2__save_idempotency.sql` adds a partial unique index on
@@ -139,6 +139,20 @@ yet. Found in the process: `place`'s title field is named `name`, not
 `title`, and `saveTitle()`'s generic fallback was silently missing it — fixed
 alongside. Verified the same way as the rest of the app so far: typechecks,
 bundles for web. Not run on a device.
+
+**Built, not verified: ASR and the link/PDF branch — the two remaining steps
+of the Phase 2 cascade.** Unlike everything above on this date, neither has
+touched a real network. `GroqClient` (yt-dlp audio → ffmpeg 16 kHz mono →
+Groq Whisper) applies the encoding-byte-fix pattern from the Gemini bug
+pre-emptively rather than waiting to hit it again; `LinkExtractor`
+(Readability4J) hands Jsoup raw bytes with no assumed charset for the same
+reason. An "unsupported URL" from yt-dlp's probe now falls through to link
+extraction instead of failing the save outright, and a `.pdf` URL skips
+yt-dlp entirely. 46 tests, all mocked (`MockRestServiceServer` for Groq and
+the PDF/link downloads, a mocked `ExternalProcess` for ffmpeg) — the same
+shape of gap that hid three real yt-dlp defects behind 27 green tests, and
+one encoding bug behind 67. Full suite: `./mvnw test` green, 127 tests (2
+skipped — the opt-in live yt-dlp pair).
 
 ## Running the app
 
@@ -266,8 +280,14 @@ HTTP ping to a static endpoint.
   neither, and the failure mode is every save retrying until it exhausts
   `max_attempts`. Use the distro package for ffmpeg; the standalone Windows
   build used locally is ~94 MB per binary because it is statically linked.
-- **ASR is still absent**, so a post with neither captions nor a description
-  fails as `no_text_extracted` rather than falling through to Whisper.
+- **ASR (and the link/PDF branch) are built but unverified live** — the
+  yt-dlp caption path's own history is the reason to say this plainly rather
+  than call it done: 27 mocked-green tests still missed three real defects,
+  and the classify path's 67 missed a UTF-8 encoding bug, both only found by
+  running the real thing. ASR, `LinkExtractor` and `PdfExtractor` have 46
+  tests between them, all mocked. A post with neither captions nor a
+  description now falls through to Whisper instead of failing outright — in
+  theory; nothing has confirmed it does in practice yet.
 
 **Blocking the Phase 1 exit**
 
