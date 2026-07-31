@@ -1,9 +1,18 @@
 import * as Clipboard from 'expo-clipboard';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, View } from 'react-native';
-import Animated, { FadeIn, FadeInDown, SlideInDown } from 'react-native-reanimated';
+import Animated, {
+  FadeInDown,
+  interpolate,
+  runOnJS,
+  useAnimatedProps,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError, createSave } from '@/api/client';
@@ -20,6 +29,15 @@ const COLUMNS = 4;
 
 /** Only `link` posts today; the rest need capture surfaces that do not exist. */
 const IMPLEMENTED: ReadonlySet<string> = new Set(['link']);
+
+const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
+
+/** Full backdrop blur at rest. Animated from 0 so the blur grows in, not just fades in. */
+const BACKDROP_BLUR_INTENSITY = 20;
+/** A "subtle dark scrim over the blur" per the design brief — kept well under the 55% `Alpha.scrim` used for solid (non-blurred) dims elsewhere. */
+const BACKDROP_SCRIM_OPACITY = 0.16;
+/** Off-screen starting offset for the panel — larger than any real sheet height so it always begins fully hidden below the fold. */
+const PANEL_ENTER_OFFSET = 420;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const rows: T[][] = [];
@@ -109,6 +127,43 @@ export function CaptureSheet() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const reducedMotion = useReducedMotion();
+  // Drives the backdrop blur/scrim and the panel's rise together, on the same
+  // spring, so the expansion reads as one motion instead of two coincidentally
+  // timed ones. Reversing it and waiting for it to settle before navigating
+  // back is what makes dismissal a true mirror of the entrance rather than a
+  // cut to the Stack's own fade.
+  const progress = useSharedValue(0);
+
+  useEffect(() => {
+    progress.value = reducedMotion ? 1 : withSpring(1, Spring.enter);
+    // Mount-only: this is the sheet's entrance, it never re-runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const dismiss = () => {
+    if (reducedMotion) {
+      router.back();
+      return;
+    }
+    progress.value = withSpring(0, Spring.enter, (finished) => {
+      if (finished) runOnJS(router.back)();
+    });
+  };
+
+  const blurProps = useAnimatedProps(() => ({
+    intensity: progress.value * BACKDROP_BLUR_INTENSITY,
+  }));
+  const scrimStyle = useAnimatedStyle(() => ({
+    opacity: progress.value * BACKDROP_SCRIM_OPACITY,
+  }));
+  const fallbackDimStyle = useAnimatedStyle(() => ({
+    opacity: progress.value * (alpha.scrim + 0.3),
+  }));
+  const panelStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: interpolate(progress.value, [0, 1], [PANEL_ENTER_OFFSET, 0]) }],
+  }));
+
   const pasteLink = async () => {
     setBusyId('link');
     setError(null);
@@ -145,48 +200,52 @@ export function CaptureSheet() {
 
   return (
     <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-      <Animated.View
-        entering={FadeIn.duration(180)}
-        style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Dismiss"
-          onPress={() => router.back()}
-          style={{ flex: 1 }}
-        >
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={dismiss} style={{ flex: 1 }}>
           {blurEffects ? (
-            <BlurView
-              intensity={18}
-              tint={palette.isDark ? 'dark' : 'light'}
-              experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
-              style={{ flex: 1, backgroundColor: palette.scrim }}
-            />
+            <View style={{ flex: 1 }}>
+              <AnimatedBlurView
+                animatedProps={blurProps}
+                tint={palette.isDark ? 'dark' : 'light'}
+                experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+              />
+              {/* A flat dark tint on top of the blur, kept subtle so the screen
+                  beneath stays legible — the blur carries the separation, the
+                  scrim only adds contrast. */}
+              <Animated.View
+                style={[
+                  { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000000' },
+                  scrimStyle,
+                ]}
+              />
+            </View>
           ) : (
-            <View style={{ flex: 1, backgroundColor: palette.scrim, opacity: alpha.scrim + 0.3 }} />
+            <Animated.View
+              style={[{ flex: 1, backgroundColor: palette.scrim }, fallbackDimStyle]}
+            />
           )}
         </Pressable>
-      </Animated.View>
+      </View>
 
       {/*
-        The panel rises from the bottom edge while the scrim fades — two
-        properties, one action. `springify` rather than a duration so it settles
-        with a little weight instead of stopping dead on a keyframe.
+        The panel rises from the bottom edge on the same `progress` spring that
+        drives the backdrop, so expansion and dismissal are one motion rather
+        than two animations that merely happen to overlap.
       */}
       <Animated.View
-        entering={SlideInDown.springify()
-          .damping(Spring.enter.damping)
-          .stiffness(Spring.enter.stiffness)
-          .mass(Spring.enter.mass)}
-        style={{
-          backgroundColor: palette.surface,
-          borderTopLeftRadius: radius.xl,
-          borderTopRightRadius: radius.xl,
-          paddingTop: spacing.md,
-          paddingHorizontal: layout.screenGutter,
-          paddingBottom: spacing.xxl + insets.bottom,
-          ...elevation.sheet,
-        }}
+        style={[
+          {
+            backgroundColor: palette.surface,
+            borderTopLeftRadius: radius.xl,
+            borderTopRightRadius: radius.xl,
+            paddingTop: spacing.md,
+            paddingHorizontal: layout.screenGutter,
+            paddingBottom: spacing.xxl + insets.bottom,
+            ...elevation.sheet,
+          },
+          panelStyle,
+        ]}
       >
         <View
           style={{
