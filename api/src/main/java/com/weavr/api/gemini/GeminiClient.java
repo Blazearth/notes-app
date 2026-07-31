@@ -46,11 +46,15 @@ public class GeminiClient {
     private final ObjectMapper objectMapper;
     private final JdbcClient jdbc;
 
-    GeminiClient(GeminiProperties props, ObjectMapper objectMapper, JdbcClient jdbc) {
+    // RestClient.Builder is injected (Spring Boot auto-configures a prototype
+    // bean) rather than built ad hoc, so tests can bind MockRestServiceServer
+    // to it instead of hitting the real Gemini API.
+    GeminiClient(GeminiProperties props, ObjectMapper objectMapper, JdbcClient jdbc,
+                RestClient.Builder restClientBuilder) {
         this.props = props;
         this.objectMapper = objectMapper;
         this.jdbc = jdbc;
-        this.http = RestClient.builder()
+        this.http = restClientBuilder
                 .defaultHeader("Content-Type", MediaType.APPLICATION_JSON_VALUE)
                 .build();
     }
