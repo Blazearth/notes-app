@@ -3,6 +3,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { supabase } from './supabase';
+import { mirrorShareSession } from '@/share/nativeShareConfig';
 
 export interface SessionContextValue {
   session: Session | null;
@@ -45,6 +46,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       subscription.subscription.unsubscribe();
     };
   }, []);
+
+  // Android's silent-share Activity/WorkManager worker read this from a
+  // plain file (see nativeShareConfig.ts) since they run outside the JS
+  // runtime and cannot reach AsyncStorage.
+  useEffect(() => {
+    mirrorShareSession(session?.access_token ?? null, session?.refresh_token ?? null);
+  }, [session]);
 
   // The refresh timer must not run while the app is backgrounded: on native the
   // JS runtime is suspended, so a timer that fires there either does nothing or

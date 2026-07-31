@@ -54,6 +54,14 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
+		<!-- Boot 4 split RestClient autoconfiguration out of -webmvc into its own
+		     starter. Without it, the prototype-scoped RestClient.Builder that
+		     GeminiClient/GroqClient/LinkExtractor/PdfExtractor all expect Spring
+		     to auto-configure never exists, and the app fails to start. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-restclient</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>

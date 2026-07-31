@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { mirrorSharedPreference } from './shareExtensionBridge';
+import { mirrorOpenAppWhenSaving } from '@/share/nativeShareConfig';
 import { DEFAULT_PREFERENCES, PREFERENCES_STORAGE_KEY, type Preferences } from './types';
 
 interface PreferencesContextValue {
@@ -51,7 +52,12 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         // fall through to defaults and let the next write repair it.
       })
       .finally(() => {
-        if (!cancelled) setHydrated(true);
+        if (!cancelled) {
+          setHydrated(true);
+          // Mirror the resolved value (stored or default) so Android's share
+          // Activity reflects it from cold start, not just from the next toggle.
+          mirrorOpenAppWhenSaving(latest.current.openAppWhenSaving);
+        }
       });
     return () => {
       cancelled = true;
@@ -69,6 +75,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       persist({ ...latest.current, [key]: value });
       if (key === 'openAppWhenSaving') {
         void mirrorSharedPreference(key, value);
+        mirrorOpenAppWhenSaving(value as boolean);
       }
     },
     [persist],

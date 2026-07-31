@@ -55,7 +55,8 @@ so restart the bundler after changing them.
 | Capture → `POST /v1/saves` | **real, not yet run on a device** — the Paste Link tile only |
 | Library / Spaces / Continue / digest | **sample content** — these need features that do not exist yet |
 | Other capture tiles | **inert** — visibly disabled until their capture surfaces exist |
-| Share extension / silent capture | **absent** — the toggle exists, the native side does not |
+| Silent capture — Android | **built, never run on a device** — `ShareReceiverActivity` + `ShareUploadWorker` via a config plugin; no Android SDK on this machine to build or run it |
+| Silent capture — iOS | **absent** — the toggle exists, the native share extension does not |
 | RevenueCat | **absent** |
 
 The feed and Capture are wired to the real API. What is left on sample content is
@@ -129,9 +130,16 @@ src/
     covers.ts           the nine cover gradients
     ThemeProvider.tsx   preferences + OS scheme → Theme
   prefs/                AsyncStorage-backed preference store
+  share/
+    nativeShareConfig.ts mirrors session + "open app when saving" to a file
+                         Android's share Activity/Worker read (no-op on iOS)
   components/           Card, Chip, ListRow, BottomNav, Glyph, HatchThumb, …
   screens/              the five screens
   data/                 sample content
+plugins/
+  withAndroidShareReceiver.js   config plugin: adds ShareReceiverActivity +
+                                ShareUploadWorker to the generated android/
+  android-templates/share/      the Kotlin sources the plugin copies in
 ```
 
 ## The theme system
@@ -190,15 +198,25 @@ native module, so the 13 accents stand in for it.
 ## Things to know
 
 **Sharing must not open the app.** The *Open app when saving* toggle already
-exists and defaults to off, but the iOS share extension does not. When it lands,
-the toggle has to be mirrored into the App Group at write time — the extension is
-a separate process and cannot read AsyncStorage. The call site is already in
-place: [src/prefs/shareExtensionBridge.ts](src/prefs/shareExtensionBridge.ts) is
-a deliberate no-op so the mirroring cannot be forgotten.
+exists and defaults to off. Android's half is real:
+[src/share/nativeShareConfig.ts](src/share/nativeShareConfig.ts) mirrors the
+session and the toggle into a plain JSON file in the app's private files dir,
+which `ShareReceiverActivity`/`ShareUploadWorker` (added by
+[plugins/withAndroidShareReceiver.js](../plugins/withAndroidShareReceiver.js))
+read directly — no App-Group-style bridging needed, since on Android the share
+Activity and the JS runtime are the same process. iOS's share extension does
+not exist yet; when it lands, the toggle additionally has to be mirrored into
+the App Group at write time, because that extension *is* a separate process
+and cannot read AsyncStorage. The call site is already in place:
+[src/prefs/shareExtensionBridge.ts](src/prefs/shareExtensionBridge.ts) is a
+deliberate no-op so the iOS mirroring cannot be forgotten.
 
-Store the **refresh** token, not just the access token. Supabase access tokens
-are short-lived and the extension will often run with an expired one — decide
-this before writing the extension; retrofitting it is painful.
+Store the **refresh** token, not just the access token, for iOS. Supabase
+access tokens are short-lived and the extension will often run with an expired
+one — decide this before writing the extension; retrofitting it is painful.
+(Android's worker hits the same problem in a smaller way: `nativeShareConfig.ts`
+mirrors the access token, which can expire before a queued upload retries. Not
+yet handled — see Known gaps in the root README.)
 
 **Icons are geometry, not a font.** The mockups draw every icon from primitives
 — rings, squares, rotated diamonds, a plus from two bars. [Glyph](src/components/Glyph.tsx)

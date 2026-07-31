@@ -51,7 +51,8 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Expo app — auth + save create/list | **real, never run on a device** | Supabase email/password, `POST`/`GET /v1/saves`, all four feed states. Typechecks and bundles; no dev build exists yet |
 | Expo app — type-specific save cards | **real, never run on a device** | `SaveCard` renders recipe/movie/place layouts from `knowledgeType` + `structuredData` for `ready` saves; falls back to a flat row otherwise. Typechecks and bundles |
 | Expo app — Library / Spaces / digest | **sample content** | Need pipeline output or collaboration endpoints that do not exist |
-| Expo app — share extension | **absent** | The *Open app when saving* toggle exists; the native extension does not. See [app/README.md](app/README.md) |
+| Silent capture — Android | **built, never run on a device** | A config plugin (`app/plugins/withAndroidShareReceiver.js`) adds a no-display `ShareReceiverActivity` + a `ShareUploadWorker` (WorkManager, network-constrained, retried with exponential backoff up to 8 attempts). `expo prebuild -p android` produces the right manifest entry, Gradle dependency and Kotlin sources, verified by inspecting the generated output — no Android SDK on this machine to build or run it |
+| Silent capture — iOS | **absent** | The *Open app when saving* toggle exists; the native share extension does not. See [app/README.md](app/README.md) |
 
 **Nothing is faked.** Every "real" row above is genuinely implemented — there are
 no mock responses or placeholder implementations in the codebase.
@@ -153,6 +154,69 @@ the PDF/link downloads, a mocked `ExternalProcess` for ffmpeg) — the same
 shape of gap that hid three real yt-dlp defects behind 27 green tests, and
 one encoding bug behind 67. Full suite: `./mvnw test` green, 127 tests (2
 skipped — the opt-in live yt-dlp pair).
+
+### Also on 2026-07-31 — Android silent capture, and a boot-blocking bug found by actually booting
+
+**The app could not start at all, and no unit test caught it.** `GeminiClient`,
+`GroqClient`, `LinkExtractor` and `PdfExtractor` all inject `RestClient.Builder`
+on the assumption that Spring Boot auto-configures a prototype-scoped bean for
+it — true through Spring Boot 3.x, but Boot 4 split that autoconfiguration out
+of `-webmvc` into its own `spring-boot-starter-restclient`, which was never
+added to `pom.xml`. Every mocked test binds a `RestClient.Builder` by hand
+(`RestClient.builder()`, then `MockRestServiceServer`), so none of them boot a
+real `ApplicationContext` and none could have caught a missing autoconfigured
+bean — the same shape of gap that hid three yt-dlp defects and a UTF-8 bug
+behind mocked-green tests, now on a third layer (DI wiring, not HTTP
+behaviour). Fixed by adding the starter; one line.
+
+**With that fixed, the create path was hit directly with `curl` — deliberately
+not through the app UI, which has no dev build to run on this machine.**
+Admin-created and confirmed a throwaway Supabase user (service-role key),
+password-granted a real access token, then:
+
+- `POST /v1/saves` with `Idempotency-Key: <key>` → **202**, `Location` header,
+  body `status: "processing"` — the exact response `ShareUploadWorker` (below)
+  is written to expect.
+- The same request repeated with the **same** `Idempotency-Key` → **202** with
+  the **same** save id, and the server log shows `Idempotent replay of save
+  key=...` — proving the retry-safety a WorkManager retry depends on, against
+  the real unique index, not just `SaveServiceTest`'s mocked race.
+- A request with no `Authorization` header → **401**, zero-byte body — the
+  status `ShareUploadWorker` treats as non-retryable.
+- The job runner claimed the job within seconds and the extraction cascade ran
+  for real, failing on the test's fake URL with a retryable `source_unreachable`
+  — expected, since `example.com/…` has no video and no yt-dlp extractor. This
+  proves the app boots and processes a save end to end; it does **not** newly
+  verify ASR or link/PDF extraction against real content, which stays exactly
+  as unverified as before this session.
+
+Throwaway user and its stray save were deleted afterward via the admin API.
+
+**Android silent capture is now built, the Android half of "Capture flow:
+silent by default."** A local config plugin
+(`app/plugins/withAndroidShareReceiver.js`) — not a hand-edited `android/`,
+which stays gitignored and regenerable — adds:
+
+- `ShareReceiverActivity`: `Theme.NoDisplay` + `noHistory` +
+  `excludeFromRecents`, an intent filter for `ACTION_SEND` / `text/plain`.
+  Reads the shared text, enqueues the upload, shows a Toast, finishes.
+- `ShareUploadWorker`: a `CoroutineWorker` POSTing to `/v1/saves` with a
+  network `Constraints`, exponential backoff, and a per-share idempotency key
+  generated once at enqueue time and carried through every retry — the exact
+  contract just verified live above.
+- `ShareConfigStore` reads a plain JSON file the JS side
+  (`app/src/share/nativeShareConfig.ts`) writes on every session or
+  `openAppWhenSaving` change. Android needs no App-Group-style bridging for
+  this: the share Activity and Worker run in the same process as the JS
+  runtime, and `expo-file-system`'s `Paths.document` resolves to the same
+  `context.filesDir` a plain `File` read in Kotlin does — confirmed by reading
+  both the JS and native module source, not assumed.
+
+Verified: `expo prebuild -p android --clean` produces the activity in
+`AndroidManifest.xml`, the `androidx.work:work-runtime-ktx` dependency in
+`build.gradle`, and the three Kotlin sources under `.../share/`; a second
+prebuild run doesn't duplicate any of them. `tsc --noEmit` is clean. **Not run
+on a device or emulator — this machine has no Android SDK.**
 
 ## Running the app
 
@@ -295,11 +359,8 @@ HTTP ping to a static endpoint.
   bundles; no dev build exists, so no screen has been seen rendered and no
   request has left a device. Sign-in, the feed and save creation are all written
   but unproven — `npx expo run:android` is the next real test, and it is the
-  remaining Phase 1 exit criterion alongside the store records.
-- **Local setup is incomplete.** `app/.env` does not exist yet (copy
-  `app/.env.example`), and the root `.env` predates `SUPABASE_ANON_KEY`, so the
-  backend smoke test cannot mint a token either. Both are one-line fixes, but
-  nothing works until they are done.
+  remaining Phase 1 exit criterion alongside the store records. This machine
+  has no Android SDK, so it cannot be the one that runs it.
 
 **Correctness**
 
@@ -310,6 +371,16 @@ HTTP ping to a static endpoint.
   to a set rather than extending the defaults. Rotating the Supabase signing key
   to RSA 2048 would break auth entirely, with the same misleading "no matching
   key(s) found". One extra line fixes it; see the gotcha above.
+- **Android's silent-share upload can be holding a stale access token.**
+  `nativeShareConfig.ts` mirrors the token on session change, but a queued
+  `ShareUploadWorker` retry can fire after the token has expired while the app
+  was backgrounded — and `SessionProvider` deliberately stops the refresh timer
+  while backgrounded, so nothing refreshes it in the meantime. The worker
+  already treats a 401 as non-retryable rather than looping forever, so the
+  failure mode is a silently dropped share, not a battery drain — but the user
+  already saw "Saved to Weavr" before the network call ran. Needs either a
+  refresh-token exchange inside the worker or a shorter optimistic-Toast
+  window; not decided yet.
 
 **Deferred by design, but easy to mistake for bugs**
 
