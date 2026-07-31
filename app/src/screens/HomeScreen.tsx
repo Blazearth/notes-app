@@ -208,6 +208,26 @@ export function HomeScreen() {
           <AppText variant="title">{name}</AppText>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
+          {/* The shopping list is the payoff of the one Act, so it gets a
+              permanent way in rather than only appearing after a conversion. */}
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Shopping list"
+            onPress={() => router.push('/shopping-list')}
+            weight="tile"
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: radius.sm,
+              backgroundColor: palette.surface,
+              borderWidth: 1,
+              borderColor: palette.border,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Glyph name="fileText" size={icon.sm} />
+          </Touchable>
           <Touchable
             accessibilityRole="button"
             accessibilityLabel="Settings"

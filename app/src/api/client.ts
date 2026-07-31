@@ -1,6 +1,12 @@
 import { supabase } from '@/auth/supabase';
 import { API_BASE_URL } from './config';
-import type { CreateSaveRequest, ProblemDetail, SaveResponse, SearchHit } from './types';
+import type {
+  CreateSaveRequest,
+  ProblemDetail,
+  SaveResponse,
+  SearchHit,
+  ShoppingListResponse,
+} from './types';
 
 /** Anything the UI needs to distinguish, without inspecting a status code. */
 export type ApiErrorKind = 'unauthorized' | 'validation' | 'notFound' | 'server' | 'network';
@@ -147,4 +153,42 @@ export function getSave(id: string): Promise<SaveResponse> {
 export function searchSaves(query: string, limit = 25): Promise<SearchHit[]> {
   const params = new URLSearchParams({ q: query, limit: String(limit) });
   return request<SearchHit[]>(`/v1/saves/search?${params.toString()}`);
+}
+
+/**
+ * `POST /v1/saves/{id}/acts/shopping-list` → **202**.
+ *
+ * The conversion is a queued job that spends a Gemini request, so the list is
+ * *not* updated by the time this resolves — same contract as creating a save.
+ * The server rejects a non-recipe or a save that is not `ready` with a 404
+ * before enqueuing anything, so a 202 does mean the work was accepted.
+ *
+ * Safe to call twice: the job is keyed by save id, and the handler is
+ * separately idempotent per (list, save) — re-converting a recipe replaces its
+ * contribution rather than doubling every quantity.
+ */
+export function convertToShoppingList(saveId: string): Promise<{ status: string }> {
+  return request<{ status: string }>(`/v1/saves/${saveId}/acts/shopping-list`, { method: 'POST' });
+}
+
+/** `GET /v1/shopping-list` — already ordered by aisle, then by name. */
+export function getShoppingList(): Promise<ShoppingListResponse> {
+  return request<ShoppingListResponse>('/v1/shopping-list');
+}
+
+export function setShoppingItemChecked(itemId: string, checked: boolean): Promise<void> {
+  return request<void>(`/v1/shopping-list/items/${itemId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ checked }),
+  });
+}
+
+export function deleteShoppingItem(itemId: string): Promise<void> {
+  return request<void>(`/v1/shopping-list/items/${itemId}`, { method: 'DELETE' });
+}
+
+/** "I've been shopping" — drops everything ticked off, keeps the rest. */
+export function clearCheckedShoppingItems(): Promise<{ removed: number }> {
+  return request<{ removed: number }>('/v1/shopping-list/checked', { method: 'DELETE' });
 }

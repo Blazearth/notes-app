@@ -48,7 +48,9 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Thumbnail / frame ranking | **real** | Variance-of-Laplacian, end-weighted, pure Java, no model call (CA#15). Used today to pick which frames a vision escalation carries; nominating a stored thumbnail needs a Storage path that does not exist yet |
 | Embeddings | **real, verified live** | `embed_save` job runs after a save is already `ready` — being findable by similarity is an enhancement, not a precondition. `gemini-embedding-001` at an explicitly-requested 1536 dims, embedding a `label: value` profile built from `structured_data` rather than the raw caption (CA#8). The one Gemini call deliberately **not** behind `BudgetApproved`: its pool is separate, so it never spends a save's RPD |
 | Search (FTS + vector, RRF) | **real, verified live** | `GET /v1/saves/search?q=` fuses Postgres full-text and pgvector with Reciprocal Rank Fusion (k=60), degrading to either half alone. Verified end to end against live Supabase: *"somewhere nice to eat in Denmark"* returns the Noma save on semantics alone — the text says Copenhagen, never Denmark |
-| RevenueCat / entitlements | **schema only** | `subscriptions`, `usage_counters` tables exist. Phase 5 |
+| Acts — recipe → shopping list | **real, verified live** | `V5__shopping_list.sql` + `act/`. One open list per user; a recipe's ingredients are normalised by one Gemini call into products, quantities and supermarket aisles, then **merged** into what's already there. Verified against two real recipes: garlic came out as 7 cloves (3 + 4) and olive oil as 4 tbsp (2 + 2), grouped in shop-layout order |
+| Acts — mobile | **real, never run on a device** | "Add to shopping list" on a recipe's detail screen, plus `/shopping-list` with optimistic tick-off and clear-checked |
+| RevenueCat / entitlements | **schema only** | `subscriptions` exists and is unused. `usage_counters.acts_used` is now *written* by the Act — recorded, not enforced, since there is no paid tier to escape a cap to yet |
 | `POST /v1/saves` idempotency | **real, verified** | Repeated `Idempotency-Key` header returns the existing save, including under a concurrent-retry race (`V2__save_idempotency.sql`, `SaveServiceTest`). No caller sends the header yet — it exists for the still-unbuilt iOS share extension |
 | Expo app — theme & personalisation | **real, bundles clean** | 78 palette combinations, all audited for WCAG AA. Preferences persist |
 | Expo app — auth + save create/list | **real, never run on a device** | Supabase email/password, `POST`/`GET /v1/saves`, all four feed states. Typechecks and bundles; no dev build exists yet |
@@ -376,6 +378,63 @@ unknown type rendered its title twice, once as the heading and again as a
 
 That is a rung above the usual app-side bar, but it is still not a device.
 Nothing here has been seen rendered, and no request has left a phone.
+
+### The one Act — and a bug only a retry would have found
+
+**A saved recipe now becomes a shopping list**, which is the first feature that
+spends the structure everything upstream exists to extract. One Gemini call
+turns ingredient lines into products, quantities and supermarket aisles; the
+result is merged into a single open list per user.
+
+Verified against two real recipes through the live API:
+
+```
+PRODUCE            garlic        7 cloves   <- 2 recipes   (3 + 4)
+                   lemon         1
+PANTRY             olive oil     4 tbsp     <- 2 recipes   (2 + 2)
+                   rigatoni      400 g
+                   salt          to taste   <- 2 recipes
+DAIRY AND EGGS     heavy cream   1 cup
+```
+
+Prep instructions are dropped ("3 cloves garlic, minced" → *garlic*),
+quantities that are prose survive as prose ("to taste"), and the aisle order is
+how a shop is laid out rather than alphabetical — so you walk it once.
+
+**The bug worth recording.** The first implementation *accumulated*: it added
+each conversion's quantity to whatever was already on the line. That is correct
+exactly once. The job runner re-delivers a job after any transient failure or
+stale claim, and on the second delivery garlic went **7 → 10 cloves** and olive
+oil **4 → 6 tbsp** — silently, with no error anywhere. Unit tests could not
+have caught it, because the accumulation was only wrong across two runs of a
+job against a real queue.
+
+The fix is structural rather than a guard: a line no longer stores a total. It
+stores **each contributing recipe's own quantity** and recomputes, so the
+result depends only on which recipes are on the list, not on how many times
+each was converted. Re-running the same conversion now leaves 7 at 7. That fold
+is `ShoppingListService.fold`, deliberately static and database-free so
+`ShoppingListFoldTest` can pin it.
+
+Running it live also improved the prompt: the first pass produced *"salt and
+pepper"* as a single line from one recipe and *"salt"* from another, so they
+never merged. The prompt now splits compound ingredients, and salt correctly
+shows up once, from both.
+
+Also verified: ticking an item off (204), clear-checked (12 → 11), another
+user's item id → **404** rather than a 500 or a silent success, and converting
+a non-recipe → **404** before any job is enqueued.
+
+Suite: **243 tests** green, up from 217.
+
+> **Getting a test JWT, correctly.** The throwaway user for this was created by
+> inserting into `auth.users` directly — *not* through `/auth/v1/signup`, which
+> emails the address you invent. One such bounce earlier today was enough to
+> put this project's email-sending privileges at risk. If you do insert
+> directly, set `confirmation_token`, `recovery_token`, `email_change_token_new`
+> and friends to `''`: GoTrue scans them into non-nullable Go strings, and NULL
+> produces a 500 reading `Database error querying schema`, which looks like a
+> broken database rather than a malformed row.
 
 ## Running the app
 

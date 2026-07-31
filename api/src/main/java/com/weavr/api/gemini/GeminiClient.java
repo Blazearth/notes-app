@@ -150,6 +150,75 @@ public class GeminiClient {
     }
 
     /**
+     * A general structured-output call, for features that need JSON back but
+     * are not classification.
+     *
+     * <p>Exists so an Act owns its own prompt and response schema rather than
+     * this class growing a method per feature — but still routes through the
+     * one place that holds the {@link BudgetApproved} requirement and the
+     * {@code gemini_calls} logging, which is the property worth protecting.
+     *
+     * @param purpose recorded in {@code gemini_calls}, so each feature's share
+     *                of the daily budget is measurable separately
+     * @return the parsed JSON the model produced
+     */
+    public JsonNode generateJson(UUID saveId, String systemPrompt, String userText,
+                                 Map<String, Object> responseSchema, String purpose,
+                                 BudgetApproved budget) {
+        String model = budget.model();
+        Instant callStart = Instant.now();
+        String outcome = "success";
+        int inputTokens = 0;
+        int outputTokens = 0;
+
+        try {
+            Map<String, Object> body = Map.of(
+                    "system_instruction", Map.of("parts", List.of(Map.of("text", systemPrompt))),
+                    "contents", List.of(Map.of("parts", List.of(
+                            Map.of("text", userText.replaceAll("\\s+", " ").strip())))),
+                    "generationConfig", Map.of(
+                            "responseMimeType", "application/json",
+                            "responseSchema", responseSchema,
+                            "thinkingConfig", Map.of("thinkingBudget", 1024)));
+
+            byte[] raw = http.post()
+                    .uri(GEMINI_BASE + model + ":generateContent?key=" + props.apiKey())
+                    .body(objectMapper.writeValueAsString(body))
+                    .retrieve()
+                    // Raw bytes, not String — see classify() for why.
+                    .body(byte[].class);
+
+            JsonNode root = objectMapper.readTree(raw);
+            JsonNode usage = root.path("usageMetadata");
+            inputTokens = usage.path("promptTokenCount").asInt(0);
+            outputTokens = usage.path("candidatesTokenCount").asInt(0);
+
+            String generated = root
+                    .path("candidates").get(0)
+                    .path("content").path("parts").get(0)
+                    .path("text").asText();
+
+            return objectMapper.readTree(generated);
+
+        } catch (HttpClientErrorException e) {
+            outcome = "client_error_" + e.getStatusCode().value();
+            if (e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
+                throw new RetryableJobException("Gemini rate limit hit (429), will retry.", e);
+            }
+            throw new RetryableJobException("Gemini returned " + e.getStatusCode(), e);
+        } catch (HttpServerErrorException e) {
+            outcome = "server_error_" + e.getStatusCode().value();
+            throw new RetryableJobException(
+                    "Gemini is temporarily unavailable (" + e.getStatusCode() + ").", e);
+        } catch (Exception e) {
+            outcome = "error";
+            throw new RetryableJobException("An error occurred calling Gemini: " + e.getMessage(), e);
+        } finally {
+            logCall(saveId, model, inputTokens, outputTokens, 0.0, outcome, callStart, purpose);
+        }
+    }
+
+    /**
      * Tier 2 of the visual cascade: read the text off these frames when local
      * OCR came back below the repair floor.
      *

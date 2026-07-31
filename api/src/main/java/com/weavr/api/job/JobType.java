@@ -19,6 +19,13 @@ public final class JobType {
      */
     public static final String EMBED_SAVE = "embed_save";
 
+    /**
+     * The Act: a saved recipe becomes lines on the user's shopping list. A job
+     * rather than inline work because it spends a Gemini request, so it must be
+     * able to park when the daily budget is gone rather than failing a tap.
+     */
+    public static final String CONVERT_TO_SHOPPING_LIST = "convert_to_shopping_list";
+
     private JobType() {
     }
 }

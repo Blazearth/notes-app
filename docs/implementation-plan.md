@@ -479,9 +479,9 @@ remains the highest-risk unbuilt thing in the project.
 
 - ✅ **Search**: Postgres FTS + pgvector, fused with **RRF** (CA#5, `rank_constant=60`, ignore source scores). Falls back to either half alone. **Done and verified live 2026-08-01** — `GET /v1/saves/search`. Two additions the plan did not anticipate, both forced by the live run: V1's `search_tsv` could not find a `place` by its own name (its field is `name`, not `title`) so V3/V4 rebuild it weighted, and the vector half needed a **distance cutoff** because k-NN has no concept of "no match" — `zzzzqqq` returned the entire library.
 - ✅ **Embeddings**: structured `label: value` profile from `structured_data`, not raw text (CA#8). Separate rate-limit pool — embed freely, and the one Gemini call not behind `BudgetApproved`. **Done and verified live.** Watch out: `gemini-embedding-001` truncates rather than re-embeds for reduced dimensions, so a 1536-d vector comes back un-normalised (L2 0.69) — normalise client-side.
-- **One Act, done well**: recipe → shopping list. Depth beats breadth here.
+- ✅ **One Act, done well**: recipe → shopping list. **Done and verified live 2026-08-01** — one open list per user, ingredients normalised into products/quantities/aisles by a single Gemini call and merged across recipes. Two real recipes gave garlic 7 cloves (3 + 4) and olive oil 4 tbsp (2 + 2). The trap: a merged line must store each contributing recipe's own quantity, not a running total — the accumulate-on-add version silently inflated quantities every time the runner re-delivered a job (7 cloves → 10), and only a real retry against a real queue exposed it.
 - **Lifecycle**: `saved → planned → started → completed`.
-- **Free-tier caps** enforced in the worker (20 saves/month, 1 Act/week).
+- 🟡 **Free-tier caps** enforced in the worker (20 saves/month, 1 Act/week). The Act now *writes* `usage_counters.acts_used`, but nothing enforces a cap: with no paid tier to escape to, enforcing would cap every user including future paying ones. Counting from the start means the cap can be switched on against real numbers rather than an empty table.
 - **RevenueCat webhook** → `subscriptions`, gating server-side.
 
 ### Mobile

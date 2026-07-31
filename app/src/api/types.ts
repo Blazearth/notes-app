@@ -68,6 +68,34 @@ export interface SearchHit {
   match: SearchMatch;
 }
 
+/** One line on the shopping list — `ShoppingListController.ItemResponse`. */
+export interface ShoppingListItem {
+  id: string;
+  name: string;
+  /** Text, not a number: recipes say "a pinch" and "2-3" as often as "400". */
+  quantity?: string;
+  unit?: string;
+  category: string;
+  checked: boolean;
+  /** Every save that contributed, so "why is this here?" is answerable. */
+  sources: string[];
+}
+
+/**
+ * `ShoppingListController.ShoppingListResponse`.
+ *
+ * `categories` is the aisle order the server wants rendered. It ships with the
+ * payload rather than being duplicated client-side precisely so a new aisle is
+ * a prompt change on the server and nothing else — the same reason
+ * `knowledgeType` is free text.
+ */
+export interface ShoppingListResponse {
+  /** Absent until the user's first conversion — an empty list is not a 404. */
+  id?: string;
+  items: ShoppingListItem[];
+  categories: string[];
+}
+
 /** RFC 9457 problem details, as produced by `ApiExceptionHandler`. */
 export interface ProblemDetail {
   type?: string;

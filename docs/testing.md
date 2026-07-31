@@ -443,6 +443,19 @@ over JDBC with `email_confirmed_at = now()` (there is no service-role key in
 the user afterwards. The signup call buys nothing: you have to touch the table
 anyway to confirm the account.
 
+**When you do insert into `auth.users`, set the token columns to `''`, not
+NULL.** `confirmation_token`, `recovery_token`, `email_change_token_new`,
+`email_change`, `email_change_token_current`, `phone_change`,
+`phone_change_token` and `reauthentication_token` are scanned into
+non-nullable Go strings by GoTrue. Left NULL, every sign-in for that user fails
+with a **500** reading `Database error querying schema` — which reads like the
+database is down rather than like one row is malformed, and sends you looking
+in entirely the wrong place. Also insert a matching `auth.identities` row, or
+the password grant finds no identity to authenticate against. `crypt(password,
+gen_salt('bf'))` from pgcrypto (in the `extensions` schema on Supabase)
+produces the bcrypt hash GoTrue expects, so no Java bcrypt dependency is
+needed.
+
 **Something may already be listening on 8080.** A leftover `spring-boot:run` will
 answer `/actuator/health` with a 200 and make you think your new build started.
 Check before trusting a health check:

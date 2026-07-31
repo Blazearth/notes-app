@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Linking, View } from 'react-native';
 
-import { ApiError, getSave } from '@/api/client';
+import { ApiError, convertToShoppingList, getSave } from '@/api/client';
 import type { SaveResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -161,6 +161,107 @@ function UnfinishedSave({ save }: { save: SaveResponse }) {
   );
 }
 
+/**
+ * The Act, on the one type that has one.
+ *
+ * <p>The conversion is a queued job that spends a Gemini request, so the list
+ * is not updated by the time the call returns — hence "Adding…" then "Added",
+ * rather than navigating straight to a list that would still be empty. The
+ * follow-up link is offered instead of forced: adding a second recipe before
+ * going shopping is the common case, and this is the screen you would do it
+ * from.
+ */
+function AddToShoppingList({ saveId }: { saveId: string }) {
+  const { palette, radius, spacing, icon } = useTheme();
+  const router = useRouter();
+  const [state, setState] = useState<'idle' | 'adding' | 'added' | 'error'>('idle');
+  const [message, setMessage] = useState<string | null>(null);
+
+  const add = async () => {
+    setState('adding');
+    setMessage(null);
+    try {
+      await convertToShoppingList(saveId);
+      setState('added');
+    } catch (e) {
+      setState('error');
+      setMessage(e instanceof ApiError ? e.message : 'Could not add this recipe.');
+    }
+  };
+
+  if (state === 'added') {
+    return (
+      <View style={{ marginBottom: spacing.xl, gap: spacing.sm }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: spacing.smd,
+            padding: spacing.md,
+            borderRadius: radius.md,
+            backgroundColor: palette.accentContainer,
+          }}
+        >
+          <AppText tone="onAccentContainer" style={{ flex: 1 }}>
+            Adding to your shopping list…
+          </AppText>
+          <Touchable
+            accessibilityRole="button"
+            onPress={() => router.push('/shopping-list')}
+            haptic="medium"
+          >
+            <AppText variant="label" tone="onAccentContainer">
+              View list
+            </AppText>
+          </Touchable>
+        </View>
+        {/* Honest about the delay: the ingredients are normalised by a model
+            call, so the list is a few seconds behind this tap. */}
+        <AppText variant="caption" tone="muted">
+          Ingredients are being sorted into aisles — pull to refresh the list in a moment.
+        </AppText>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ marginBottom: spacing.xl }}>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel="Add this recipe to your shopping list"
+        onPress={() => void add()}
+        disabled={state === 'adding'}
+        haptic="medium"
+        weight="tile"
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: spacing.smd,
+          paddingVertical: spacing.md,
+          borderRadius: radius.md,
+          backgroundColor: palette.accent,
+          opacity: state === 'adding' ? 0.6 : 1,
+        }}
+      >
+        {state === 'adding' ? (
+          <ActivityIndicator color={palette.onAccent} size="small" />
+        ) : (
+          <Glyph name="plus" size={icon.sm} weight={2} color={palette.onAccent} />
+        )}
+        <AppText variant="label" style={{ color: palette.onAccent }}>
+          {state === 'adding' ? 'Adding…' : 'Add to shopping list'}
+        </AppText>
+      </Touchable>
+      {state === 'error' && message ? (
+        <AppText variant="caption" style={{ marginTop: spacing.sm, color: palette.danger }}>
+          {message}
+        </AppText>
+      ) : null}
+    </View>
+  );
+}
+
 export function SaveDetailScreen({ id }: { id: string }) {
   const { palette, radius, spacing, icon } = useTheme();
   const { saves } = useSaves();
@@ -255,6 +356,14 @@ export function SaveDetailScreen({ id }: { id: string }) {
           {model?.lede ? (
             <Reveal index={2}>
               <AppText style={{ marginBottom: spacing.xl, lineHeight: 22 }}>{model.lede}</AppText>
+            </Reveal>
+          ) : null}
+
+          {/* The only Act that exists, and only recipes have it. Placed above
+              the fields because it is the reason to open a recipe at all. */}
+          {model && save.knowledgeType === 'recipe' ? (
+            <Reveal index={2}>
+              <AddToShoppingList saveId={save.id} />
             </Reveal>
           ) : null}
 
