@@ -141,6 +141,33 @@ drops into interactive setup. Either configure it or drop the script.
 Four things in this repo could not be tested the obvious way. The workarounds
 generalise.
 
+### Running app logic with no test runner — compile the one module and execute it
+
+`app/` has no Vitest or Jest, so its logic is normally only typechecked. But a
+module that imports **types only** erases to plain JavaScript, which means it can
+be compiled alone and run under node without the RN runtime, the path aliases or
+a bundler:
+
+```bash
+cd app
+npx tsc src/saves/detailModel.ts --outDir /tmp/dm \
+    --module esnext --target es2022 --moduleResolution bundler --skipLibCheck
+node /tmp/dm/run.mjs        # a script that imports ./detailModel.js and asserts
+```
+
+`tsc` complains it cannot resolve `@/api/types` and **emits the JavaScript
+anyway** — the import was type-only, so there is nothing to resolve at runtime.
+That error is expected, not a failure.
+
+Drive it with the shapes the server actually produces —
+`KnowledgeTypeRegistry`'s few-shot examples are the real contract, and using
+them rather than invented fixtures is what makes this worth doing. It found a
+bug on the first run (an unknown knowledge type rendered its title twice).
+
+The same trick applies to `cardModel.ts` and `format.ts`. It is not a substitute
+for a test runner, because nothing re-runs it — but it is the difference between
+"the types line up" and "the function returns what I claimed".
+
 ### Testing process handling — spawn a real JVM, never a mock
 
 `ExternalProcess` exists to prevent hangs: a full pipe buffer, a child that never
@@ -459,7 +486,8 @@ Honest gaps, roughly in order of how much they would cost to discover late.
 | **Search relevance has no benchmark.** RRF fusion is unit-tested; whether the fused ordering is *good* is unmeasured | A labelled query set, the search analogue of the OCR eval set |
 | **No automated contrast check.** The 78-combination audit is a manual script | A test runner in `app/`, then promote the script above |
 | **No test covers `JobStore`'s SQL.** The claim query's correctness rests on one manual run | Same Testcontainers setup |
-| **The app has no test runner at all** | Vitest or Jest, plus React Native Testing Library |
+| **The app has no test runner at all.** `buildDetailModel` was executed once via a throwaway `tsc` + node script (and that found a real bug), but nothing re-runs it | Vitest or Jest, plus React Native Testing Library |
+| **No screen has been rendered.** Search, save detail and the rebuilt Library all typecheck and bundle; none has been seen | `npx expo run:android` |
 
 The device gap is the cheap one and it unblocks a whole phase. The Testcontainers
 gap is the one that will bite quietly: today a typo in a rarely-hit SQL branch

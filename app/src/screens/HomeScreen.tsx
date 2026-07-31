@@ -104,6 +104,7 @@ function StatusPill({ label, tint }: { label: string; tint: string }) {
 function RecentlyCaptured() {
   const { palette, spacing } = useTheme();
   const { saves, status, error, refresh } = useSaves();
+  const router = useRouter();
 
   if (status === 'loading') {
     return (
@@ -153,6 +154,10 @@ function RecentlyCaptured() {
         <SaveCard
           key={save.id}
           save={save}
+          // Tappable whatever the status: a processing or failed save is a
+          // legitimate thing to open, and the detail screen explains itself
+          // rather than rendering empty.
+          onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
           trailing={
             save.status === 'ready' ? undefined : (
               <StatusPill label={STATUS_LABELS[save.status]} tint={tintFor(save.status)} />
@@ -228,9 +233,9 @@ export function HomeScreen() {
       <Reveal index={1}>
         <Touchable
           accessibilityRole="search"
-          // Search has no destination yet, so no haptic: a buzz would promise an
-          // action this control does not perform.
-          haptic={null}
+          accessibilityLabel="Search your saves"
+          onPress={() => router.push('/search')}
+          haptic="selection"
           style={{
             flexDirection: 'row',
             alignItems: 'center',

@@ -53,7 +53,10 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Expo app — theme & personalisation | **real, bundles clean** | 78 palette combinations, all audited for WCAG AA. Preferences persist |
 | Expo app — auth + save create/list | **real, never run on a device** | Supabase email/password, `POST`/`GET /v1/saves`, all four feed states. Typechecks and bundles; no dev build exists yet |
 | Expo app — type-specific save cards | **real, never run on a device** | `SaveCard` renders recipe/movie/place layouts from `knowledgeType` + `structuredData` for `ready` saves; falls back to a flat row otherwise. Typechecks and bundles |
-| Expo app — Library / Spaces / digest | **sample content** | Need pipeline output or collaboration endpoints that do not exist |
+| Expo app — search | **real, never run on a device** | `/search` — debounced, race-guarded against out-of-order responses, with idle / searching / results / no-match / error states. A `semantic`-only hit is badged "related", because a result whose words the user never typed reads as a bug otherwise |
+| Expo app — save detail | **real, never run on a device** | `/save/[id]` — full `structuredData` per knowledge type via `buildDetailModel`, numbered steps, chips, source link. A knowledge type this file has never heard of still renders its fields generically, so adding a type stays a server-side data change |
+| Expo app — Library | **real, never run on a device** | Now reads the same `SavesProvider` as the feed: real per-type counts, filter chips built from the types actually present, tappable rows. The fictional "AI groups" grid is gone |
+| Expo app — Spaces / digest / Continue rail | **sample content** | Need collaboration and digest endpoints that do not exist |
 | Silent capture — Android | **built, never run on a device** | A config plugin (`app/plugins/withAndroidShareReceiver.js`) adds a no-display `ShareReceiverActivity` + a `ShareUploadWorker` (WorkManager, network-constrained, retried with exponential backoff up to 8 attempts). `expo prebuild -p android` produces the right manifest entry, Gradle dependency and Kotlin sources, verified by inspecting the generated output — no Android SDK on this machine to build or run it |
 | Silent capture — iOS | **absent** | The *Open app when saving* toggle exists; the native share extension does not. See [app/README.md](app/README.md) |
 
@@ -340,6 +343,39 @@ provisional in exactly the way the OCR confidence floor is, and a property for
 that reason.
 
 Suite: **217 tests** green (5 opt-in live tests skipped), up from 184.
+
+### And the app caught up — search, detail, and a real Library
+
+**Every endpoint the API serves now has a consumer.** Before this, `GET
+/v1/saves/{id}` and `GET /v1/saves/search` had none — the backend had run four
+phases ahead of anything that could exercise it.
+
+- **`/search`** — debounced at 350ms (each search costs a server-side embedding
+  call, so per-keystroke requests would be wasteful as well as slow) and guarded
+  by a sequence number, so a slow early response cannot overwrite a fast later
+  one. A `semantic`-only hit is badged **related**: a result containing none of
+  the words the user typed reads as a bug unless something says why it is there.
+- **`/save/[id]`** — the full extraction, not the one-line card. Numbered steps,
+  ingredient chips, source link. A save that is still processing or that failed
+  is tappable too, and gets a status page that explains itself — `pending` is
+  worded as "queued for tomorrow" rather than an error, because it is not one.
+- **Library** now reads the same `SavesProvider` as the feed, with real per-type
+  counts and filter chips built from the knowledge types actually present. The
+  fictional "AI groups" grid is gone rather than left sitting next to real data.
+
+**`buildDetailModel` was executed, not just typechecked.** The app still has no
+test runner (a documented gap), but that module imports only a type, so it
+compiles standalone and runs under node — driven with the exact
+`structuredData` shapes `KnowledgeTypeRegistry`'s few-shot examples produce.
+That confirmed `[unclear]` never leaks into the UI, empty arrays render nothing,
+`place` takes its title from `name` rather than `title`, an unfinished save
+returns `null` so the screen shows a status page, and a knowledge type the
+client has never heard of still renders its fields. It also **found a bug**: an
+unknown type rendered its title twice, once as the heading and again as a
+`Title` field. Fixed.
+
+That is a rung above the usual app-side bar, but it is still not a device.
+Nothing here has been seen rendered, and no request has left a phone.
 
 ## Running the app
 

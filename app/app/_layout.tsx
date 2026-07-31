@@ -40,6 +40,10 @@ function Routes() {
         <Stack.Screen name="sign-in" options={{ animation: 'fade' }} />
         <Stack.Screen name="appearance" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="save/[id]" options={{ animation: 'slide_from_right' }} />
+        {/* Search reads as a layer over the feed rather than a place you
+            travel to, so it fades in where the others slide. */}
+        <Stack.Screen name="search" options={{ animation: 'fade' }} />
         <Stack.Screen
           name="capture"
           options={{

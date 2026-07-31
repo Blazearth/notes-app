@@ -491,7 +491,12 @@ Feed · search · save detail · shopping list · settings · onboarding tuned f
 Feed and settings exist. **Settings is currently an Appearance screen only** —
 theme, accent, cover, typeface, nav style, blur, greeting, and the capture toggle
 — so the product settings (account, caps, subscription state) still need a home.
-Search, save detail and the shopping list are unbuilt.
+**Search and save detail landed 2026-08-01**, alongside the backend half — so
+every endpoint the API serves now has a consumer, which had not been true since
+Phase 3. Library was rebuilt on real data at the same time (per-type counts and
+filter chips derived from the knowledge types actually present; the fictional
+"AI groups" grid removed). The shopping list is unbuilt, and depends on the one
+Act, which is also unbuilt.
 
 ### Ship
 

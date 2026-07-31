@@ -52,6 +52,22 @@ export interface SaveResponse {
   updatedAt: string;
 }
 
+/**
+ * Which half of hybrid search found a result — `SearchController.label`.
+ *
+ * Exposed by the server so the escalation-rate question ("is the vector half
+ * contributing anything?") is answerable without a database session. The UI
+ * shows it only for `semantic`, where it explains a result whose words the user
+ * never typed.
+ */
+export type SearchMatch = 'both' | 'text' | 'semantic';
+
+/** `SearchController.SearchHit` — a save plus how it was found. */
+export interface SearchHit {
+  save: SaveResponse;
+  match: SearchMatch;
+}
+
 /** RFC 9457 problem details, as produced by `ApiExceptionHandler`. */
 export interface ProblemDetail {
   type?: string;

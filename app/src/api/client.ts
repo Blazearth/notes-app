@@ -1,6 +1,6 @@
 import { supabase } from '@/auth/supabase';
 import { API_BASE_URL } from './config';
-import type { CreateSaveRequest, ProblemDetail, SaveResponse } from './types';
+import type { CreateSaveRequest, ProblemDetail, SaveResponse, SearchHit } from './types';
 
 /** Anything the UI needs to distinguish, without inspecting a status code. */
 export type ApiErrorKind = 'unauthorized' | 'validation' | 'notFound' | 'server' | 'network';
@@ -125,4 +125,26 @@ export function listSaves(page = 0, size = 25): Promise<SaveResponse[]> {
 /** `GET /v1/saves/{id}` — 404 for a save belonging to someone else. */
 export function getSave(id: string): Promise<SaveResponse> {
   return request<SaveResponse>(`/v1/saves/${id}`);
+}
+
+/**
+ * `GET /v1/saves/search` — Postgres full-text and pgvector similarity, fused
+ * server-side with Reciprocal Rank Fusion.
+ *
+ * Two consequences worth knowing at the call site:
+ *
+ * - **Only `ready` saves are searchable.** Nothing has been classified or
+ *   embedded until the pipeline finishes, so a save created seconds ago will
+ *   not appear. That is why the empty state here mentions processing rather
+ *   than claiming the library is empty.
+ * - **An empty array genuinely means nothing matched.** The server applies a
+ *   cosine-distance cutoff precisely so a nonsense query returns nothing
+ *   instead of the user's whole library ranked by noise.
+ *
+ * The server clamps `limit` to 1–50 and rejects a blank `q` with a 400, so the
+ * caller is expected not to send one.
+ */
+export function searchSaves(query: string, limit = 25): Promise<SearchHit[]> {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  return request<SearchHit[]>(`/v1/saves/search?${params.toString()}`);
 }
