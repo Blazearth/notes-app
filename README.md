@@ -46,7 +46,8 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | OCR tier — frames, tesseract, voting, gate | **real, verified live** | `pipeline/ocr/`. Bounded worst-quality download → one ffmpeg pass cutting deduped keyframes into a colour and a grey branch → tesseract per frame (TSV, for per-word confidence) → vote across frames → quality gate. Driven end to end against real ffmpeg 8.0 and tesseract 5.5.0 by the opt-in `OcrLiveTest`, which needs **no network** — it renders its own fixtures. That run overturned two decisions the plan had specified; see below |
 | OCR tier — Flash vision escalation | **built, unverified live** | `GeminiClient.transcribeFrames` sends the sharpest frames as base64 `inline_data` and gets back a verbatim transcription, which then flows through the ordinary classify call. Request shape is pinned by `MockRestServiceServer`; no real vision call has been made |
 | Thumbnail / frame ranking | **real** | Variance-of-Laplacian, end-weighted, pure Java, no model call (CA#15). Used today to pick which frames a vision escalation carries; nominating a stored thumbnail needs a Storage path that does not exist yet |
-| Search (FTS + vector) | **schema only** | `search_tsv` and `embedding` columns exist and are populated by nobody. Phase 5 |
+| Embeddings | **real, verified live** | `embed_save` job runs after a save is already `ready` — being findable by similarity is an enhancement, not a precondition. `gemini-embedding-001` at an explicitly-requested 1536 dims, embedding a `label: value` profile built from `structured_data` rather than the raw caption (CA#8). The one Gemini call deliberately **not** behind `BudgetApproved`: its pool is separate, so it never spends a save's RPD |
+| Search (FTS + vector, RRF) | **real, verified live** | `GET /v1/saves/search?q=` fuses Postgres full-text and pgvector with Reciprocal Rank Fusion (k=60), degrading to either half alone. Verified end to end against live Supabase: *"somewhere nice to eat in Denmark"* returns the Noma save on semantics alone — the text says Copenhagen, never Denmark |
 | RevenueCat / entitlements | **schema only** | `subscriptions`, `usage_counters` tables exist. Phase 5 |
 | `POST /v1/saves` idempotency | **real, verified** | Repeated `Idempotency-Key` header returns the existing save, including under a concurrent-retry race (`V2__save_idempotency.sql`, `SaveServiceTest`). No caller sends the header yet — it exists for the still-unbuilt iOS share extension |
 | Expo app — theme & personalisation | **real, bundles clean** | 78 palette combinations, all audited for WCAG AA. Preferences persist |
@@ -272,6 +273,73 @@ measured, and everything the tier has read so far is a fixture it generated
 itself. Real text over photographs, motion blur and stylised fonts — where
 tesseract fails hard rather than gracefully — are exactly what the thirty-Reel
 eval set is for, and it does not exist yet.
+
+### Also on 2026-08-01 — hybrid search, and three things only the live run showed
+
+**Phase 5's search half is in and verified end to end against live Supabase:**
+three text saves created over `curl` → classified by Gemini → embedded → found
+by `GET /v1/saves/search`. The result worth quoting is *"somewhere nice to eat
+in Denmark"*, which returns the Noma save with `match=semantic` — the save says
+**Copenhagen** and never says Denmark, so there is no lexical overlap at all.
+Full-text alone could not have found it.
+
+Three things were wrong until the live run showed them:
+
+**1. A saved restaurant was unfindable by its own name.** V1's `search_tsv`
+generated column covered `raw_caption`, `structured_data->>'title'` and
+`->>'summary'`. But `place`'s name field is `name`, not `title` — the same trap
+that silently broke `saveTitle()` on the mobile side — and `movie` uses
+`synopsis`, not `summary`. Every array field (`ingredients`, `highlights`,
+`genre`, `tags`) was invisible too. `V3__search_profile.sql` replaces it with a
+weighted vector: **A** = title/name, **B** = caption/summary/synopsis, **C** =
+every other value. Measured after: a name match ranks 0.638 against 0.122 for a
+long-tail mention.
+
+Two facts confirmed against the live database rather than assumed, because
+either one wrong fails the migration and leaves Flyway needing a repair:
+`to_tsvector(text)` is only **STABLE** (it reads a session setting) so a
+generated column needs the two-arg `to_tsvector('english', …)`; and
+`jsonb_path_query_array(…)::text` is immutable and indexes values only, where
+the obvious `structured_data::text` also indexes the JSON **keys** — the words
+"name" and "ingredients" would have matched every save.
+
+**2. The `[unclear]` sentinel was being indexed.** Reading the generated vector
+for a real row showed `'unclear':6C`. It is the registry's marker for genuinely
+absent information and appears in most saves, so it was a term nearly every
+save shared. `EmbeddingProfile` already drops it on the vector side; `V4`
+strips it from the text side for the same reason.
+
+**3. Truncated embeddings are not normalised.** `gemini-embedding-001` is a
+Matryoshka model — asking for 1536 dimensions returns a truncated 3072 vector,
+with byte-identical leading values. Measured: the full vector has L2 norm
+**1.000000**, the truncation **0.691743**. Cosine distance normalises
+internally so ranking was already correct, but V1's own DDL comment claims the
+column holds "normalised" vectors, and `<->` / `<#>` are not scale-invariant —
+a one-character operator change would have silently ranked by magnitude.
+`EmbeddingClient` now normalises. Also confirmed live: the API really does
+return **3072** dimensions without `outputDimensionality` and 1536 with it.
+
+**And one thing the live run found that no test would have.** A k-nearest
+-neighbour search has no concept of "no match" — searching `zzzzqqq` returned
+the entire library, ranked, indistinguishable from a real result set. The fix
+is a cosine cutoff, and the value was measured rather than remembered:
+
+| Query | Nearest distance | |
+|---|---|---|
+| "Noma" | 0.266 | hit |
+| "somewhere nice to eat in Denmark" | 0.335 | hit |
+| "Christopher Nolan" | 0.358 | hit |
+| "what should I cook tonight" | 0.366 | hit |
+| "zzzzqqq" | 0.425 | miss |
+| "how do I renew a passport" | 0.490 | miss |
+| "quantum chromodynamics…" | 0.499 | miss |
+
+0.40 sits in the gap, and all three nonsense queries now correctly return
+nothing. **The gap is real but the sample is three saves and seven queries** —
+provisional in exactly the way the OCR confidence floor is, and a property for
+that reason.
+
+Suite: **217 tests** green (5 opt-in live tests skipped), up from 184.
 
 ## Running the app
 

@@ -13,6 +13,7 @@ import com.weavr.api.gemini.GeminiBudgetService;
 import com.weavr.api.gemini.GeminiClient;
 import com.weavr.api.gemini.GeminiProperties;
 import com.weavr.api.gemini.GeminiResponse;
+import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobRecord;
 import com.weavr.api.job.JobType;
 import com.weavr.api.job.PermanentJobException;
@@ -56,6 +57,7 @@ class ClassifySaveHandlerTest {
     private GeminiClient geminiClient;
     private GeminiBudgetService budgetService;
     private JdbcClient jdbc;
+    private JobQueue jobQueue;
     private ClassifySaveHandler handler;
 
     /** stage name -> stored payload; absent means "not written yet". */
@@ -68,12 +70,13 @@ class ClassifySaveHandlerTest {
         geminiClient = mock(GeminiClient.class);
         budgetService = mock(GeminiBudgetService.class);
         jdbc = mock(JdbcClient.class);
+        jobQueue = mock(JobQueue.class);
         stageRows.clear();
 
         stubStageLookup();
         stubSavesUpdate();
 
-        handler = new ClassifySaveHandler(saves, stages, geminiClient, budgetService, PROPS, jdbc, MAPPER);
+        handler = new ClassifySaveHandler(saves, stages, geminiClient, budgetService, PROPS, jobQueue, jdbc, MAPPER);
     }
 
     /**

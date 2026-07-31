@@ -209,6 +209,44 @@ weavr:
     confidence-threshold: ${WEAVR_GEMINI_CONFIDENCE_THRESHOLD:0.7}
     timeout: 30s
 
+  # --------------------------------------------------------------------------
+  # Embeddings — semantic search. A SEPARATE rate-limit pool from generation.
+  # --------------------------------------------------------------------------
+  # This is the one Gemini call in the codebase that does NOT go through
+  # BudgetApproved, and deliberately: embeddings draw on their own, much larger
+  # pool, so counting them against the 500/day save budget would throttle saves
+  # for nothing. Re-embedding backfills are not a budget event.
+  #
+  # dimensions MUST stay 1536. gemini-embedding-001 returns 3072 by default and
+  # saves.embedding is vector(1536), baked into V1's DDL — changing it is a
+  # migration PLUS a full re-embedding backfill, i.e. a one-way door. The
+  # application refuses to start on any other value rather than failing one row
+  # at a time in a background job, far from the cause.
+  embedding:
+    model: gemini-embedding-001
+    dimensions: 1536
+    timeout: 30s
+    max-chars: 8000
+    batch-size: 25
+
+  # --------------------------------------------------------------------------
+  # Search — Postgres FTS + pgvector, fused with Reciprocal Rank Fusion.
+  # --------------------------------------------------------------------------
+  # max-semantic-distance exists because a k-NN search has no concept of "no
+  # match": it returns the nearest k however far away they are. Observed live
+  # before this existed, searching "zzzzqqq" returned the user's entire
+  # library — "nothing matched" looked identical to "here is everything".
+  #
+  # 0.40 was measured, not remembered. Real queries against real saves:
+  #   hits    "Noma" 0.266 · "somewhere nice to eat in Denmark" 0.335
+  #           "Christopher Nolan" 0.358 · "what should I cook tonight" 0.366
+  #   misses  "zzzzqqq" 0.425 · "renew a passport" 0.490 · "quantum …" 0.499
+  # The gap is real, but the sample was three saves and seven queries — treat
+  # this as provisional, like the OCR confidence floor, not as calibrated.
+  search:
+    max-semantic-distance: ${WEAVR_SEARCH_MAX_DISTANCE:0.40}
+    candidate-depth: 50
+
   supabase:
     # e.g. https://sgjpiordywdklzhlhmwq.supabase.co
     url: ${WEAVR_SUPABASE_URL}

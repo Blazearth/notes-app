@@ -12,6 +12,13 @@ public final class JobType {
     /** Stage 2: runs the Gemini classify-and-extract call on extracted text. */
     public static final String CLASSIFY_SAVE = "classify_save";
 
+    /**
+     * Stage 3: embeds the classified save for semantic search. Runs after the
+     * save is already {@code ready} — being findable by similarity is an
+     * enhancement, not a precondition for the save being useful.
+     */
+    public static final String EMBED_SAVE = "embed_save";
+
     private JobType() {
     }
 }

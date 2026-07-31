@@ -15,7 +15,8 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 | 2 — Ingestion cascade | job runner, cascade steps 1–4 — captions, metadata, **verified against a real yt-dlp**; ASR (Groq Whisper) and readable-text/PDF extraction, unit-tested but not live-verified | 1 of 4 — captions proven end to end; ASR/link/PDF are code-complete but unproven live. Android's silent-capture receiver is built (config plugin, never run on a device); the iOS share extension — the actual highest-risk spike — is still unbuilt |
 | 3 — AI pipeline v1 | Gemini classify-and-extract call, budget layer, response-schema registry, **verified live against the real API**; type-specific mobile cards | 3 of 4 — a recipe Reel with captions becomes a structured card, budget exhaustion queues rather than fails, the app shows real cards; blocked-download → `unusable` unverified live |
 | 4 — OCR tier | frames, tesseract, cross-frame voting, escalation gate, sharpness ranking, Flash-vision Tier 2, **live-verified against real ffmpeg + tesseract** | 1 of 4 — an overlay-only card extracts with no vision call; **the eval set does not exist, so every threshold is still a guess**, and both mobile criteria are untouched |
-| 5–8 | — | — |
+| 5 — Product | **search half done**: embeddings + FTS/pgvector hybrid with RRF, verified end to end live. Acts, lifecycle, free-tier caps and the RevenueCat webhook are untouched | partial — search works and degrades correctly; nothing monetisation-related exists |
+| 6–8 | — | — |
 
 **The pattern to notice: writing code is running well ahead of proving it.** The
 backend is roughly a phase early, and the app is far ahead of what Phase 1 asked
@@ -476,8 +477,8 @@ remains the highest-risk unbuilt thing in the project.
 
 ### Backend
 
-- **Search**: Postgres FTS + pgvector, fused with **RRF** (CA#5, `rank_constant=60`, ignore source scores). Fall back to FTS when the query has no free-text terms.
-- **Embeddings**: structured `label: value` profile from `structured_data`, not raw text (CA#8). Separate rate-limit pool — embed freely.
+- ✅ **Search**: Postgres FTS + pgvector, fused with **RRF** (CA#5, `rank_constant=60`, ignore source scores). Falls back to either half alone. **Done and verified live 2026-08-01** — `GET /v1/saves/search`. Two additions the plan did not anticipate, both forced by the live run: V1's `search_tsv` could not find a `place` by its own name (its field is `name`, not `title`) so V3/V4 rebuild it weighted, and the vector half needed a **distance cutoff** because k-NN has no concept of "no match" — `zzzzqqq` returned the entire library.
+- ✅ **Embeddings**: structured `label: value` profile from `structured_data`, not raw text (CA#8). Separate rate-limit pool — embed freely, and the one Gemini call not behind `BudgetApproved`. **Done and verified live.** Watch out: `gemini-embedding-001` truncates rather than re-embeds for reduced dimensions, so a 1536-d vector comes back un-normalised (L2 0.69) — normalise client-side.
 - **One Act, done well**: recipe → shopping list. Depth beats breadth here.
 - **Lifecycle**: `saved → planned → started → completed`.
 - **Free-tier caps** enforced in the worker (20 saves/month, 1 Act/week).

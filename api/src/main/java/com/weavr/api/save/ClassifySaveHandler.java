@@ -10,6 +10,7 @@ import com.weavr.api.gemini.GeminiClient;
 import com.weavr.api.gemini.GeminiProperties;
 import com.weavr.api.gemini.GeminiResponse;
 import com.weavr.api.job.JobHandler;
+import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobRecord;
 import com.weavr.api.job.JobType;
 import com.weavr.api.job.PermanentJobException;
@@ -59,18 +60,20 @@ class ClassifySaveHandler implements JobHandler {
     private final GeminiClient geminiClient;
     private final GeminiBudgetService budgetService;
     private final GeminiProperties geminiProps;
+    private final JobQueue jobQueue;
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
 
     ClassifySaveHandler(SaveRepository saves, SaveStageWriter stages,
                         GeminiClient geminiClient, GeminiBudgetService budgetService,
-                        GeminiProperties geminiProps, JdbcClient jdbc,
+                        GeminiProperties geminiProps, JobQueue jobQueue, JdbcClient jdbc,
                         ObjectMapper objectMapper) {
         this.saves = saves;
         this.stages = stages;
         this.geminiClient = geminiClient;
         this.budgetService = budgetService;
         this.geminiProps = geminiProps;
+        this.jobQueue = jobQueue;
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
     }
@@ -137,6 +140,35 @@ class ClassifySaveHandler implements JobHandler {
 
         log.info("Save {} classified → type={} confidence={} model={}",
                 saveId, response.knowledgeType(), response.confidence(), response.model());
+
+        // The save is already `ready` at this point. Embedding is an
+        // enhancement on top of that, so it gets its own job rather than
+        // holding a complete save behind a second network call.
+        enqueueEmbed(saveId, save.getUserId());
+    }
+
+    /**
+     * Enqueued in its own transaction, for the same reason
+     * {@link ProcessSaveHandler} does it: {@link JobQueue#enqueueForUser}
+     * requires an active transaction, and the runner calls {@code handle()}
+     * outside one.
+     *
+     * <p>Failure here is logged and swallowed. The save is already complete and
+     * findable by full-text search; letting a queue hiccup fail the job would
+     * re-run the whole classify path — and its Gemini request — to redo work
+     * that succeeded.
+     */
+    @Transactional
+    void enqueueEmbed(UUID saveId, UUID userId) {
+        try {
+            jobQueue.enqueueForUser(
+                    JobType.EMBED_SAVE,
+                    Map.of("saveId", saveId.toString()),
+                    "embed_save:" + saveId,
+                    userId);
+        } catch (RuntimeException e) {
+            log.warn("Could not enqueue embedding for save {}: {}", saveId, e.toString());
+        }
     }
 
     private String extractText(UUID saveId, Save save) {

@@ -406,6 +406,16 @@ fetch becomes dozens of downloads and an HTTP 429. Use exact codes. The probe
 JSON will not warn you — those track names do not appear in it. Full story
 [above](#what-running-the-real-binary-found).
 
+**Never mint a test JWT through `/auth/v1/signup`.** It emails the address you
+made up, that bounces, and Supabase warns that the project's email-sending
+privileges are at risk — which happened on 2026-08-01, off a single fabricated
+`@gmail.com` address. Only two confirmation emails had ever been sent from this
+project, so one bounce was a 50% bounce rate. Insert into `auth.users` directly
+over JDBC with `email_confirmed_at = now()` (there is no service-role key in
+`.env`, or the admin API with `email_confirm: true` would also do), then delete
+the user afterwards. The signup call buys nothing: you have to touch the table
+anyway to confirm the account.
+
 **Something may already be listening on 8080.** A leftover `spring-boot:run` will
 answer `/actuator/health` with a 200 and make you think your new build started.
 Check before trusting a health check:
@@ -444,7 +454,9 @@ Honest gaps, roughly in order of how much they would cost to discover late.
 | **ASR has never run against a real Groq call.** Download, downmix and transcription are all mocked | `WEAVR_GROQ_API_KEY` set, and a real video with no captions |
 | **The OCR thresholds are guesses.** `min-mean-confidence: 60` and friends have never been measured — only sanity-checked against a synthetic card (95) and a textless clip | The thirty-Reel eval set: measure tesseract against Flash and set the floor from data |
 | **The visual tier has only read synthetic fixtures.** Real-world text over photographs, motion blur and stylised fonts are untested, and that is where tesseract fails hard rather than gracefully | Same eval set |
-| **No integration tests against a real database.** Every SQL statement is validated only by booting the app | Testcontainers with a `pgvector/pgvector` image |
+| **No integration tests against a real database.** Every SQL statement is validated only by booting the app — and search added three more (the FTS query, the vector query, the RRF-fed fetch) | Testcontainers with a `pgvector/pgvector` image |
+| **The search distance cutoff is calibrated on three saves.** 0.40 sits in a real measured gap, but seven queries against a three-item corpus is not a calibration | A few hundred real saves, then re-measure hits vs misses |
+| **Search relevance has no benchmark.** RRF fusion is unit-tested; whether the fused ordering is *good* is unmeasured | A labelled query set, the search analogue of the OCR eval set |
 | **No automated contrast check.** The 78-combination audit is a manual script | A test runner in `app/`, then promote the script above |
 | **No test covers `JobStore`'s SQL.** The claim query's correctness rests on one manual run | Same Testcontainers setup |
 | **The app has no test runner at all** | Vitest or Jest, plus React Native Testing Library |
