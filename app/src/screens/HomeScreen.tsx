@@ -6,8 +6,8 @@ import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
 import { HatchThumb } from '@/components/HatchThumb';
-import { ListRow } from '@/components/ListRow';
 import { Reveal } from '@/components/Reveal';
+import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
@@ -19,9 +19,8 @@ import {
   type ContinueItem,
 } from '@/data/sampleContent';
 import { usePreferences } from '@/prefs/PreferencesProvider';
-import { saveSubtitle, saveTitle, STATUS_LABELS } from '@/saves/format';
+import { STATUS_LABELS } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
-import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
 
 function greetingForHour(hour: number): string {
@@ -151,11 +150,9 @@ function RecentlyCaptured() {
   return (
     <View style={{ gap: spacing.smd }}>
       {saves.map((save) => (
-        <ListRow
+        <SaveCard
           key={save.id}
-          title={saveTitle(save)}
-          subtitle={saveSubtitle(save)}
-          tint={save.knowledgeType ? TYPE_COLORS[save.knowledgeType] : undefined}
+          save={save}
           trailing={
             save.status === 'ready' ? undefined : (
               <StatusPill label={STATUS_LABELS[save.status]} tint={tintFor(save.status)} />

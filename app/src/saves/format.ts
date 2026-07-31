@@ -11,7 +11,8 @@ import type { SaveResponse, SaveStatus } from '@/api/types';
  */
 
 export function saveTitle(save: SaveResponse): string {
-  const structuredTitle = save.structuredData?.title;
+  // `place` names its field `name`, not `title` — see KnowledgeTypeRegistry.
+  const structuredTitle = save.structuredData?.title ?? save.structuredData?.name;
   if (typeof structuredTitle === 'string' && structuredTitle.trim()) {
     return structuredTitle.trim();
   }

@@ -283,6 +283,7 @@ export const TYPE_COLORS: Record<string, string> = {
   article: '#546E7A',
   note: '#78909C',
   other: '#90A4AE',
+  unusable: '#BDBDBD',
 };
 
 export interface Palette extends SurfaceSet {
