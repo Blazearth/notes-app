@@ -13,7 +13,8 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 | 0 — Pre-flight | repo, Supabase project, decisions closed | ⬜ store records, Apple enrolment, **real Gemini RPD still unverified** |
 | 1 — Foundation | schema, auth, `POST`/`GET /v1/saves`, whole Expo app | 2 of 4 — backend closed, mobile blocked on a dev build |
 | 2 — Ingestion cascade | job runner, cascade steps 1–2, process plumbing, **verified against a real yt-dlp** | 1 of 4 — captions proven end to end; the rest need ASR or the share extension |
-| 3–8 | — | — |
+| 3 — AI pipeline v1 | Gemini classify-and-extract call, budget layer, response-schema registry, **verified live against the real API**; type-specific mobile cards | 3 of 4 — a recipe Reel with captions becomes a structured card, budget exhaustion queues rather than fails, the app shows real cards; blocked-download → `unusable` unverified live |
+| 4–8 | — | — |
 
 **The pattern to notice: writing code is running well ahead of proving it.** The
 backend is roughly a phase early, and the app is far ahead of what Phase 1 asked
@@ -34,6 +35,25 @@ file size, which preferred the bloated auto-generated track over the human one.
 None were visible to a mocked process. Details in
 [testing.md](testing.md#what-running-the-real-binary-found); the lesson applies
 directly to the two items still open above.
+
+**2026-07-31: the Gemini call ran live and Phase 3's backend half closed, ahead
+of schedule.** It produced real structured saves, watched happen twice, and
+the same "mocked process hid real bugs" lesson repeated exactly: a UTF-8
+decoding bug (Gemini's `Content-Type` carries no charset; reading the response
+as `.body(String.class)` let Spring guess wrong instead of following the JSON
+spec's UTF-8 default) was invisible through the code's own construction and
+only surfaced on a live call, fixed by reading raw bytes and letting Jackson
+decode. That fix and the rest of the classify path — model routing, budget
+guard, response-schema registry — had zero tests before this session; they
+have 25 now. **Save-level idempotency also landed** (`Idempotency-Key` header,
+`V2__save_idempotency.sql`), earlier than planned below — it was scoped for
+"this phase, with the extension" but shipped with the Gemini work instead,
+since nothing about it depends on the extension existing. And the mobile
+type-specific card work Phase 3 scopes below is done: `SaveCard` renders
+recipe/movie/place layouts on the Home feed. Still open: OCR (Phase 4), a
+Gemini call against a genuinely blocked/unusable download (only tested with a
+scripted `unusable` response so far), and everything mobile still waits on a
+dev build.
 
 ---
 
@@ -235,18 +255,23 @@ Steal from the teardown: ✅ caption-language discovery from `subtitles` +
 failures to retryable because broken extractors are routine · ✅ each stage
 written to `save_stages` (CA#4).
 
-**A save still does not reach `ready`.** Extraction produces text; turning that
-into a knowledge type and structured fields is the single Gemini call in Phase 3.
-The text parks in `save_stages` and the save waits — marking it ready without the
-model would be a lie the whole UI repeats.
+**A save now reaches `ready` (or `failed`).** Extraction produces text;
+`classify_save` (Phase 3, landed 2026-07-31 — see the note above) turns it into
+a knowledge type and structured fields with the single Gemini call. The text
+still parks in `save_stages` first, same as always — that part of the sentence
+was never wrong, only the "and the save waits" half of it.
 
-⬜ **Save-level idempotency on `POST /v1/saves` — do it in this phase, with the
-extension.** The *job* is deduped by save id, but the save is not, so a retry
-creates a duplicate. Two callers hit this: the extension's background
-`URLSession`, which retries by design, and the in-app Paste Link tile on a double
-tap. It is also what Phase 4's `alreadyExists` state needs in order to say "saved
-again" instead of silently making a second copy. Retrofitting it after silent
-capture ships means reconciling duplicates in live data.
+✅ **Save-level idempotency on `POST /v1/saves` — done 2026-07-31, ahead of the
+extension.** The *job* was already deduped by save id; the save itself was not,
+so a retry created a duplicate. Fixed with a client-supplied `Idempotency-Key`
+header and a partial unique index on `saves (user_id, idempotency_key)`
+(`V2__save_idempotency.sql`) — a repeated key returns the existing save,
+including under a concurrent-retry race. No caller sends the header yet: the
+in-app Paste Link tile doesn't need it (a second tap is a fresh user action,
+not a retry), and the extension's background `URLSession` — the retrying
+caller this was actually for — still needs to be built before it has anything
+to send. Phase 4's `alreadyExists` state can now rely on this rather than
+needing its own dedupe.
 
 ### Mobile
 
@@ -299,19 +324,22 @@ Also: model fallback chain on 404 (CA#10) · per-stage idempotency flags so a re
 
 Feed screen — `GET /v1/saves`, rendering structured cards per type. Processing states visible. Pull to refresh.
 
-**Mostly built already.** The feed, its four states (loading / error / empty /
-per-status) and pull-to-refresh are in; React Query was not used, since a single
-list with manual refresh did not justify the dependency. What is missing is the
-*type-specific card*: today every save renders as a generic row, because nothing
-populates `knowledge_type` or `structured_data` until this phase. Deciding the
-per-type card layouts is the real work left here, not the plumbing.
+**Done, 2026-07-31.** The feed, its four states (loading / error / empty /
+per-status) and pull-to-refresh were already in; React Query was not used,
+since a single list with manual refresh did not justify the dependency. The
+*type-specific card* — recipe, movie, place layouts driven by `knowledgeType` +
+`structuredData`, via `buildCardModel` (`app/src/saves/cardModel.ts`) and
+`SaveCard` — is now what the Home feed renders for `ready` saves, falling back
+to the flat row for anything still processing, `unusable`, or a type without a
+bespoke layout yet. Typechecks and bundles for web; not run on a device, same
+as the rest of the app.
 
-**Two Phase-3 hooks already exist in the runner** and should be used rather than
+**Two Phase-3 hooks already exist in the runner** and were used rather than
 rebuilt: `RetryAfterException` is exactly the budget-exhaustion path (reschedules
 without spending an attempt, so a day of quota rejections cannot fail a save),
 and `save_stages` already holds the extracted text the model call consumes.
 
-**Exit criteria:** a recipe Reel with captions becomes a structured recipe card, one Gemini call, visible in `gemini_calls` · budget exhaustion queues rather than fails · a blocked download yields `unusable`, not invented ingredients · the app shows real cards.
+**Exit criteria:** a recipe Reel with captions becomes a structured recipe card, one Gemini call, visible in `gemini_calls` ✅ · budget exhaustion queues rather than fails ✅ (unit-tested; not yet observed live against an exhausted pool) · a blocked download yields `unusable`, not invented ingredients 🟡 (verified with a scripted `unusable` response, not yet a real blocked download) · the app shows real cards ✅.
 
 ---
 
@@ -347,8 +375,9 @@ Without this, the threshold is a guess and both failure directions are invisible
 The *Open app when saving* toggle already exists in the app and defaults to off,
 and `src/prefs/shareExtensionBridge.ts` is a deliberate no-op marking where the
 App Group mirror has to be written. `alreadyExists` depends on the save-level
-idempotency listed in Phase 2 — without it a re-share creates a duplicate rather
-than reporting one.
+idempotency that landed 2026-07-31 (✅ above) — the extension just needs to
+generate an `Idempotency-Key` once per share and send it on every retry;
+without that, a re-share still creates a duplicate rather than reporting one.
 
 **Exit criteria:** an overlay-only recipe Reel extracts correctly with no Gemini vision call · eval set measured, threshold set from data, numbers written down · sharing never opens the app · re-sharing shows "Saved again," not an error.
 

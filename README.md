@@ -26,7 +26,7 @@ Supabase is a managed **Postgres + Auth + Storage** host here, not the backend.
 No Edge Functions, no Realtime-driven business logic — Spring Boot owns the API
 surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 
-## Status — Phase 1 (Foundation)
+## Status — Phase 1 done, Phase 2 job runner in, Phase 3 Gemini call live
 
 ### What's real vs. stubbed
 
@@ -40,13 +40,15 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Job runner | **real, verified** | `SKIP LOCKED` claim, per-group exclusion, three error paths, stale-claim sweep. Claimed and completed a real job against live Supabase |
 | Extraction cascade — metadata + captions | **real, verified** | `--dump-single-json` probe then `--write-auto-subs`, VTT to prose, error classification. Run against yt-dlp 2026.07.04 and a live YouTube video by the opt-in `YtDlpLiveTest`; it found and fixed three defects |
 | Extraction cascade — ASR | **absent** | ffmpeg → 16 kHz mono → Groq Whisper. A different provider with its own key |
-| `process_save` handler | **real** | Runs the cascade and parks the text in `save_stages`. Saves stay `processing` — the Phase 3 model call is what advances them |
-| Any Gemini call | **absent** | Phase 3. `gemini_calls` and `ai_budget_days` tables exist and are empty |
+| `process_save` handler | **real** | Runs the cascade and parks the text in `save_stages` for `classify_save` to pick up |
+| Gemini classify-and-extract call | **real, verified live** | `classify_save` handler + `GeminiClient`/`GeminiBudgetService`/`KnowledgeTypeRegistry`. Ran against the real API and produced real structured saves on 2026-07-30 — see below. 25 unit tests (`GeminiClientTest`, `GeminiBudgetServiceTest`, `KnowledgeTypeRegistryTest`, `ClassifySaveHandlerTest`) |
 | OCR tier | **absent** | Phase 4 |
 | Search (FTS + vector) | **schema only** | `search_tsv` and `embedding` columns exist and are populated by nobody. Phase 5 |
 | RevenueCat / entitlements | **schema only** | `subscriptions`, `usage_counters` tables exist. Phase 5 |
+| `POST /v1/saves` idempotency | **real, verified** | Repeated `Idempotency-Key` header returns the existing save, including under a concurrent-retry race (`V2__save_idempotency.sql`, `SaveServiceTest`). No caller sends the header yet — it exists for the still-unbuilt iOS share extension |
 | Expo app — theme & personalisation | **real, bundles clean** | 78 palette combinations, all audited for WCAG AA. Preferences persist |
 | Expo app — auth + save create/list | **real, never run on a device** | Supabase email/password, `POST`/`GET /v1/saves`, all four feed states. Typechecks and bundles; no dev build exists yet |
+| Expo app — type-specific save cards | **real, never run on a device** | `SaveCard` renders recipe/movie/place layouts from `knowledgeType` + `structuredData` for `ready` saves; falls back to a flat row otherwise. Typechecks and bundles |
 | Expo app — Library / Spaces / digest | **sample content** | Need pipeline output or collaboration endpoints that do not exist |
 | Expo app — share extension | **absent** | The *Open app when saving* toggle exists; the native extension does not. See [app/README.md](app/README.md) |
 
@@ -94,6 +96,49 @@ decoding and the stage upsert — none of which unit tests can reach.
 
 The save itself is still `processing`, and correctly so: the handler is a stub
 until the extraction cascade exists.
+
+### Verified on 2026-07-31
+
+**The Gemini classify-and-extract call ran against the real API and produced
+real structured saves — watched happen twice, live.** That run surfaced a
+decoding bug: Gemini's response carries no charset on its `Content-Type`
+header, and reading it with `.body(String.class)` let Spring guess a charset
+instead of following the JSON spec's UTF-8 default, so accented text arrived
+as mojibake (`café` → `cafÃ©`). Fixed in `GeminiClient.classify` by reading
+`.body(byte[].class)` and letting Jackson's byte-based `readTree` decode it
+directly — `RestClient` is now built from an injected `RestClient.Builder`
+rather than `RestClient.builder()` inline, specifically so a test can bind
+`MockRestServiceServer` to it instead of mocking the HTTP layer away. The
+regression test for this bug was verified both ways: reproduces the mojibake
+against the old `.body(String.class)` code, passes against the fix.
+
+That fix, the primary→fallback model routing and daily-budget guard, and the
+response-schema/system-prompt registry now have unit test coverage that did
+not exist before today — `KnowledgeTypeRegistryTest` (7), `GeminiBudgetServiceTest`
+(6), `GeminiClientTest` (5), `ClassifySaveHandlerTest` (7). `SaveServiceTest`
+(6) covers the new `POST /v1/saves` idempotency behaviour below. Full suite:
+`./mvnw test` green, 98 tests (2 skipped — the opt-in live yt-dlp pair).
+
+**`POST /v1/saves` is now idempotent on a repeated `Idempotency-Key` header.**
+`V2__save_idempotency.sql` adds a partial unique index on
+`saves (user_id, idempotency_key)`; a retried request returns the existing
+save rather than creating a second one, and a race between two concurrent
+retries is resolved by catching the constraint violation and re-reading the
+winner's row rather than failing the request. This is a different layer from
+the job queue's own dedupe, which only stops a duplicate *job* for a save id
+that already exists — it never stopped the duplicate save id from being
+minted in the first place. No caller sends the header yet.
+
+**The Home feed renders type-specific cards for `ready` saves.** `SaveCard`
+(`app/src/components/SaveCard.tsx`) reads `knowledgeType` + `structuredData`
+through `buildCardModel` (`app/src/saves/cardModel.ts`) and lays out a
+recipe/movie/place-specific card — ingredient or highlight chips, a meta
+line, a synopsis — falling back to the existing flat `ListRow` for anything
+still processing, `unusable`, or a knowledge type without a bespoke layout
+yet. Found in the process: `place`'s title field is named `name`, not
+`title`, and `saveTitle()`'s generic fallback was silently missing it — fixed
+alongside. Verified the same way as the rest of the app so far: typechecks,
+bundles for web. Not run on a device.
 
 ## Running the app
 
@@ -238,11 +283,6 @@ HTTP ping to a static endpoint.
 
 **Correctness**
 
-- **Request-level idempotency on `POST /v1/saves`.** The job enqueue is
-  idempotent by save id, but the save itself is not, so a retry creates a
-  duplicate. This now has *two* callers: the iOS share extension's background
-  `URLSession` (Phase 2) and the in-app Paste Link tile, which will double-post
-  if a user taps twice on a slow network. Fix before silent capture ships.
 - **No integration tests against a real database.** Unit tests cover validation
   and enum mapping only. Testcontainers with a `pgvector/pgvector` image is the
   natural next step.
@@ -253,12 +293,13 @@ HTTP ping to a static endpoint.
 
 **Deferred by design, but easy to mistake for bugs**
 
-- **A save never leaves `processing`.** The job runner now claims and completes
-  the job, but its handler is a stub: it records an `accepted` stage and stops,
-  because nothing yet fetches captions, metadata or audio. The app deliberately
-  does not poll — it would spin without observing a transition — so a freshly
-  created save keeps its "Processing" pill. Both halves are intentional; the
-  cascade is what changes it.
+- **A save reaches `ready` (or `failed`) server-side now, but the app only
+  finds out on pull-to-refresh.** `process_save` runs the extraction cascade
+  and `classify_save` runs Gemini, so a save genuinely progresses. The app
+  still deliberately does not poll — it would spin waiting for a transition
+  the push notification is meant to signal instead — so a freshly created save
+  keeps its "Processing" pill until the user pulls to refresh or the
+  notification lands. Intentional.
 - **Auth is email/password, not anonymous.** §10 of the plan called for anonymous
   auth in Phase 1. Password sign-in was chosen instead because it is the path
   already proven end-to-end, and anonymous sign-in needs a dashboard toggle that
