@@ -53,6 +53,14 @@ public class Save {
     @Column(name = "media_storage_path")
     private String mediaStoragePath;
 
+    /**
+     * Client-supplied {@code Idempotency-Key}, so a retried {@code POST
+     * /v1/saves} — the share extension's background URLSession retries by
+     * design — lands on this row instead of creating a duplicate.
+     */
+    @Column(name = "idempotency_key", updatable = false)
+    private String idempotencyKey;
+
     @Column(name = "status", nullable = false)
     private SaveStatus status = SaveStatus.PROCESSING;
 
@@ -100,11 +108,12 @@ public class Save {
      * everything below {@code status}.
      */
     public static Save accepted(UUID userId, SourceType sourceType, String sourceUrl,
-                                String rawCaption, UUID spaceId) {
+                                String rawCaption, UUID spaceId, String idempotencyKey) {
         Save save = new Save(userId, sourceType);
         save.sourceUrl = sourceUrl;
         save.rawCaption = rawCaption;
         save.spaceId = spaceId;
+        save.idempotencyKey = idempotencyKey;
         save.status = SaveStatus.PROCESSING;
         return save;
     }
@@ -135,6 +144,10 @@ public class Save {
 
     public String getMediaStoragePath() {
         return mediaStoragePath;
+    }
+
+    public String getIdempotencyKey() {
+        return idempotencyKey;
     }
 
     public SaveStatus getStatus() {

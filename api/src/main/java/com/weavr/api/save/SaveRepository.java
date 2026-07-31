@@ -18,4 +18,7 @@ public interface SaveRepository extends JpaRepository<Save, UUID> {
      * row it is not allowed to see.
      */
     Optional<Save> findByIdAndUserId(UUID id, UUID userId);
+
+    /** Backs the idempotency check on {@code POST /v1/saves}. */
+    Optional<Save> findByUserIdAndIdempotencyKey(UUID userId, String idempotencyKey);
 }

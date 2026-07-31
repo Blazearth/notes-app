@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -30,11 +31,17 @@ class SaveController {
     /**
      * 202, not 201: the resource exists but is not finished. The client shows a
      * processing card and gets a push notification when the pipeline completes.
+     *
+     * <p>{@code Idempotency-Key} is optional but load-bearing for the share
+     * extension: its background {@code URLSession} retries on the OS's
+     * schedule, and without a stable key a retry creates a second save.
      */
     @PostMapping
     ResponseEntity<SaveResponse> create(@CurrentUser UUID userId,
-                                        @Valid @RequestBody CreateSaveRequest request) {
-        Save save = saveService.create(userId, request);
+                                        @Valid @RequestBody CreateSaveRequest request,
+                                        @RequestHeader(value = "Idempotency-Key", required = false)
+                                        String idempotencyKey) {
+        Save save = saveService.create(userId, request, idempotencyKey);
         return ResponseEntity
                 .accepted()
                 .location(URI.create("/v1/saves/" + save.getId()))

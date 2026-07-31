@@ -1,0 +1,140 @@
+package com.weavr.api.save;
+
+import java.util.Optional;
+import java.util.UUID;
+
+import com.weavr.api.job.JobQueue;
+import com.weavr.api.profile.ProfileService;
+import com.weavr.api.save.dto.CreateSaveRequest;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * {@code POST /v1/saves} idempotency: the share extension's background
+ * {@code URLSession} retries a POST on the OS's schedule, so a retried
+ * request must land on the same save instead of minting a second one. This
+ * is a *request*-level guard, layered under {@link com.weavr.api.job.JobQueue}'s
+ * existing job-level dedupe (which only protects against a duplicate job for
+ * a save id that already exists — it can't stop a duplicate save id).
+ */
+class SaveServiceTest {
+
+    private SaveRepository saves;
+    private ProfileService profiles;
+    private JobQueue jobs;
+    private SaveService service;
+
+    @BeforeEach
+    void setUp() {
+        saves = mock(SaveRepository.class);
+        profiles = mock(ProfileService.class);
+        jobs = mock(JobQueue.class);
+        service = new SaveService(saves, profiles, jobs);
+
+        // @UuidGenerator only assigns `id` on a real flush; simulate that here
+        // so create()'s save.getId() (used to build the job payload) isn't null.
+        when(saves.save(any())).thenAnswer(inv -> {
+            Save save = inv.getArgument(0);
+            assignId(save, UUID.randomUUID());
+            return save;
+        });
+    }
+
+    private static void assignId(Save save, UUID id) throws ReflectiveOperationException {
+        var field = Save.class.getDeclaredField("id");
+        field.setAccessible(true);
+        field.set(save, id);
+    }
+
+    private static CreateSaveRequest urlRequest() {
+        return new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, null);
+    }
+
+    @Test
+    void createsANewSaveWhenNoIdempotencyKeyIsSent() {
+        UUID userId = UUID.randomUUID();
+
+        Save save = service.create(userId, urlRequest(), null);
+
+        assertThat(save.getIdempotencyKey()).isNull();
+        verify(saves, never()).findByUserIdAndIdempotencyKey(any(), any());
+        verify(jobs).enqueueForUser(eq("process_save"), any(), anyString(), eq(userId));
+    }
+
+    @Test
+    void createsANewSaveOnAFreshIdempotencyKey() {
+        UUID userId = UUID.randomUUID();
+        when(saves.findByUserIdAndIdempotencyKey(userId, "share-abc123")).thenReturn(Optional.empty());
+
+        Save save = service.create(userId, urlRequest(), "share-abc123");
+
+        assertThat(save.getIdempotencyKey()).isEqualTo("share-abc123");
+        verify(jobs).enqueueForUser(eq("process_save"), any(), anyString(), eq(userId));
+    }
+
+    @Test
+    void replayingAKnownIdempotencyKeyReturnsTheExistingSaveWithoutCreatingAnything() {
+        UUID userId = UUID.randomUUID();
+        Save existing = Save.accepted(userId, SourceType.URL, "https://example.com/reel", null, null, "share-abc123");
+        when(saves.findByUserIdAndIdempotencyKey(userId, "share-abc123")).thenReturn(Optional.of(existing));
+
+        Save result = service.create(userId, urlRequest(), "share-abc123");
+
+        assertThat(result).isSameAs(existing);
+        verify(saves, never()).save(any());
+        verify(jobs, never()).enqueueForUser(any(), any(), any(), any());
+    }
+
+    @Test
+    void blankIdempotencyKeyIsTreatedAsNoKey() {
+        UUID userId = UUID.randomUUID();
+
+        Save save = service.create(userId, urlRequest(), "   ");
+
+        assertThat(save.getIdempotencyKey()).isNull();
+        verify(saves, never()).findByUserIdAndIdempotencyKey(any(), any());
+    }
+
+    @Test
+    void losingARaceOnTheUniqueConstraintReturnsTheWinnersRowInsteadOfFailing() {
+        UUID userId = UUID.randomUUID();
+        Save winner = Save.accepted(userId, SourceType.URL, "https://example.com/reel", null, null, "share-abc123");
+        // First lookup (the pre-check) finds nothing; the insert then loses the
+        // race to a concurrent retry, and the recovery lookup finds the winner.
+        when(saves.findByUserIdAndIdempotencyKey(userId, "share-abc123"))
+                .thenReturn(Optional.empty(), Optional.of(winner));
+        // doThrow(), not when(...).thenThrow(): save() is already stubbed from
+        // setUp, and when(mock.method()) has to invoke the mock to record the
+        // call — which would run the old stub's side effect (assignId on a
+        // null argument) before the new stub replaces it.
+        doThrow(new DataIntegrityViolationException("duplicate key")).when(saves).save(any());
+
+        Save result = service.create(userId, urlRequest(), "share-abc123");
+
+        assertThat(result).isSameAs(winner);
+        verify(saves, times(2)).findByUserIdAndIdempotencyKey(userId, "share-abc123");
+        verify(jobs, never()).enqueueForUser(any(), any(), any(), any());
+    }
+
+    @Test
+    void aConstraintViolationWithNoIdempotencyKeyPropagates() {
+        UUID userId = UUID.randomUUID();
+        doThrow(new DataIntegrityViolationException("some other constraint")).when(saves).save(any());
+
+        assertThatThrownBy(() -> service.create(userId, urlRequest(), null))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+}

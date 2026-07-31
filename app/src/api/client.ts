@@ -100,9 +100,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
  * `POST /v1/saves` → **202**, not 201: the row exists but the pipeline has not
  * run. The returned save is always `status: 'processing'`.
  *
- * Not yet idempotent. A retry creates a second save — the server dedupes the job
- * enqueue by save id, but not the save itself. This has to be fixed before the
- * share extension's background upload can retry safely.
+ * The server is idempotent on a repeated `Idempotency-Key`: the same key
+ * returns the existing save instead of creating a second one (see
+ * `SaveService.create`). This tile doesn't send one — a duplicate tap here is
+ * a fresh user action, not a retry. The header exists for the iOS share
+ * extension, whose background `URLSession` retries the *same* upload attempt
+ * on the OS's schedule; that extension is native code outside this app and
+ * still needs to generate the key once per share and attach it to every
+ * retry — nothing to plumb here until it exists.
  */
 export function createSave(body: CreateSaveRequest): Promise<SaveResponse> {
   return request<SaveResponse>('/v1/saves', {
