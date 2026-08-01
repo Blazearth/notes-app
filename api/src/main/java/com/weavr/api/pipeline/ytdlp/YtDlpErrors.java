@@ -5,6 +5,7 @@ import java.util.Locale;
 
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
+import org.slf4j.LoggerFactory;
 
 /**
  * Maps yt-dlp's stderr onto something a user can read, and decides whether
@@ -20,6 +21,8 @@ import com.weavr.api.job.RetryableJobException;
  * transient breakage recovers on its own once the container updates yt-dlp.
  */
 public final class YtDlpErrors {
+
+    private static final org.slf4j.Logger log = LoggerFactory.getLogger(YtDlpErrors.class);
 
     /**
      * @param permanent   true when retrying cannot help
@@ -106,6 +109,7 @@ public final class YtDlpErrors {
      */
     public static RuntimeException toException(YtDlpFailedException e) {
         Classification classification = classify(e.stderr());
+        log.warn("yt-dlp stderr [{}]: {}", classification.errorCode(), e.stderr());
         if (classification.permanent()) {
             return new PermanentJobException(classification.errorCode(), classification.userMessage(), e);
         }
