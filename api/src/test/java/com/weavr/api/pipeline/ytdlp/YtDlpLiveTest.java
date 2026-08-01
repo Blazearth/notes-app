@@ -48,6 +48,7 @@ class YtDlpLiveTest {
                     Duration.ofSeconds(120),
                     Duration.ofSeconds(180),
                     null,
+                    null,
                     null));
 
     private static String url() {

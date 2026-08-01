@@ -53,3 +53,6 @@ services:
         value: "INFO"
       - key: WEAVR_JOBS_CONCURRENCY
         value: "1"              # free tier: 1 parallel job to avoid OOM
+      # ── yt-dlp cookies — required on Render IPs (YouTube bot check) ─────────
+      - key: WEAVR_YTDLP_COOKIES_BASE64
+        sync: false

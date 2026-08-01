@@ -124,6 +124,10 @@ weavr:
     # is the right one. `/worst` catches sources whose every stream is below
     # 360p, which would otherwise match nothing and fail.
     video-format: ${WEAVR_YTDLP_VIDEO_FORMAT:worst[height>=360]/worst}
+    # Base64-encoded Netscape cookies file. Required on cloud IPs where YouTube
+    # returns "Sign in to confirm you're not a bot". Export from a logged-in
+    # browser with a cookies.txt extension, then: base64 -w 0 cookies.txt
+    cookies-base64: ${WEAVR_YTDLP_COOKIES_BASE64:}
 
   # --------------------------------------------------------------------------
   # ffmpeg — downmixes ASR audio to 16 kHz mono before it goes to Groq.

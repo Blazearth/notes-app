@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
@@ -12,6 +13,7 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 import com.weavr.api.pipeline.ExternalProcess;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -36,10 +38,44 @@ public class YtDlpClient {
     private final ObjectMapper objectMapper;
     private final YtDlpProperties properties;
 
+    /** Written once at startup from {@code cookiesBase64}; null when not configured. */
+    private Path cookiesFile;
+
     YtDlpClient(ExternalProcess processes, ObjectMapper objectMapper, YtDlpProperties properties) {
         this.processes = processes;
         this.objectMapper = objectMapper;
         this.properties = properties;
+    }
+
+    @PostConstruct
+    void initCookies() {
+        String b64 = properties.cookiesBase64();
+        if (b64 == null || b64.isBlank()) {
+            log.info("yt-dlp: no cookies configured (WEAVR_YTDLP_COOKIES_BASE64 not set)");
+            return;
+        }
+        try {
+            byte[] decoded = Base64.getDecoder().decode(b64.strip());
+            cookiesFile = Files.createTempFile("yt-dlp-cookies-", ".txt");
+            cookiesFile.toFile().deleteOnExit();
+            Files.write(cookiesFile, decoded);
+            log.info("yt-dlp: cookies written to {}", cookiesFile);
+        } catch (Exception e) {
+            log.warn("yt-dlp: failed to decode cookies — proceeding without them", e);
+            cookiesFile = null;
+        }
+    }
+
+    /** Prepends --cookies <path> to the given command list if cookies are configured. */
+    private List<String> withCookies(List<String> cmd) {
+        if (cookiesFile == null) return cmd;
+        List<String> out = new ArrayList<>(cmd.size() + 2);
+        // Insert after the binary name
+        out.add(cmd.get(0));
+        out.add("--cookies");
+        out.add(cookiesFile.toString());
+        out.addAll(cmd.subList(1, cmd.size()));
+        return out;
     }
 
     /**
@@ -49,13 +85,13 @@ public class YtDlpClient {
      * {@code automatic_captions}).
      */
     public SourceMetadata probe(String url) {
-        ExternalProcess.Result result = processes.run(List.of(
+        ExternalProcess.Result result = processes.run(withCookies(List.of(
                 properties.binary(),
                 "--dump-single-json",
                 "--skip-download",
                 "--no-playlist",
                 "--no-warnings",
-                url), properties.probeTimeout());
+                url)), properties.probeTimeout());
 
         if (!result.succeeded()) {
             throw new YtDlpFailedException(describe(result), result.stderr());
@@ -83,7 +119,7 @@ public class YtDlpClient {
      * caller owns cleanup.
      */
     public Optional<String> fetchCaptions(String url, Path workDir) {
-        ExternalProcess.Result result = processes.run(List.of(
+        ExternalProcess.Result result = processes.run(withCookies(List.of(
                 properties.binary(),
                 "--skip-download",
                 "--write-subs",
@@ -94,7 +130,7 @@ public class YtDlpClient {
                 "--no-playlist",
                 "--no-warnings",
                 "-o", "%(id)s.%(ext)s",
-                url), properties.captionTimeout(), workDir);
+                url)), properties.captionTimeout(), workDir);
 
         // Read the directory *before* judging the exit code. yt-dlp exits
         // non-zero when any requested track fails, even though earlier tracks
@@ -168,14 +204,14 @@ public class YtDlpClient {
      *                           downloaded, e.g. {@code 90} for {@code "*0-90"}
      */
     public Optional<Path> downloadAudio(String url, Path workDir, int maxDurationSeconds) {
-        ExternalProcess.Result result = processes.run(List.of(
+        ExternalProcess.Result result = processes.run(withCookies(List.of(
                 properties.binary(),
                 "-f", "bestaudio",
                 "--download-sections", "*0-" + maxDurationSeconds,
                 "--no-playlist",
                 "--no-warnings",
                 "-o", "%(id)s.%(ext)s",
-                url), properties.audioTimeout(), workDir);
+                url)), properties.audioTimeout(), workDir);
 
         Optional<Path> audio = largestFile(workDir);
         if (audio.isPresent()) {
@@ -204,14 +240,14 @@ public class YtDlpClient {
      * @return the downloaded file, or empty if the source yielded no video
      */
     public Optional<Path> downloadVideo(String url, Path workDir, int maxDurationSeconds) {
-        ExternalProcess.Result result = processes.run(List.of(
+        ExternalProcess.Result result = processes.run(withCookies(List.of(
                 properties.binary(),
                 "-f", properties.videoFormat(),
                 "--download-sections", "*0-" + maxDurationSeconds,
                 "--no-playlist",
                 "--no-warnings",
                 "-o", "%(id)s.%(ext)s",
-                url), properties.videoTimeout(), workDir);
+                url)), properties.videoTimeout(), workDir);
 
         // Same reasoning as captions and audio: read the directory before
         // judging the exit code. yt-dlp can exit non-zero over a fragment it
