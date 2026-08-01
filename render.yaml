@@ -1,0 +1,55 @@
+services:
+  - type: web
+    name: weavr-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Build context is the repo root so the Dockerfile can reach api/
+    dockerContext: .
+    plan: free
+    region: oregon
+    branch: main
+    healthCheckPath: /actuator/health
+    envVars:
+      # ── Supabase ────────────────────────────────────────────────────────────
+      - key: WEAVR_SUPABASE_URL
+        sync: false
+      - key: WEAVR_DB_URL
+        sync: false
+      - key: WEAVR_DB_USER
+        sync: false
+      - key: WEAVR_DB_PASSWORD
+        sync: false
+      - key: WEAVR_DB_POOL_MAX
+        value: "3"              # free tier has scarce connections; keep it tight
+      - key: WEAVR_FLYWAY_URL
+        sync: false
+      - key: WEAVR_FLYWAY_USER
+        sync: false
+      - key: WEAVR_FLYWAY_PASSWORD
+        sync: false
+
+      # ── Gemini ──────────────────────────────────────────────────────────────
+      - key: WEAVR_GEMINI_API_KEY
+        sync: false
+
+      # ── Groq (ASR) — optional; missing disables ASR step ───────────────────
+      - key: WEAVR_GROQ_API_KEY
+        sync: false
+
+      # ── Enrichment — optional; missing disables only that enricher ──────────
+      - key: WEAVR_TMDB_API_KEY
+        sync: false
+      - key: WEAVR_GOOGLE_PLACES_API_KEY
+        sync: false
+
+      # ── RevenueCat — unset means endpoint is disabled (fails closed) ────────
+      - key: WEAVR_REVENUECAT_WEBHOOK_SECRET
+        sync: false
+
+      # ── App ─────────────────────────────────────────────────────────────────
+      - key: PORT
+        value: "8080"
+      - key: WEAVR_LOG_LEVEL
+        value: "INFO"
+      - key: WEAVR_JOBS_CONCURRENCY
+        value: "1"              # free tier: 1 parallel job to avoid OOM

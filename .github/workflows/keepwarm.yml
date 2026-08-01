@@ -1,0 +1,16 @@
+name: Keep Render warm
+
+on:
+  schedule:
+    # Every 14 minutes. Render free tier spins down after 15 min of inactivity.
+    - cron: "*/14 * * * *"
+  workflow_dispatch: # allow manual trigger
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          curl -sf "${{ secrets.RENDER_APP_URL }}/actuator/health" \
+            && echo "warm" || echo "cold start triggered"
