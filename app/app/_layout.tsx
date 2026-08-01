@@ -69,11 +69,22 @@ function Routes() {
         {/* Search reads as a layer over the feed rather than a place you
             travel to, so it fades in where the others slide. */}
         <Stack.Screen name="search" options={{ animation: 'fade' }} />
+        {/* Same three requirements as `settings`, and for the same reasons.
+            `transparentModal` alone is not enough: the shared `contentStyle`
+            below is opaque, so without the override the stack paints the page
+            background across the whole route and Home is gone — which is
+            exactly the "blank background behind the FAB menu" this fixes. The
+            blur has to have something to blur.
+
+            `animation: 'none'` because the sheet drives its own entrance from
+            one shared value. A stack fade on top of that fades the backdrop in
+            twice, on two curves that do not match. */}
         <Stack.Screen
           name="capture"
           options={{
             presentation: 'transparentModal',
-            animation: 'fade',
+            animation: 'none',
+            contentStyle: { backgroundColor: 'transparent' },
           }}
         />
       </Stack>

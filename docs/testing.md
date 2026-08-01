@@ -53,6 +53,36 @@ Then `Read` the PNG. Four things that are not obvious:
   on web, wrong on device" as a Yoga sizing rule until proven otherwise, and
   never read a green screenshot as a device.
 
+### Driving the app, not just screenshotting a URL
+
+Screenshotting a route cannot check anything that depends on **navigation
+history**. The capture sheet is a `transparentModal`, so opening `/capture`
+directly gives it no Home to sit over — and "is the screen behind it still
+there?" is exactly the question that needs answering. Loading the URL shows a
+sheet on a void whether the bug is present or not.
+
+Chrome's DevTools Protocol closes that gap, with no dependencies: Node 24 ships
+a global `WebSocket`, which is all CDP needs. Start Chrome with
+`--remote-debugging-port=9222 --user-data-dir=<scratch>`, then `GET
+http://127.0.0.1:9222/json` for the page target, open its
+`webSocketDebuggerUrl`, and send:
+
+- `Page.navigate` to land on Home,
+- `Runtime.evaluate` to find a control — query by `[aria-label="Capture"]`, the
+  same string a screen reader uses, so the probe breaks loudly if the label is
+  ever dropped — and return its `getBoundingClientRect()`,
+- `Input.dispatchMouseEvent` (`mousePressed` then `mouseReleased`) at its
+  centre,
+- `Page.captureScreenshot`.
+
+That sequence caught the FAB backdrop bug and then proved both halves of the
+fix: Home blurred beneath the open sheet, and sharp again after a tap on the
+backdrop. Sleep between steps rather than racing the springs — the virtual
+clock is not in play here, so these are real milliseconds.
+
+The Yoga caveat above still applies. This drives a **browser**; it sees more of
+the app than a static screenshot, and still nothing platform-native.
+
 React Native also does not clip overflow by default, so a view with a collapsed
 box still paints its children at full size. A zero-height container therefore
 looks like a stuck animation rather than a layout fault — which is precisely

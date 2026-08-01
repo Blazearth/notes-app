@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import Animated, {
   interpolate,
   runOnJS,
@@ -13,6 +13,7 @@ import Animated, {
   withDelay,
   withSpring,
   withTiming,
+  type SharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -45,6 +46,12 @@ const TILE_ENTER_OFFSET = 12;
 const TILE_ENTER_MS = 260;
 /** Dismissal duration. Fixed, so navigation lands at a known moment — see `dismiss`. */
 const DISMISS_MS = 160;
+/** The tiles clear out before the surface starts to move. Short — this is a beat, not a stage. */
+const TILE_EXIT_MS = 90;
+/** How small the panel starts, i.e. roughly FAB-sized against the sheet's width. */
+const PANEL_ENTER_SCALE = 0.82;
+/** Tiles arrive slightly small as well as faint — a fade alone reads as a slideshow. */
+const TILE_ENTER_SCALE = 0.86;
 
 /** Module scope so its identity never changes. */
 const noop = () => {};
@@ -69,12 +76,15 @@ const OptionTile = React.memo(function OptionTile({
   busy,
   index,
   onPress,
+  tilesOut,
 }: {
   option: CaptureOption;
   busy: boolean;
   /** Position in the flattened grid, so the tiles arrive in reading order. */
   index: number;
   onPress: () => void;
+  /** The sheet's exit multiplier — 1 until dismissal starts. See `CaptureSheet`. */
+  tilesOut: SharedValue<number>;
 }) {
   const { palette, radius, spacing, layout, alpha } = useTheme();
   const reduced = useReducedMotion();
@@ -102,10 +112,19 @@ const OptionTile = React.memo(function OptionTile({
     progress.value = withDelay(staggerDelay(index), withTiming(1, { duration: TILE_ENTER_MS }));
   }, [index, reduced, progress]);
 
-  const enterStyle = useAnimatedStyle(() => ({
-    opacity: progress.value,
-    transform: [{ translateY: (1 - progress.value) * TILE_ENTER_OFFSET }],
-  }));
+  // Fade and scale together, and both fold in the exit multiplier — so the
+  // same style serves the staggered arrival and the ordered departure without
+  // the component knowing which one is running.
+  const enterStyle = useAnimatedStyle(() => {
+    const shown = progress.value * tilesOut.value;
+    return {
+      opacity: shown,
+      transform: [
+        { translateY: (1 - progress.value) * TILE_ENTER_OFFSET },
+        { scale: interpolate(shown, [0, 1], [TILE_ENTER_SCALE, 1]) },
+      ],
+    };
+  });
 
   return (
     <Animated.View style={[{ flex: 1 }, enterStyle]}>
@@ -178,6 +197,7 @@ const OptionTile = React.memo(function OptionTile({
 export function CaptureSheet() {
   const { palette, radius, spacing, layout, elevation, alpha, blurEffects } = useTheme();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const { prepend } = useSaves();
   const haptic = useHaptic();
@@ -192,6 +212,17 @@ export function CaptureSheet() {
   // back is what makes dismissal a true mirror of the entrance rather than a
   // cut to the Stack's own fade.
   const progress = useSharedValue(0);
+
+  /**
+   * The tiles' own multiplier, so open and close are not simple mirrors.
+   *
+   * Opening, the surface arrives first and its contents follow — the tiles are
+   * staggered off `progress`. Closing has to run the other way round: contents
+   * leave, *then* the surface. Driving both from one value cannot express that,
+   * because one value has one ordering. This one only ever moves on the way
+   * out, which is why it starts at 1 and is never animated up.
+   */
+  const tilesOut = useSharedValue(1);
 
   useEffect(() => {
     progress.value = reducedMotion ? 1 : withSpring(1, Spring.enter);
@@ -224,10 +255,19 @@ export function CaptureSheet() {
       router.back();
       return;
     }
-    progress.value = withTiming(0, { duration: DISMISS_MS }, (finished) => {
-      if (finished) runOnJS(router.back)();
-    });
-  }, [reducedMotion, router, progress]);
+
+    // Contents out first, surface after. The delay is what makes the exit a
+    // considered reversal rather than the entrance played backwards — the tiles
+    // are gone by the time the panel starts moving, so nothing is still fading
+    // while the thing holding it slides away underneath.
+    tilesOut.value = withTiming(0, { duration: TILE_EXIT_MS });
+    progress.value = withDelay(
+      TILE_EXIT_MS,
+      withTiming(0, { duration: DISMISS_MS }, (finished) => {
+        if (finished) runOnJS(router.back)();
+      }),
+    );
+  }, [reducedMotion, router, progress, tilesOut]);
 
   const blurProps = useAnimatedProps(() => ({
     intensity: progress.value * BACKDROP_BLUR_INTENSITY,
@@ -238,8 +278,30 @@ export function CaptureSheet() {
   const fallbackDimStyle = useAnimatedStyle(() => ({
     opacity: progress.value * (alpha.scrim + 0.3),
   }));
+
+  /**
+   * The panel grows out of the FAB, and shrinks back into it.
+   *
+   * `transformOrigin` is what does the work: pinned to the FAB's centre on the
+   * x axis and the panel's own bottom edge on the y, a plain scale reads as the
+   * surface expanding from the button rather than as a card being zoomed. The
+   * remaining `translateY` keeps a little of the upward travel a sheet is
+   * expected to have.
+   *
+   * The FAB's position is computed from the layout tokens that place it rather
+   * than measured. It is `fabSize` square, inset by `navInset` from the right —
+   * so its centre is arithmetic, available on the first frame, and immune to
+   * the stale-rectangle problem that a `measureInWindow` round trip has on the
+   * very first open (see `motion/morph.ts`, where measurement *was* required
+   * because the gear tile scrolls).
+   */
+  const fabCenterX = width - layout.navInset - layout.fabSize / 2;
   const panelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: interpolate(progress.value, [0, 1], [PANEL_ENTER_OFFSET, 0]) }],
+    transform: [
+      { translateY: interpolate(progress.value, [0, 1], [PANEL_ENTER_OFFSET, 0]) },
+      { scale: interpolate(progress.value, [0, 1], [PANEL_ENTER_SCALE, 1]) },
+    ],
+    opacity: interpolate(progress.value, [0, 0.35, 1], [0, 1, 1]),
   }));
 
   /**
@@ -339,9 +401,15 @@ export function CaptureSheet() {
       </View>
 
       {/*
-        The panel rises from the bottom edge on the same `progress` spring that
-        drives the backdrop, so expansion and dismissal are one motion rather
-        than two animations that merely happen to overlap.
+        The panel grows out of the FAB on the same `progress` spring that drives
+        the backdrop, so expansion and dismissal are one motion rather than two
+        animations that merely happen to overlap.
+
+        `transformOrigin` is what turns a scale into an expansion: pinned to the
+        FAB's centre on x and the panel's own bottom edge on y, the surface
+        appears to open from the button that was pressed. Scaled about its own
+        centre instead, the same animation reads as a card being zoomed —
+        correct motion, wrong story.
       */}
       <Animated.View
         style={[
@@ -352,6 +420,7 @@ export function CaptureSheet() {
             paddingTop: spacing.md,
             paddingHorizontal: layout.screenGutter,
             paddingBottom: spacing.xxl + insets.bottom,
+            transformOrigin: [fabCenterX, '100%', 0],
             ...elevation.sheet,
           },
           panelStyle,
@@ -383,6 +452,7 @@ export function CaptureSheet() {
                   option={option}
                   busy={busyId === option.id}
                   index={rowIndex * COLUMNS + colIndex}
+                  tilesOut={tilesOut}
                   // Stable identities, or `React.memo` on the tile buys nothing
                   // — a fresh arrow per render makes every tile re-render on
                   // every keystroke of sheet state.
