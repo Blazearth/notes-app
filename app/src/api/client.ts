@@ -5,6 +5,7 @@ import type {
   CreateSaveRequest,
   DuplicateSuggestion,
   InvitePreview,
+  KnowledgeGroupResponse,
   LifecycleStatus,
   MeResponse,
   ProblemDetail,
@@ -431,4 +432,36 @@ export function setVote(saveId: string, value: 1 | -1 | 0): Promise<{ score: num
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Groups
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /v1/groups` — the library organised by what the pipeline understood.
+ *
+ * Derived server-side per request from each save's `knowledgeType` and its
+ * extracted facets, so there is nothing to invalidate and no group ever
+ * disagrees with the saves inside it. Empty until the user has `ready` saves.
+ */
+export function listGroups(): Promise<KnowledgeGroupResponse[]> {
+  return request<KnowledgeGroupResponse[]>('/v1/groups');
+}
+
+/** `GET /v1/groups/{id}` — one node at any depth, subgroups attached. */
+export function getGroup(id: string): Promise<KnowledgeGroupResponse> {
+  return request<KnowledgeGroupResponse>(`/v1/groups/${encodeURIComponent(id)}`);
+}
+
+/**
+ * `GET /v1/groups/{id}/saves`.
+ *
+ * `deep=false` (the default) is what a folder shows — the saves sitting loose
+ * at this level, with subgroups listed separately above them.
+ */
+export function listGroupSaves(id: string, deep = false): Promise<SaveResponse[]> {
+  return request<SaveResponse[]>(
+    `/v1/groups/${encodeURIComponent(id)}/saves?deep=${deep ? 'true' : 'false'}`,
+  );
 }

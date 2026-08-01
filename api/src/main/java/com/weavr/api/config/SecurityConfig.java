@@ -60,8 +60,16 @@ class SecurityConfig {
         // Supabase signs access tokens with ES256 (EC P-256). The default
         // builder only accepts RS256, so every token would be silently rejected
         // with "no matching key(s) found".
+        //
+        // Both are listed because `jwsAlgorithm` *adds to a set* rather than
+        // replacing the default — so naming only ES256 leaves RS256 accepted
+        // anyway, while naming neither leaves ES256 rejected. Supabase can
+        // reissue a project's signing key as RSA, and with ES256 alone that
+        // rotation would take auth down completely, reporting the same
+        // misleading "no matching key(s) found" that this line exists to avoid.
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(supabase.jwkSetUri())
                 .jwsAlgorithm(SignatureAlgorithm.ES256)
+                .jwsAlgorithm(SignatureAlgorithm.RS256)
                 .build();
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(List.of(
                 // exp / nbf, with the default clock skew

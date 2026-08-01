@@ -10,7 +10,6 @@
  */
 
 import * as client from '@/api/client';
-import { ApiError } from '@/api/client';
 import type { Repository } from './repository';
 
 export const apiRepository: Repository = {
@@ -54,24 +53,15 @@ export const apiRepository: Repository = {
   setVote: client.setVote,
 
   /**
-   * No endpoint serves AI groups yet.
+   * Real as of `GET /v1/groups`, and delegation like everything else here.
    *
-   * An empty array rather than a throw, because the Home grid is written to
-   * hide itself when there is nothing to show — so with the real backend
-   * selected that section simply does not appear, which is the honest rendering
-   * of "the server cannot group anything yet". When the endpoint lands these
-   * become one-line delegations like every other method.
+   * The server derives the tree per request from each save's `knowledgeType`
+   * and the facets the classify call already extracted, so the response shape
+   * matches `KnowledgeGroup` exactly and no mapping is needed. An empty array
+   * is the honest answer for a library with no `ready` saves yet, and the Home
+   * grid hides itself on it.
    */
-  listGroups: () => Promise.resolve([]),
-
-  /**
-   * A throw, where `listGroups` returns empty — the two are different
-   * questions. "What groups exist?" has a true answer of *none*; "give me
-   * group X" cannot be answered at all, and resolving it with a hollow object
-   * would put a detail screen on screen with nothing in it.
-   */
-  getGroup: () =>
-    Promise.reject(new ApiError('notFound', 'Groups are not available yet.', 404)),
-
-  listGroupSaves: () => Promise.resolve([]),
+  listGroups: client.listGroups,
+  getGroup: client.getGroup,
+  listGroupSaves: client.listGroupSaves,
 };

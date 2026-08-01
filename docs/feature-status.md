@@ -1,6 +1,6 @@
 # Feature status
 
-**As of 2026-08-01, day 1 of the Shipaton build window (Aug 1 – Sep 30).**
+**As of 2026-08-02, the Shipaton build window (Aug 1 – Sep 30).**
 
 ## The bar
 
@@ -101,9 +101,9 @@ motion blur and stylised fonts are exactly where tesseract fails hard.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| **AI groups** | 🔵 Mock-only | **No endpoint serves groups.** `apiRepository.listGroups()` returns `[]`, so with the real backend the section does not appear at all. Nothing generates groups — there is no clustering, no AI, no persistence |
-| **Subgroups / nesting** | 🔵 Mock-only | The recursive model, the card previews and the detail screen exist and work against fixtures. Same gap: no backend, no generator, and never on a device |
-| Group detail screen | 🔵 Mock-only | Verified in Chrome only |
+| **AI groups** | ✅ Done | `GET /v1/groups` derives the tree per request from each save's `knowledgeType` and the facets the classify call already extracted — no table, no migration, and no Gemini request of its own. Verified against live Supabase with seeded saves |
+| **Subgroups / nesting** | ✅ Done¹ | Recursive server-side and client-side. Verified live: recipes split by `cuisine`, movies by `genre`. ¹ The screens have still never run on a device |
+| Group detail screen | 🟠 Unverified | Now backed by a real endpoint; verified in Chrome against mock data only |
 | Spaces — CRUD, roles, invites | ✅ Done | Authorisation verified live, including 404-vs-403 |
 | Spaces — comments, votes, activity | ✅ Done | Verified live |
 | Spaces — duplicate detection | 🟠 Unverified | The 0.15 threshold is a guess; no two real saves compared |
@@ -266,9 +266,11 @@ These gate TestFlight and sandbox purchases, which gate the submission.
 
 ### Tier 5 — the features that currently look done and are shells
 
-15. **AI groups: a generator, an endpoint, persistence.** The model, cards,
-    previews and detail screen all exist and serve nothing — with the real
-    backend the section does not render at all. Subgroups included.
+15. ~~AI groups: a generator, an endpoint, persistence.~~ **Done** —
+    `GET /v1/groups` derives the tree from `knowledge_type` plus the facets the
+    classify call already extracted, so it costs no Gemini request and cannot
+    go stale. What remains is judging whether facet-derived folders are good
+    enough, or whether a periodic clustering pass is worth the requests.
 16. **Weekly digest endpoint and generator.** The last sample content in the
     app. Budget it explicitly: digests scale with user count and can eat a
     day's save capacity.

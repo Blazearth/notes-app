@@ -224,3 +224,21 @@ export interface ProblemDetail {
   limit?: number;
   used?: number;
 }
+
+/**
+ * `GroupController.GroupNode` — a node in the AI group tree.
+ *
+ * Recursive on purpose: a subgroup is the same shape as its parent, so the
+ * hierarchy has no built-in depth limit and one screen renders every level.
+ * The server derives the whole tree per request from `knowledgeType` plus the
+ * facets the classify call already extracted, so it costs no Gemini request.
+ */
+export interface KnowledgeGroupResponse {
+  id: string;
+  name: string;
+  description?: string;
+  /** The whole subtree, not `saveIds.length`. */
+  itemCount: number;
+  subgroups: KnowledgeGroupResponse[];
+  saveIds: string[];
+}

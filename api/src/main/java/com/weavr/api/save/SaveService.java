@@ -3,14 +3,17 @@ package com.weavr.api.save;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import com.weavr.api.common.NotFoundException;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobType;
 import com.weavr.api.profile.ProfileService;
 import com.weavr.api.save.dto.CreateSaveRequest;
+import com.weavr.api.save.dto.SaveResponse;
 import com.weavr.api.space.SpaceRole;
 import com.weavr.api.space.SpaceService;
 import org.slf4j.Logger;
@@ -204,6 +207,29 @@ public class SaveService {
                 .filter(save -> spaces.roleOf(userId, save.getSpaceId()).isPresent())
                 .orElseThrow(() -> new NotFoundException("Save not found"));
         return shared;
+    }
+
+    /**
+     * Loads a specific set of the caller's saves, preserving the order asked for.
+     *
+     * <p>Ownership is in the query rather than filtered afterwards, for the same
+     * reason as every other read here: the service layer is the access-control
+     * boundary, so it must not fetch a row it is not allowed to return. There is
+     * deliberately no Space fallback — the only caller is the group tree, which
+     * is built from the user's own saves, so a shared save reached this way
+     * would be one the tree never put there.
+     *
+     * <p>Ordering is restored client-side of the query because {@code IN} does
+     * not preserve it, and the groups it feeds are ordered deliberately.
+     */
+    @Transactional(readOnly = true)
+    public List<SaveResponse> getAllByIds(UUID userId, List<UUID> ids) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, Save> found = saves.findByIdInAndUserId(ids, userId).stream()
+                .collect(Collectors.toMap(Save::getId, save -> save));
+        return ids.stream().map(found::get).filter(Objects::nonNull).map(SaveResponse::from).toList();
     }
 
     /**
