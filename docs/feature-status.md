@@ -26,7 +26,7 @@ recorded here as *not done*.
 |---|---|
 | ✅ **Done** | Implemented and verified against the real thing |
 | 🟠 **Unverified** | Code complete; only mocked tests, or never run for real |
-| 🔵 **Mock-only** | Works in the app, but no backend serves it |
+| 🔵 **Mock-only** | Works in the app, but no backend serves it — *none left as of 2026-08-02* |
 | ⛔ **Not built** | Does not exist |
 
 ---
@@ -44,9 +44,10 @@ recorded here as *not done*.
 | Scan document | ⛔ Not built | Tile disabled |
 | Upload file | ⛔ Not built | Tile disabled |
 | Text note | ⛔ Not built | Tile disabled. The API accepts `sourceType: 'text'`; no UI reaches it |
+| Import | ⛔ Not built | Tile disabled |
 | Idempotent create | ✅ Done | Verified live, including a concurrent-retry race. No caller sends the header yet — it exists for the unbuilt iOS extension |
 
-**Nine of the twelve capture tiles do nothing.** Only Paste Link acts.
+**Seven of the eight capture tiles do nothing.** `IMPLEMENTED` in `CaptureSheet.tsx` holds exactly one id — `link` — and the other seven render visibly disabled rather than silently inert.
 
 ---
 
@@ -191,7 +192,7 @@ renders that screen correctly whether the fix is right or not.
 | Defect | Impact |
 |---|---|
 | `Idempotency-Key` race recovery re-reads inside an aborted transaction | Would fail rather than return the existing save. Never observed — the pre-check catches every non-concurrent replay |
-| `SecurityConfig` accepts ES256 only | Rotating the Supabase key to RSA breaks auth entirely, with a misleading "no matching key(s) found". One line |
+| ~~`SecurityConfig` accepts ES256 only~~ | **Fixed 2026-08-02.** Both RS256 and ES256 are now accepted |
 | Android share worker can hold a stale access token | A silently dropped share, after the user already saw "Saved" |
 | Capture failure after dismissal has no surface | Warns to console; the save never appears. Needs a toast |
 
@@ -216,8 +217,9 @@ around their assumptions is how a week gets thrown away.
    against the ToS posture — if it is auth-walled, *the demo narrative and the
    product pitch both change*, and it is far better to know that on day 1 than
    in week 6.
-3. **`SecurityConfig` RSA line.** One line. Prevents a total-auth outage if the
-   Supabase key is ever rotated, with a failure message that points nowhere.
+3. ~~**`SecurityConfig` RSA line.**~~ **Done 2026-08-02.** Both algorithms are
+   accepted, so a Supabase key rotation to RSA no longer takes auth down with a
+   failure message that points nowhere.
 
 ### Tier 1 — external clocks, start immediately
 
@@ -304,19 +306,26 @@ starts — item 2 in particular can redirect what "the demo" even means.
 
 ## Summary
 
-**21 done, 17 unverified, 4 mock-only, 23 not built.** Under a looser bar the
-first two columns would merge and this would read as 38 of 65 — which is
-roughly how it feels while writing it, and roughly twice what has actually been
-proven.
+**22 done, 17 unverified, 0 mock-only, 23 not built** (62 features).
+
+Under a looser bar the first two columns merge and this reads as 39 of 62 —
+roughly how it feels while writing it, and close to twice what has actually
+been proven.
+
+*Changed since the first count (2026-08-01): AI groups, subgroups and their
+endpoint moved from mock-only to done, so nothing is mock-only any more, and
+the `SecurityConfig` defect is fixed. Two counting errors are also corrected —
+the first revision said "21 done … 38 of 65", which counted the four legend
+rows as features, and the capture section claimed both "nine of twelve" and
+"eleven of twelve" tiles when there are eight, of which one works.*
 
 
 Done and verified: the **backend spine** — schema, auth, saves, the job runner,
 YouTube caption extraction, the Gemini classify call, embeddings, hybrid search,
-the shopping-list Act, Spaces, and the RevenueCat webhook.
+the shopping-list Act, Spaces, AI groups, and the RevenueCat webhook.
 
 Not done: **the entire client half of monetisation**, **the iOS share extension**
-(the core promise), **push notifications**, **AI groups and subgroups**
-(mock-only, nothing generates them), **eleven of twelve capture tiles**, **three
-of four Acts**, and **verification of nearly everything on a device** — plus
-Instagram and TikTok extraction, which is what most users would actually be
-sharing.
+(the core promise), **push notifications**, **seven of eight capture tiles**,
+**three of four Acts**, and **verification of nearly everything on a device** —
+plus Instagram and TikTok extraction, which is what most users would actually
+be sharing.
