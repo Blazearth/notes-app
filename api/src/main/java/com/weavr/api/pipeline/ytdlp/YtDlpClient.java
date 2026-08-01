@@ -50,6 +50,7 @@ public class YtDlpClient {
     @PostConstruct
     void initCookies() {
         String b64 = properties.cookiesBase64();
+        log.info("yt-dlp: cookiesBase64 configured={}", (b64 != null && !b64.isBlank()));
         if (b64 == null || b64.isBlank()) {
             log.info("yt-dlp: no cookies configured (WEAVR_YTDLP_COOKIES_BASE64 not set)");
             return;
