@@ -92,6 +92,13 @@ Adding a method: put it on `Repository`, delegate in `apiRepository`, implement
 it in `mockRepository`. TypeScript fails the build if either side is missing,
 which is why the interface is explicit rather than inferred from the API client.
 
+**`true` never reaches a commit.** `.githooks/pre-commit` flips the staged copy
+to `false` and leaves your working file alone, so you keep developing against
+mock data without thinking about it. Expect `git status` to report
+`config.ts` as modified right after you commit — that is the hook having done
+its job, not a stray edit. Mock mode committed would ship an app that talks to
+nothing and looks perfectly healthy doing it.
+
 ### What "not yet run on a device" means
 
 `tsc --noEmit` is clean and `expo export` bundles. That proves every module

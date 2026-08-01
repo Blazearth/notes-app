@@ -1,0 +1,5 @@
+# Git hooks are shell scripts and must keep LF endings even on Windows, where
+# the default checkout would give them CRLF. A CRLF `#!/bin/sh` fails with a
+# "bad interpreter" error that names a line ending nobody can see, so this is
+# worth pinning rather than debugging later.
+.githooks/* text eol=lf

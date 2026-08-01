@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+# The repository must never contain USE_MOCK_DATA = true.
+#
+# Mock mode is a local development convenience: it bypasses the API, the
+# database and auth entirely. Committed, it is a silent outage — a build from
+# main would ship an app that talks to nothing and looks completely fine doing
+# it, because the mock data is realistic by design. That is the worst kind of
+# bug to ship: no error, no blank screen, just an app quietly disconnected from
+# the backend.
+#
+# So this rewrites the *staged* copy to `false` and leaves the working tree
+# alone. Committing does not interrupt local development — the file on disk
+# still says `true` and the dev server keeps serving mock data. The consequence
+# to know about: `git status` will show `config.ts` as modified straight after a
+# commit. That is expected and it is the whole mechanism, not a mistake.
+#
+# Installed via `git config core.hooksPath .githooks`, which is tracked, so both
+# developers get this without setting anything up.
+
+set -e
+
+FILE="app/src/data/config.ts"
+TRUE_LINE="export const USE_MOCK_DATA = true;"
+FALSE_LINE="export const USE_MOCK_DATA = false;"
+
+# Only act when the file is actually part of this commit. Staging a correction
+# to a file the author did not touch would put an unrelated change in their
+# commit.
+if ! git diff --cached --name-only | grep -qx "$FILE"; then
+  # Still worth shouting if the committed state is already wrong — that means a
+  # commit got in before this hook existed, or from a client that skipped it.
+  if git show "HEAD:$FILE" 2>/dev/null | grep -qF "$TRUE_LINE"; then
+    echo "pre-commit: WARNING — $FILE is committed with mock data ON."
+    echo "            Stage a fix: sed -i 's/= true;/= false;/' $FILE"
+  fi
+  exit 0
+fi
+
+if ! git show ":$FILE" | grep -qF "$TRUE_LINE"; then
+  exit 0
+fi
+
+# Rewrite the blob in the index only. A pipeline rather than a shell variable:
+# `$(...)` strips trailing newlines, which would silently reformat the file.
+HASH=$(git show ":$FILE" | sed "s|^$TRUE_LINE|$FALSE_LINE|" | git hash-object -w --stdin)
+git update-index --cacheinfo "100644,$HASH,$FILE"
+
+echo "pre-commit: flipped USE_MOCK_DATA to false in the commit."
+echo "            Your working copy still says true — mock mode is unaffected."
