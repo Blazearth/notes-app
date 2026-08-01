@@ -35,13 +35,87 @@ const daysAgo = (d: number) => new Date(NOW - d * 86_400_000).toISOString();
 export const MOCK_USER_ID = 'mock-user-0001';
 export const MOCK_USER_NAME = 'Maya';
 
+/**
+ * Shorthand for a leaf: a subgroup with its own items and no children.
+ *
+ * `count` is how many saves it holds. Only a few of them map to real fixture
+ * saves — the rest are a number, because the point of the tree is the shape and
+ * the navigation, and inventing ninety plausible saves to make a badge honest
+ * would be a lot of noise for no additional signal.
+ */
+function leaf(id: string, name: string, count: number, saveIds: string[] = []): KnowledgeGroup {
+  return { id, name, itemCount: count, subgroups: [], saveIds };
+}
+
+/**
+ * A branch, whose count is derived rather than declared.
+ *
+ * Writing the total by hand is the obvious version and it goes stale the first
+ * time a subgroup changes — a parent claiming 38 while its children sum to 41
+ * is exactly the sort of detail that makes an interface feel untrustworthy.
+ */
+function branch(
+  id: string,
+  name: string,
+  subgroups: KnowledgeGroup[],
+  saveIds: string[] = [],
+): KnowledgeGroup {
+  const itemCount = saveIds.length + subgroups.reduce((sum, g) => sum + g.itemCount, 0);
+  return { id, name, itemCount, subgroups, saveIds };
+}
+
+/**
+ * The group tree.
+ *
+ * Two levels deep today, and nothing here or in the UI assumes that: a subgroup
+ * is the same shape as its parent, so making "Japan" contain "Tokyo" and
+ * "Osaka" is a data change with no code behind it.
+ */
 export const MOCK_GROUPS: KnowledgeGroup[] = [
-  { id: 'g-workout', emoji: '🏋️', title: 'Workout', facets: ['Exercises', 'Strength', 'Weekly Plan'], itemCount: 18 },
-  { id: 'g-shopping', emoji: '🛒', title: 'Shopping', facets: ['Groceries', 'Wishlist', 'Home'], itemCount: 24 },
-  { id: 'g-watchlist', emoji: '🎬', title: 'Watchlist', facets: ['Films', 'Series', 'Weekend'], itemCount: 11 },
-  { id: 'g-recipes', emoji: '🍳', title: 'Recipes', facets: ['Japanese', 'Quick', 'Dinner'], itemCount: 32 },
-  { id: 'g-travel', emoji: '✈️', title: 'Travel', facets: ['Japan', 'Kyoto', 'Cafes'], itemCount: 18 },
-  { id: 'g-reading', emoji: '📚', title: 'Reading', facets: ['Articles', 'Long-form', 'Essays'], itemCount: 54 },
+  branch('g-watchlist', 'Watchlist', [
+    leaf('g-watchlist-movies', 'Movies', 14, ['sv-05']),
+    leaf('g-watchlist-tv', 'TV Series', 9),
+    leaf('g-watchlist-anime', 'Anime', 6),
+    leaf('g-watchlist-docs', 'Documentaries', 5),
+    leaf('g-watchlist-youtube', 'YouTube Videos', 4),
+  ]),
+  branch('g-workout', 'Workout', [
+    leaf('g-workout-push', 'Push', 5),
+    leaf('g-workout-pull', 'Pull', 4),
+    leaf('g-workout-legs', 'Legs', 4),
+    leaf('g-workout-cardio', 'Cardio', 3, ['sv-01']),
+    leaf('g-workout-mobility', 'Mobility', 3),
+    leaf('g-workout-nutrition', 'Nutrition', 2),
+  ]),
+  branch('g-shopping', 'Shopping', [
+    leaf('g-shopping-groceries', 'Groceries', 11),
+    leaf('g-shopping-wishlist', 'Wishlist', 6),
+    leaf('g-shopping-electronics', 'Electronics', 4, ['sv-09']),
+    leaf('g-shopping-home', 'Home', 3),
+    leaf('g-shopping-fashion', 'Fashion', 2),
+  ]),
+  branch('g-travel', 'Travel', [
+    leaf('g-travel-japan', 'Japan', 7, ['sv-06']),
+    leaf('g-travel-kyoto', 'Kyoto', 6, ['sv-02']),
+    leaf('g-travel-restaurants', 'Restaurants', 5),
+    leaf('g-travel-cafes', 'Cafes', 4),
+    leaf('g-travel-hotels', 'Hotels', 3),
+    leaf('g-travel-itineraries', 'Itineraries', 2),
+  ]),
+  branch('g-recipes', 'Recipes', [
+    leaf('g-recipes-breakfast', 'Breakfast', 6, ['sv-04']),
+    leaf('g-recipes-lunch', 'Lunch', 5),
+    leaf('g-recipes-dinner', 'Dinner', 12, ['sv-03']),
+    leaf('g-recipes-desserts', 'Desserts', 6),
+    leaf('g-recipes-drinks', 'Drinks', 3),
+  ]),
+  branch('g-reading', 'Reading', [
+    leaf('g-reading-articles', 'Articles', 21),
+    leaf('g-reading-essays', 'Essays', 13),
+    leaf('g-reading-books', 'Books', 9, ['sv-10']),
+    leaf('g-reading-papers', 'Research Papers', 7),
+    leaf('g-reading-newsletters', 'Newsletters', 4),
+  ]),
 ];
 
 /**

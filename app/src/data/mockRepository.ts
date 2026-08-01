@@ -364,7 +364,41 @@ export const mockRepository: Repository = {
   // --------------------------------------------------------------- groups
 
   listGroups: (): Promise<KnowledgeGroup[]> => delay(copy(MOCK_GROUPS)),
+
+  getGroup(id: string): Promise<KnowledgeGroup> {
+    const found = findGroup(MOCK_GROUPS, id);
+    if (!found) throw new ApiError('notFound', 'That group could not be found.', 404);
+    return delay(copy(found));
+  },
+
+  listGroupSaves(id: string, deep = false): Promise<SaveResponse[]> {
+    const group = findGroup(MOCK_GROUPS, id);
+    if (!group) throw new ApiError('notFound', 'That group could not be found.', 404);
+
+    const ids = deep ? collectSaveIds(group) : group.saveIds;
+    // Filtered through the live store rather than the fixture, so a save whose
+    // status has changed since load shows its current state here too.
+    const found = ids
+      .map((saveId) => saves.find((s) => s.id === saveId))
+      .filter((s): s is SaveResponse => s != null);
+    return delay(copy(found));
+  },
 };
+
+/** Depth-first by id. Recursive because the type is. */
+function findGroup(groups: KnowledgeGroup[], id: string): KnowledgeGroup | undefined {
+  for (const group of groups) {
+    if (group.id === id) return group;
+    const nested = findGroup(group.subgroups, id);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+/** Every save id in a subtree, this level included. */
+function collectSaveIds(group: KnowledgeGroup): string[] {
+  return [...group.saveIds, ...group.subgroups.flatMap(collectSaveIds)];
+}
 
 /**
  * Hand-wired stand-ins for vector search, so the `semantic` badge is reachable.

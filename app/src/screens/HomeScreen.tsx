@@ -134,24 +134,33 @@ const GroupCard = React.memo(function GroupCard({
   onPress: () => void;
 }) {
   const { spacing, radius } = useTheme();
+  const preview = subgroupPreview(group);
+
   return (
     <Card padding={0} radius={radius.md} style={{ flexBasis: '48%', flexGrow: 1, overflow: 'hidden' }}>
       <Touchable
         accessibilityRole="button"
-        accessibilityLabel={`${group.title}, ${group.itemCount} items`}
+        accessibilityLabel={`${group.name}, ${group.itemCount} items`}
         onPress={onPress}
         haptic="selection"
         style={{ padding: spacing.md, gap: spacing.xs }}
       >
-        <AppText style={{ fontSize: 20 }}>{group.emoji}</AppText>
+        {/* No emoji, and no icon standing in for one — the visual design system
+            will bring illustrations, and a placeholder glyph now would be a
+            thing to remove rather than a thing to replace. `illustration` and
+            `coverImage` are on the model waiting for it. */}
         <AppText variant="cardTitle" numberOfLines={1}>
-          {group.title}
+          {group.name}
         </AppText>
-        {/* One line, truncated rather than wrapped: a card that grows a second
-            line breaks the grid's rhythm for the sake of a third facet. */}
-        <AppText variant="caption" tone="muted" numberOfLines={1}>
-          {group.facets.join(' • ')}
-        </AppText>
+        {/* The subgroups, not adjectives about the group. "Movies • TV Series •
+            Anime • +2" tells you how the thing is organised and what tapping it
+            will show; "Films • Series • Weekend" told you nothing you could
+            navigate by. */}
+        {preview ? (
+          <AppText variant="caption" tone="muted" numberOfLines={1}>
+            {preview}
+          </AppText>
+        ) : null}
         <AppText variant="caption" tone="faint">
           {group.itemCount} items
         </AppText>
@@ -159,6 +168,22 @@ const GroupCard = React.memo(function GroupCard({
     </Card>
   );
 });
+
+/**
+ * "Movies • TV Series • Anime • +2".
+ *
+ * Three names then a remainder. Four fits on a wide screen and truncates
+ * mid-word on a narrow one, and a clipped subgroup name reads as a rendering
+ * fault where an explicit `+2` reads as a fact.
+ */
+const PREVIEW_LIMIT = 3;
+
+function subgroupPreview(group: KnowledgeGroup): string | null {
+  if (group.subgroups.length === 0) return null;
+  const shown = group.subgroups.slice(0, PREVIEW_LIMIT).map((s) => s.name);
+  const rest = group.subgroups.length - shown.length;
+  return [...shown, ...(rest > 0 ? [`+${rest}`] : [])].join(' • ');
+}
 
 /**
  * The live feed section.
@@ -453,7 +478,7 @@ export function HomeScreen() {
               <GroupCard
                 key={group.id}
                 group={group}
-                onPress={() => router.push('/search')}
+                onPress={() => router.push({ pathname: '/group/[id]', params: { id: group.id } })}
               />
             ))}
           </View>
