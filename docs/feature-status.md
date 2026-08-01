@@ -197,6 +197,109 @@ renders that screen correctly whether the fix is right or not.
 
 ---
 
+## Build order
+
+Ordered by what happens if it is done late, not by size. Two developers, so the
+tiers overlap — see the note at the end.
+
+### Tier 0 — do first: hours of work, and each one can change the plan
+
+Cheap tests with the highest information per minute. Doing these after building
+around their assumptions is how a week gets thrown away.
+
+1. **Verify the real Gemini RPD** in AI Studio. ~5 minutes. 250 vs 500 halves
+   the app's daily capacity and moves the paid-tier switch earlier. Every
+   capacity decision downstream rests on a number nobody has read.
+2. **Run a real Instagram Reel and a real TikTok through the cascade.** Under an
+   hour, and the single highest-information test available. Instagram
+   increasingly requires authentication, and cookies risk a ban and sit badly
+   against the ToS posture — if it is auth-walled, *the demo narrative and the
+   product pitch both change*, and it is far better to know that on day 1 than
+   in week 6.
+3. **`SecurityConfig` RSA line.** One line. Prevents a total-auth outage if the
+   Supabase key is ever rotated, with a failure message that points nowhere.
+
+### Tier 1 — external clocks, start immediately
+
+Nothing here is code, and none of it can be compressed later.
+
+4. **Apple Developer enrolment** and App Store Connect records.
+5. **Google Play records.**
+6. **RevenueCat dashboard**: products, entitlements, offerings.
+
+These gate TestFlight and sandbox purchases, which gate the submission.
+
+### Tier 2 — submission-blocking
+
+7. **`react-native-purchases` + paywall + a real sandbox purchase.** The server
+   half is done and verified; the client half does not exist. This is a
+   RevenueCat hackathon — without it there is no valid entry.
+8. **Deployment.** The image must install `yt-dlp`, `ffmpeg`, `tesseract` *and*
+   `tesseract-ocr-eng`; a plain JRE has none, and missing language data reads
+   every frame as nothing, silently. Plus the keep-warm cron — Supabase pauses
+   after ~7 days idle, and a paused project during judging is a demo-day
+   failure.
+
+### Tier 3 — the core promise, and the highest technical risk
+
+9. **Move the session to a shared Keychain**, storing the *refresh* token. A
+   prerequisite for the next item, and flagged as painful to retrofit — which is
+   the argument for doing it before more is built on AsyncStorage.
+10. **The iOS share extension.** Silent capture is the entire pitch; without it
+    the product is a bookmarking app you have to open. Also the riskiest thing
+    remaining, which is a second reason to start it early rather than late.
+11. **Push notifications.** Sounds like polish, is not: the app deliberately
+    does not poll for a save reaching `ready` *because* the notification is
+    meant to be that signal. Without it every save sits on "Processing" until
+    the user pulls to refresh.
+
+### Tier 4 — make the app real
+
+12. **A device pass over every screen.** Library, Spaces, save detail, search,
+    groups, the Settings morph, the capture sheet. All of it typechecks,
+    bundles and renders in a browser — the exact combination that missed a
+    missing navigation bar.
+13. **Android silent capture on a device.** Built, never executed.
+14. **Screenshot / photo capture with Tier 0 on-device OCR.** The highest-value
+    capture tile after links: it removes an entire category of saves from the
+    expensive vision path, and screenshots are a primary way people save things.
+
+### Tier 5 — the features that currently look done and are shells
+
+15. **AI groups: a generator, an endpoint, persistence.** The model, cards,
+    previews and detail screen all exist and serve nothing — with the real
+    backend the section does not render at all. Subgroups included.
+16. **Weekly digest endpoint and generator.** The last sample content in the
+    app. Budget it explicitly: digests scale with user count and can eat a
+    day's save capacity.
+
+### Tier 6 — quality, and the guards against silent failure
+
+17. **The 30-Reel eval set**, and thresholds measured from it rather than
+    guessed. Both failure directions are silent today.
+18. **Live-verify ASR, link/PDF, enrichment and duplicate detection.** Four
+    features whose only evidence is mocked tests.
+19. **Testcontainers**, and the `Idempotency-Key` race fix that needs a test
+    which actually races two requests.
+20. **A toast surface** for failures raised after a sheet dismisses, and a
+    refresh-token exchange inside the Android share worker.
+
+### Tier 7 — scope beyond a working MVP
+
+21. Workout → routine, restaurant → navigate/vote, and the other Acts.
+22. Spaces live two-device sync (Realtime).
+23. The remaining capture tiles — voice memo, scan, upload, text note.
+24. AI Project Builder.
+
+### Running two people against this
+
+Tiers 2 and 3 are the natural split: one developer on monetisation and
+deployment, one on the Keychain move and the iOS extension. They share no files.
+Tier 0 is a morning's work for one person and should happen before either
+starts — item 2 in particular can redirect what "the demo" even means.
+
+---
+
 ## Summary
 
 **21 done, 17 unverified, 4 mock-only, 23 not built.** Under a looser bar the
