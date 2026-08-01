@@ -1,6 +1,6 @@
 import { Redirect, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -121,6 +121,27 @@ export default function TabShell() {
     };
   });
 
+  /**
+   * The nav layer's half of the same recede.
+   *
+   * The nav used to be a child of the shell above and so was carried by that
+   * one transform. It is a sibling now (see the render below), which means it
+   * needs its own — but it must be the *same* scale, applied to a layer that
+   * fills the same rectangle. A transform scales about the view's own centre,
+   * so a full-screen layer and the full-screen shell share an origin and the
+   * two moves stay indistinguishable from the single one they replaced.
+   *
+   * No `borderRadius` here: it exists on the shell to round the receding page,
+   * and this layer paints nothing of its own to round.
+   */
+  const navLayerStyle = useAnimatedStyle(() => {
+    if (reduced) return {};
+    const progress = interpolate(morphProgress.value, [0, 1], [0, 1], Extrapolation.CLAMP);
+    return {
+      transform: [{ scale: interpolate(progress, [0, 1], [1, SHELL_RECEDE_SCALE]) }],
+    };
+  });
+
   if (!session) return <Redirect href="/sign-in" />;
 
   const select = (key: string) => {
@@ -148,7 +169,31 @@ export default function TabShell() {
             </TabPane>
           ) : null}
         </View>
+      </Animated.View>
 
+      {/*
+        The nav is a sibling of the shell, not a child of it.
+
+        It was a child, and on the first device run it did not paint at all —
+        neither the pill nor the capture button, while the screen behind them
+        rendered fine. What is unique about it is the box it sat in: the shell
+        wrapper is the app's only `overflow: 'hidden'` container, it carries a
+        Reanimated-driven `borderRadius`, and its other child is a stack of
+        absolutely positioned panes. An absolutely positioned overlay inside
+        that combination is the one thing on this screen with no working
+        precedent elsewhere in the app.
+
+        Hoisting it out removes the whole class of problem rather than one
+        member of it: the nav is now clipped by nothing, and it is the last
+        child of the root view, so it cannot lose a draw-order argument to the
+        panes either. `absoluteFill` reproduces the rectangle it used to
+        inherit, `box-none` keeps taps falling through to the feed everywhere
+        the nav itself is not, and `navLayerStyle` carries the same recede.
+      */}
+      <Animated.View
+        pointerEvents="box-none"
+        style={[StyleSheet.absoluteFill, navLayerStyle]}
+      >
         <BottomNav
           items={TABS}
           activeKey={active}

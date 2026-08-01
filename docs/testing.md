@@ -10,8 +10,11 @@ from is the difference between a useful status and a misleading one.
 That is not an abstract worry. The extraction cascade had 27 passing tests and
 three real defects, and the entire gap between those two numbers was that the
 external binary had been mocked — see [what running the real binary
-found](#what-running-the-real-binary-found). The app is currently in the same
-position, one level lower: it typechecks and bundles, and nothing has run.
+found](#what-running-the-real-binary-found). The app proved the same point one
+level lower on 2026-08-01: it typechecked, it bundled, it mounted clean in a
+browser dev server — and the first time it opened on a real Android phone the
+entire bottom navigation failed to paint, so there was no way to leave the Home
+screen. Three green checks in a row, none of which could see it.
 
 ---
 

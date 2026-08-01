@@ -660,12 +660,17 @@ HTTP ping to a static endpoint.
 
 **Blocking the Phase 1 exit**
 
-- **Nothing in the app has run on a device.** The Expo app typechecks and
-  bundles; no dev build exists, so no screen has been seen rendered and no
-  request has left a device. Sign-in, the feed and save creation are all written
-  but unproven — `npx expo run:android` is the next real test, and it is the
-  remaining Phase 1 exit criterion alongside the store records. This machine
-  has no Android SDK, so it cannot be the one that runs it.
+- **The app ran on an Android device for the first time on 2026-08-01, and most
+  of it is still unproven.** What that run did prove: sign-in works, Home
+  renders, and the feed fetches real saves from the live API over the network.
+  What it immediately disproved: the bottom nav painted nothing — neither the
+  floating pill nor the capture FAB — leaving no way to reach Library, Spaces
+  or Capture. The nav has been hoisted out of the `overflow: 'hidden'` shell
+  wrapper that the Settings morph introduced, but **that fix is unverified**:
+  this machine has no Android SDK or emulator, so it was reasoned by
+  elimination rather than reproduced. Everything past Home's feed — Library,
+  Spaces, save detail, search, capture, the morph — remains written but
+  unwatched.
 
 **Correctness**
 

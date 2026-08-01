@@ -50,9 +50,10 @@ so restart the bundler after changing them.
 | Theme system (palettes, accents, AMOLED, fonts, covers) | **real** — 78 palette combinations, all audited for WCAG AA |
 | Preferences (persisted to AsyncStorage) | **real** |
 | Appearance settings | **real** — every control writes through and takes effect immediately |
-| Auth (Supabase email/password) | **real, not yet run on a device** |
-| Home feed ← `GET /v1/saves` | **real, not yet run on a device** — loading / error / empty / per-status states |
-| Capture → `POST /v1/saves` | **real, not yet run on a device** — the Paste Link tile only |
+| Auth (Supabase email/password) | **real, works on a device** — sign-in succeeded on Android on 2026-08-01 |
+| Home feed ← `GET /v1/saves` | **real, works on a device** — loading / error / empty / per-status states; seen rendering live saves on Android |
+| Bottom navigation | **real, was broken on the first device run** — painted nothing on Android; fixed by hoisting it out of the shell wrapper, and that fix is **unverified** |
+| Capture → `POST /v1/saves` | **real, not yet run on a device** — the Paste Link tile only, and the nav bug blocked reaching it |
 | Library / Spaces / Continue / digest | **sample content** — these need features that do not exist yet |
 | Other capture tiles | **inert** — visibly disabled until their capture surfaces exist |
 | Silent capture — Android | **built, never run on a device** — `ShareReceiverActivity` + `ShareUploadWorker` via a config plugin; no Android SDK on this machine to build or run it |
@@ -68,9 +69,17 @@ collaboration features that no endpoint serves yet.
 
 `tsc --noEmit` is clean and `expo export` bundles. That proves every module
 resolves and the types line up with the Java DTOs. It proves **nothing** about
-runtime: no screen has been rendered, no request has left a device, and sign-in
-has never succeeded. There is no dev build yet. Until `npx expo run:android`
-says otherwise, treat all three "real" API rows above as written-but-unproven.
+runtime, and on 2026-08-01 a device demonstrated exactly that: the app opened,
+signed in and rendered a live feed, and the entire bottom navigation — the
+floating pill *and* the capture FAB — failed to paint, which three green checks
+in a row (typecheck, bundle, browser dev server) had all been blind to.
+
+So the levels are now: Home's feed and sign-in are **seen working**; the nav fix
+is **written and unverified** (no emulator here, so it was reasoned by
+elimination, not reproduced); everything else in the table is still
+written-but-unwatched. If the nav is still missing, flip Appearance →
+Navigation → Docked: `floating` and `normal` share the absolute-overlay root and
+share nothing else, so which of them fails localises the fault in one tap.
 
 The most likely first failures, in order: `EXPO_PUBLIC_API_BASE_URL` pointing
 somewhere the device cannot reach, and a new account whose email has not been
