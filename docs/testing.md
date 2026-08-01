@@ -16,6 +16,37 @@ browser dev server — and the first time it opened on a real Android phone the
 entire bottom navigation failed to paint, so there was no way to leave the Home
 screen. Three green checks in a row, none of which could see it.
 
+## Looking at a screen without a device
+
+Two rendering bugs in one session were diagnosed with this, after reasoning
+about the code got the first one **wrong**. It costs about a minute:
+
+```bash
+cd app && BROWSER=none npx expo start --web --port 8082   # 8081 is usually taken
+CHROME="/c/Program Files/Google/Chrome/Application/chrome.exe"
+"$CHROME" --headless=new --disable-gpu --hide-scrollbars \
+  --window-size=412,915 --virtual-time-budget=45000 \
+  --screenshot=shot.png "http://localhost:8082/capture"
+```
+
+Then `Read` the PNG. Four things that are not obvious:
+
+- **Add `--force-prefers-reduced-motion` to see the settled layout.** The
+  virtual clock does not settle Reanimated *springs*, so a plain screenshot
+  catches every animated screen mid-flight and a mid-flight screen looks
+  broken. That flag makes `useReducedMotion()` true, which skips springs and
+  entrance animations, so the final layout renders immediately. Comparing the
+  two is what separates "the layout is wrong" from "the entrance never
+  finished" — a distinction that decides the fix.
+- **Most routes redirect to sign-in.** A throwaway route under `app/app/` that
+  mounts the component with fake props reaches it without a session; delete it
+  afterwards.
+- **Use a spare port.** 8081 is normally serving a real device, and killing it
+  interrupts whoever is testing on a phone.
+- **It cannot see anything platform-native.** Both bugs it caught were layout
+  and paint. Android view clipping, native draw order and gesture handling are
+  invisible to it, so a green screenshot is not a device.
+
 ---
 
 ## What each layer proves
@@ -26,6 +57,7 @@ screen. Three green checks in a row, none of which could see it.
 | `./mvnw clean verify` | The above, plus the jar builds | Anything about the database |
 | Booting the API | Context wiring, every bean, Flyway, both pooler URLs | That endpoints behave correctly |
 | `curl` against a running API | Real request/response shapes and status codes | Anything on a device |
+| Headless Chrome against `expo start --web` | That a screen **lays out and paints** — the first check here that can see a rendering bug at all | Anything platform-native: Android view clipping, draw order, native gesture handling |
 | `WEAVR_LIVE_YTDLP=1 ./mvnw test -Dtest=YtDlpLiveTest` | **The real binary.** That yt-dlp accepts our argument lists, that the JSON field names exist, and that subtitle files land where we look | Any platform except the one you passed |
 | `WEAVR_LIVE_OCR=1 ./mvnw test -Dtest=OcrLiveTest` | **The real ffmpeg and tesseract.** That the filter graph selects frames at all, that tesseract accepts our flags and TSV columns, and that a clean card clears the gate while a textless clip does not | Anything about real-world visual noise — that is the eval set's job |
 | `tsc --noEmit` (app) | Types line up, including against the Java DTOs | That a single screen renders |

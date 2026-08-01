@@ -172,27 +172,33 @@ export default function TabShell() {
       </Animated.View>
 
       {/*
-        The nav is a sibling of the shell, not a child of it.
+        The nav is a sibling of the shell with an explicit `zIndex`, and both
+        halves of that are load-bearing.
 
-        It was a child, and on the first device run it did not paint at all —
-        neither the pill nor the capture button, while the screen behind them
-        rendered fine. What is unique about it is the box it sat in: the shell
-        wrapper is the app's only `overflow: 'hidden'` container, it carries a
-        Reanimated-driven `borderRadius`, and its other child is a stack of
-        absolutely positioned panes. An absolutely positioned overlay inside
-        that combination is the one thing on this screen with no working
-        precedent elsewhere in the app.
+        On the first device run it did not paint at all — neither the pill nor
+        the capture button — while the screen behind them rendered fine. The
+        cause is `TabPane`'s `zIndex: 1` above: painting order puts *any*
+        positive z-index above an element that has none, whatever the source
+        order, and the panes' container is a plain view that does not create a
+        stacking context to keep that number to itself. So the active pane, an
+        opaque full-bleed surface, was painted over a nav that had no z-index
+        to answer with. Being later in the tree bought it nothing.
 
-        Hoisting it out removes the whole class of problem rather than one
-        member of it: the nav is now clipped by nothing, and it is the last
-        child of the root view, so it cannot lose a draw-order argument to the
-        panes either. `absoluteFill` reproduces the rectangle it used to
-        inherit, `box-none` keeps taps falling through to the feed everywhere
-        the nav itself is not, and `navLayerStyle` carries the same recede.
+        Hoisting the nav into its own layer is what makes the two comparable at
+        all — the shell's transform does establish a stacking context, so the
+        pane's z-index is now contained by it. But that containment is a
+        property of how transforms behave on web, so it is not something to
+        rely on: `zIndex: 2` states the intent directly and holds wherever the
+        containment does not. It has to stay above `TabPane`'s 1.
+
+        `absoluteFill` reproduces the rectangle the nav used to inherit as a
+        child, `box-none` keeps taps falling through to the feed everywhere the
+        nav itself is not, and `navLayerStyle` carries the same recede so the
+        Settings morph looks unchanged.
       */}
       <Animated.View
         pointerEvents="box-none"
-        style={[StyleSheet.absoluteFill, navLayerStyle]}
+        style={[StyleSheet.absoluteFill, { zIndex: 2 }, navLayerStyle]}
       >
         <BottomNav
           items={TABS}

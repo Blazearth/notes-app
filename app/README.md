@@ -52,8 +52,9 @@ so restart the bundler after changing them.
 | Appearance settings | **real** — every control writes through and takes effect immediately |
 | Auth (Supabase email/password) | **real, works on a device** — sign-in succeeded on Android on 2026-08-01 |
 | Home feed ← `GET /v1/saves` | **real, works on a device** — loading / error / empty / per-status states; seen rendering live saves on Android |
-| Bottom navigation | **real, was broken on the first device run** — painted nothing on Android; fixed by hoisting it out of the shell wrapper, and that fix is **unverified** |
-| Capture → `POST /v1/saves` | **real, not yet run on a device** — the Paste Link tile only, and the nav bug blocked reaching it |
+| Bottom navigation | **real, works on a device** — painted nothing on the first device run (`TabPane`'s `zIndex` beat a nav that had none); fixed with an explicit `zIndex` on a hoisted nav layer, confirmed in Chrome and on the phone |
+| Capture sheet | **real, works on a device** — the tiles' `entering` layout animation left them stuck and collapsed the rows on Android; now a plain animated style |
+| Capture → `POST /v1/saves` | **real, not yet run on a device** — the sheet opens, but no link has actually been posted from a phone |
 | Library / Spaces / Continue / digest | **sample content** — these need features that do not exist yet |
 | Other capture tiles | **inert** — visibly disabled until their capture surfaces exist |
 | Silent capture — Android | **built, never run on a device** — `ShareReceiverActivity` + `ShareUploadWorker` via a config plugin; no Android SDK on this machine to build or run it |
@@ -74,12 +75,16 @@ signed in and rendered a live feed, and the entire bottom navigation — the
 floating pill *and* the capture FAB — failed to paint, which three green checks
 in a row (typecheck, bundle, browser dev server) had all been blind to.
 
-So the levels are now: Home's feed and sign-in are **seen working**; the nav fix
-is **written and unverified** (no emulator here, so it was reasoned by
-elimination, not reproduced); everything else in the table is still
-written-but-unwatched. If the nav is still missing, flip Appearance →
-Navigation → Docked: `floating` and `normal` share the absolute-overlay root and
-share nothing else, so which of them fails localises the fault in one tap.
+So the levels are now: sign-in, the Home feed, the bottom nav and the Capture
+sheet are **seen working on a phone**; everything else in the table is still
+written-but-unwatched.
+
+Both rendering bugs were diagnosed by pointing headless Chrome at
+`expo start --web` and reading the PNG — after reasoning about the code got the
+first one wrong. That recipe, including the `--force-prefers-reduced-motion`
+trick that separates a broken layout from an entrance that never finished, is
+in [docs/testing.md](../docs/testing.md#looking-at-a-screen-without-a-device).
+Reach for it before reasoning about a rendering bug, not after.
 
 The most likely first failures, in order: `EXPO_PUBLIC_API_BASE_URL` pointing
 somewhere the device cannot reach, and a new account whose email has not been

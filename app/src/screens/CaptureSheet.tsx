@@ -4,14 +4,15 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, View } from 'react-native';
 import Animated, {
-  FadeInDown,
   interpolate,
   runOnJS,
   useAnimatedProps,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
+  withDelay,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -38,6 +39,9 @@ const BACKDROP_BLUR_INTENSITY = 20;
 const BACKDROP_SCRIM_OPACITY = 0.16;
 /** Off-screen starting offset for the panel — larger than any real sheet height so it always begins fully hidden below the fold. */
 const PANEL_ENTER_OFFSET = 420;
+/** How far a tile rises into place. Small — this is a garnish on a sheet that is already moving. */
+const TILE_ENTER_OFFSET = 12;
+const TILE_ENTER_MS = 260;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const rows: T[][] = [];
@@ -67,12 +71,46 @@ function OptionTile({
   onPress: () => void;
 }) {
   const { palette, radius, spacing, layout, alpha } = useTheme();
+  const reduced = useReducedMotion();
   const enabled = IMPLEMENTED.has(option.id);
   const tint =
     option.tint === 'accent' ? palette.accent : option.tint === 'warm' ? palette.warning : palette.textMuted;
 
+  /**
+   * A plain animated style, deliberately not `entering={FadeInDown…}`.
+   *
+   * The layout-animation version shipped and broke on Android: the tiles were
+   * stuck at the entrance's first frame — faint and shifted down over the
+   * footer text — and the rows they sit in had collapsed to no height, so the
+   * footer rode up under the subtitle. The same screen's settled layout is
+   * correct in a browser, so this is an entrance that never completed rather
+   * than a layout that was wrong.
+   *
+   * The distinction that matters for the fix: an entering animation is handled
+   * by the layout-animation manager and can therefore affect the view's *box*,
+   * while an animated style only paints. Driving opacity and translate by hand
+   * cannot collapse a row however it is interrupted, so this is safe whatever
+   * the precise cause turned out to be. `Reveal` still uses `entering` and is
+   * fine on Home — this is not a blanket verdict on layout animations, only on
+   * using one here, on a flexed child inside a parent that is itself animating.
+   */
+  const progress = useSharedValue(reduced ? 1 : 0);
+
+  useEffect(() => {
+    if (reduced) {
+      progress.value = 1;
+      return;
+    }
+    progress.value = withDelay(staggerDelay(index), withTiming(1, { duration: TILE_ENTER_MS }));
+  }, [index, reduced, progress]);
+
+  const enterStyle = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [{ translateY: (1 - progress.value) * TILE_ENTER_OFFSET }],
+  }));
+
   return (
-    <Animated.View style={{ flex: 1 }} entering={FadeInDown.delay(staggerDelay(index)).duration(260)}>
+    <Animated.View style={[{ flex: 1 }, enterStyle]}>
       <Touchable
         accessibilityRole="button"
         accessibilityLabel={option.label}

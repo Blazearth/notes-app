@@ -663,14 +663,17 @@ HTTP ping to a static endpoint.
 - **The app ran on an Android device for the first time on 2026-08-01, and most
   of it is still unproven.** What that run did prove: sign-in works, Home
   renders, and the feed fetches real saves from the live API over the network.
-  What it immediately disproved: the bottom nav painted nothing — neither the
-  floating pill nor the capture FAB — leaving no way to reach Library, Spaces
-  or Capture. The nav has been hoisted out of the `overflow: 'hidden'` shell
-  wrapper that the Settings morph introduced, but **that fix is unverified**:
-  this machine has no Android SDK or emulator, so it was reasoned by
-  elimination rather than reproduced. Everything past Home's feed — Library,
-  Spaces, save detail, search, capture, the morph — remains written but
-  unwatched.
+  What it immediately disproved, twice: the bottom nav painted nothing —
+  neither the floating pill nor the capture FAB — leaving no way to reach
+  Library, Spaces or Capture; and once the nav worked, the Capture sheet's
+  tiles were stuck faint and shifted down over the footer, their rows collapsed
+  to no height. Both are fixed and confirmed on the phone. Both were diagnosed
+  by pointing headless Chrome at `expo start --web` and reading the PNG, after
+  reasoning about the code got the first one wrong — the recipe is in
+  [docs/testing.md](docs/testing.md#looking-at-a-screen-without-a-device).
+  Everything past Home's feed, the nav and the Capture sheet — Library, Spaces,
+  save detail, search, the morph — remains written but unwatched, and no link
+  has yet been posted from a phone.
 
 **Correctness**
 
