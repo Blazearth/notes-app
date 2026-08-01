@@ -114,6 +114,7 @@ app/                    expo-router routes — thin wrappers and guards only
   index.tsx             the tab shell (Home / Library / Spaces + FAB)
   sign-in.tsx           redirects to / when a session exists
   capture.tsx           the Capture sheet, as a transparent modal
+  settings.tsx          Settings, presented as a morph out of the Home gear
   appearance.tsx        Appearance settings
 src/
   api/
@@ -129,6 +130,11 @@ src/
     typography.ts       the type scale, per font choice
     covers.ts           the nine cover gradients
     ThemeProvider.tsx   preferences + OS scheme → Theme
+  motion/
+    haptics.ts          the `haptics` preference gate around expo-haptics
+    morph.ts            shared state for the Home ↔ Settings container transform
+    MorphPresentation.tsx  the morph itself: surface, backdrop, collapse
+                        (the springs and press depths live in theme/motion.ts)
   prefs/                AsyncStorage-backed preference store
   share/
     nativeShareConfig.ts mirrors session + "open app when saving" to a file
@@ -226,6 +232,45 @@ font-loading race. Swapping in a real icon set later is a change to one file.
 **The tab shell is state, not routes.** Home / Library / Spaces are kept mounted
 once visited so switching preserves scroll position; they render lazily. Capture,
 Appearance and sign-in are real routes.
+
+**Settings is a container transform, not a push.** The surface grows out of the
+gear on Home and collapses back into it —
+[src/motion/MorphPresentation.tsx](src/motion/MorphPresentation.tsx), with the
+shared state in [src/motion/morph.ts](src/motion/morph.ts). Four things about it
+are load-bearing rather than stylistic:
+
+- **The stack does no transition of its own.** The route is a `transparentModal`
+  with `animation: 'none'` and `gestureEnabled: false`. A stack animation cannot
+  be played backwards on demand, so a push/pop pair *always* cuts at the moment
+  of navigation however well the two halves are matched; owning both directions
+  is the only way the collapse can mirror the expansion. The swipe-back gesture
+  is off for the same reason — it would pop the route and skip the collapse.
+- **The origin is measured at press time, and navigation waits for it.**
+  `measureInWindow` is async and the presented screen reads the rectangle in its
+  first animated style, so navigating first means the very first open expands
+  from a stale rectangle. The Home header also scrolls, so a value cached at
+  layout is wrong the moment the user scrolls. The anchor needs
+  `collapsable={false}`: Android flattens views that draw nothing out of the
+  native hierarchy, and a flattened view has no position to measure.
+- **One shared value drives both screens.** The surface's geometry, radius and
+  colour, the backdrop blur, the content fade *and* the shell receding behind it
+  are one `morphProgress` sampled in different places, so they cannot drift. It
+  lives at module scope because its two consumers are on opposite sides of a
+  navigation boundary — the route below stays mounted but is not a parent, so no
+  component could own it for both. It is read inside worklets, never as a prop.
+- **Only the surface animates layout.** `left`/`top`/`width`/`height` change on
+  one childless frame; the screen inside is a fixed-size subtree moved with
+  `transform` and faded with `opacity`, counter-translated so it holds still
+  while the aperture opens over it. That is what keeps the cost of the morph
+  independent of how complex the screen is — and what makes it read as a window
+  opening rather than a page flying in.
+
+The spring (`Spring.morph`) is the loosest in [motion.ts](src/theme/motion.ts) at
+ζ ≈ 0.71, so it overshoots a few percent and settles. Position and size are
+interpolated *unclamped* so that overshoot is felt; radius and colour are clamped,
+because a negative corner radius is not a shape. Reduced Motion skips the whole
+thing — including the shell recede, since a snap is the jolt the setting exists
+to avoid.
 
 **Enums are lower-case on the wire.** Every API enum implements `DbEnum`, whose
 `db()` carries `@JsonValue` — so it is `"processing"`, not `"PROCESSING"`. Getting

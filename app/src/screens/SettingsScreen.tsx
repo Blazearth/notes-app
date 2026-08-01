@@ -12,6 +12,7 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { SettingLink, SettingSwitch } from '@/components/SettingRow';
 import { Touchable } from '@/components/Touchable';
+import { useMorphDismiss } from '@/motion/MorphPresentation';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import type { ThemeMode } from '@/prefs/types';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -136,6 +137,12 @@ export function SettingsScreen() {
   const { session, signOut } = useSession();
   const router = useRouter();
 
+  // Leaving has to collapse the surface back into the gear on Home, not pop the
+  // route out from under it. `null` when this screen is reached some other way
+  // than the morph — a deep link — where an ordinary back is the right answer.
+  const morphDismiss = useMorphDismiss();
+  const goBack = morphDismiss ?? (() => router.back());
+
   // Not backed by an endpoint yet — mirrors the mockup's toggled-on defaults.
   const [pushNotifications, setPushNotifications] = useState(true);
   const [weeklyDigestEmail, setWeeklyDigestEmail] = useState(true);
@@ -178,7 +185,7 @@ export function SettingsScreen() {
         <Touchable
           accessibilityRole="button"
           accessibilityLabel="Back"
-          onPress={() => router.back()}
+          onPress={goBack}
           weight="tile"
           style={{
             width: 36,

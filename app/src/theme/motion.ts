@@ -33,6 +33,19 @@ export const Spring = {
    * rather than as imprecision.
    */
   enter: { damping: 22, stiffness: 190, mass: 1 },
+  /**
+   * A surface growing out of the control that opened it — the Settings morph.
+   *
+   * Deliberately the loosest spring in the set: ζ ≈ 0.71, so it overshoots by a
+   * few percent and settles rather than arriving flat. That overshoot is the
+   * whole point at this size — a full-screen surface travelling several hundred
+   * points on a critically damped curve reads as a mechanical wipe, where the
+   * same distance with a little give reads as weight.
+   *
+   * The *same* config drives the collapse, so dismissal is the entrance played
+   * backwards rather than a second, differently-tuned animation.
+   */
+  morph: { damping: 18, stiffness: 160, mass: 1 },
 } as const;
 
 /**

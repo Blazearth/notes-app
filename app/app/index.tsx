@@ -2,6 +2,8 @@ import { Redirect, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import Animated, {
+  Extrapolation,
+  interpolate,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -10,9 +12,11 @@ import Animated, {
 
 import { useSession } from '@/auth/SessionProvider';
 import { BottomNav, type NavItem } from '@/components/BottomNav';
+import { morphProgress } from '@/motion/morph';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { LibraryScreen } from '@/screens/LibraryScreen';
 import { SpacesScreen } from '@/screens/SpacesScreen';
+import { Radius } from '@/theme/tokens';
 import { useTheme } from '@/theme/ThemeProvider';
 
 const TABS: NavItem[] = [
@@ -23,6 +27,16 @@ const TABS: NavItem[] = [
 
 /** Cross-fade duration. Short — this is a tab switch, not a page load. */
 const FADE_MS = 170;
+
+/**
+ * How far the shell recedes while Settings expands over it.
+ *
+ * Small on purpose. The blur carries the separation; this only has to say that
+ * the two surfaces are on different planes and that one of them is *behind*.
+ * Any further and the shell reads as a shrinking screenshot rather than as the
+ * app still being there, one layer down.
+ */
+const SHELL_RECEDE_SCALE = 0.94;
 
 /**
  * One tab's content, stacked with its siblings and faded in when selected.
@@ -80,8 +94,32 @@ export default function TabShell() {
   const { palette } = useTheme();
   const { session } = useSession();
   const router = useRouter();
+  const reduced = useReducedMotion();
   const [active, setActive] = useState('home');
   const [visited, setVisited] = useState<Record<string, boolean>>({ home: true });
+
+  /**
+   * The shell's half of the Settings morph.
+   *
+   * Settings is a transparent modal, so this screen stays mounted and visible
+   * underneath it — and a surface expanding over a shell that sits perfectly
+   * still reads as a page covering another page. Receding on the *same* shared
+   * value is what turns two screens into one interface with a front and a back.
+   *
+   * It is read from a module-scope shared value rather than passed down because
+   * the value's owner is on the other side of a navigation boundary; see
+   * `src/motion/morph.ts`.
+   */
+  const shellStyle = useAnimatedStyle(() => {
+    // Reduced Motion snaps the morph to its end state, and a snap is exactly the
+    // jolt the setting exists to avoid. The shell simply stays put.
+    if (reduced) return {};
+    const progress = interpolate(morphProgress.value, [0, 1], [0, 1], Extrapolation.CLAMP);
+    return {
+      transform: [{ scale: interpolate(progress, [0, 1], [1, SHELL_RECEDE_SCALE]) }],
+      borderRadius: interpolate(progress, [0, 1], [0, Radius.xl]),
+    };
+  });
 
   if (!session) return <Redirect href="/sign-in" />;
 
@@ -92,30 +130,32 @@ export default function TabShell() {
 
   return (
     <View style={{ flex: 1, backgroundColor: palette.background }}>
-      <View style={{ flex: 1 }}>
-        {visited.home ? (
-          <TabPane active={active === 'home'}>
-            <HomeScreen />
-          </TabPane>
-        ) : null}
-        {visited.library ? (
-          <TabPane active={active === 'library'}>
-            <LibraryScreen />
-          </TabPane>
-        ) : null}
-        {visited.spaces ? (
-          <TabPane active={active === 'spaces'}>
-            <SpacesScreen />
-          </TabPane>
-        ) : null}
-      </View>
+      <Animated.View style={[{ flex: 1, overflow: 'hidden' }, shellStyle]}>
+        <View style={{ flex: 1 }}>
+          {visited.home ? (
+            <TabPane active={active === 'home'}>
+              <HomeScreen />
+            </TabPane>
+          ) : null}
+          {visited.library ? (
+            <TabPane active={active === 'library'}>
+              <LibraryScreen />
+            </TabPane>
+          ) : null}
+          {visited.spaces ? (
+            <TabPane active={active === 'spaces'}>
+              <SpacesScreen />
+            </TabPane>
+          ) : null}
+        </View>
 
-      <BottomNav
-        items={TABS}
-        activeKey={active}
-        onSelect={select}
-        onCapture={() => router.push('/capture')}
-      />
+        <BottomNav
+          items={TABS}
+          activeKey={active}
+          onSelect={select}
+          onCapture={() => router.push('/capture')}
+        />
+      </Animated.View>
     </View>
   );
 }

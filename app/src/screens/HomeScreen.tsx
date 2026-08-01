@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import { listSavesByLifecycle, listSpaces } from '@/api/client';
@@ -14,6 +14,7 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { GREETING_NAME, WEEKLY_DIGEST } from '@/data/sampleContent';
+import { morphFrom } from '@/motion/morph';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
@@ -192,6 +193,12 @@ export function HomeScreen() {
   const name = prefs.userName.trim() || GREETING_NAME;
   const greeting = greetingForHour(new Date().getHours());
 
+  // Settings does not push — it grows out of this tile and collapses back into
+  // it, so the tile's position on screen is what the transition is anchored to.
+  // Measured at press time: this header scrolls, so its window coordinates are
+  // only correct at the moment of the tap.
+  const settingsAnchor = useRef<View | null>(null);
+
   // Its own request rather than a filter over the feed: the rail wants what
   // was last *touched*, which the server orders by `updated_at`, and the feed
   // is ordered by `created_at` and paged. Filtering the first page client-side
@@ -268,24 +275,31 @@ export function HomeScreen() {
           >
             <Glyph name="fileText" size={icon.sm} />
           </Touchable>
-          <Touchable
-            accessibilityRole="button"
-            accessibilityLabel="Settings"
-            onPress={() => router.push('/settings')}
-            weight="tile"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: radius.sm,
-              backgroundColor: palette.surface,
-              borderWidth: 1,
-              borderColor: palette.border,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Glyph name="settings" size={icon.sm} />
-          </Touchable>
+          {/* `collapsable={false}` is required, not defensive: Android flattens
+              a view that draws nothing out of the native hierarchy, and a
+              flattened view has no window position to measure. */}
+          <View ref={settingsAnchor} collapsable={false}>
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel="Settings"
+              onPress={() =>
+                morphFrom(settingsAnchor, radius.sm, () => router.push('/settings'))
+              }
+              weight="tile"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: radius.sm,
+                backgroundColor: palette.surface,
+                borderWidth: 1,
+                borderColor: palette.border,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Glyph name="settings" size={icon.sm} />
+            </Touchable>
+          </View>
         </View>
       </Reveal>
 

@@ -39,7 +39,25 @@ function Routes() {
         <Stack.Screen name="index" />
         <Stack.Screen name="sign-in" options={{ animation: 'fade' }} />
         <Stack.Screen name="appearance" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
+        {/* Settings does not slide in — it grows out of the gear that opened it
+            (`MorphPresentation`). That needs three things from the stack, and
+            all three are load-bearing: a transparent presentation so Home stays
+            visible and can recede behind it, no stack animation of its own to
+            fight or double up with the morph, and no back gesture — a swipe
+            would pop the route instantly and skip the collapse, which is the
+            half of the transition that has to mirror the other. */}
+        <Stack.Screen
+          name="settings"
+          options={{
+            presentation: 'transparentModal',
+            animation: 'none',
+            gestureEnabled: false,
+            // Overrides the shared opaque `contentStyle` below; without this the
+            // stack paints the page background behind the morph and Home is gone
+            // before the first frame.
+            contentStyle: { backgroundColor: 'transparent' },
+          }}
+        />
         <Stack.Screen name="save/[id]" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="space/[id]" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="shopping-list" options={{ animation: 'slide_from_right' }} />
