@@ -60,7 +60,12 @@ public class YtDlpClient {
             cookiesFile = Files.createTempFile("yt-dlp-cookies-", ".txt");
             cookiesFile.toFile().deleteOnExit();
             Files.write(cookiesFile, decoded);
-            log.info("yt-dlp: cookies written to {}", cookiesFile);
+            // Verify file is readable
+            boolean exists = Files.exists(cookiesFile);
+            boolean readable = Files.isReadable(cookiesFile);
+            long size = exists ? Files.size(cookiesFile) : 0;
+            log.info("yt-dlp: cookies written to {} (exists={}, readable={}, size={} bytes)", 
+                    cookiesFile, exists, readable, size);
         } catch (Exception e) {
             log.warn("yt-dlp: failed to decode cookies — proceeding without them", e);
             cookiesFile = null;
@@ -86,13 +91,15 @@ public class YtDlpClient {
      * {@code automatic_captions}).
      */
     public SourceMetadata probe(String url) {
-        ExternalProcess.Result result = processes.run(withCookies(List.of(
+        List<String> cmd = withCookies(List.of(
                 properties.binary(),
                 "--dump-single-json",
                 "--skip-download",
                 "--no-playlist",
                 "--no-warnings",
-                url)), properties.probeTimeout());
+                url));
+        log.debug("yt-dlp probe command: {}", cmd);
+        ExternalProcess.Result result = processes.run(cmd, properties.probeTimeout());
 
         if (!result.succeeded()) {
             throw new YtDlpFailedException(describe(result), result.stderr());
