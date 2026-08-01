@@ -98,7 +98,7 @@ public class YtDlpClient {
                 "--no-playlist",
                 "--no-warnings",
                 url));
-        log.debug("yt-dlp probe command: {}", cmd);
+        log.info("yt-dlp probe command: {}", cmd);
         ExternalProcess.Result result = processes.run(cmd, properties.probeTimeout());
 
         if (!result.succeeded()) {
