@@ -11,6 +11,8 @@ import { Reveal } from '@/components/Reveal';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
+import { Discussion } from '@/components/Discussion';
+import { LifecycleStrip } from '@/components/LifecycleStrip';
 import { buildDetailModel, type DetailField } from '@/saves/detailModel';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
@@ -379,8 +381,24 @@ export function SaveDetailScreen({ id }: { id: string }) {
             </Reveal>
           )}
 
-          {save.sourceUrl ? (
+          {/* Progress only makes sense once there is something to make
+              progress on — a save still being processed has no content yet. */}
+          {save.status === 'ready' ? (
             <Reveal index={3 + (model?.fields.length ?? 1)}>
+              <LifecycleStrip
+                saveId={save.id}
+                value={save.lifecycleStatus ?? 'saved'}
+                onChange={() => void load()}
+              />
+            </Reveal>
+          ) : null}
+
+          {/* Renders nothing for a private save: a comment thread only you can
+              see is a note to self, not a discussion. */}
+          <Discussion saveId={save.id} spaceId={save.spaceId} />
+
+          {save.sourceUrl ? (
+            <Reveal index={4 + (model?.fields.length ?? 1)}>
               <SectionLabel>Source</SectionLabel>
               <Touchable
                 accessibilityRole="link"

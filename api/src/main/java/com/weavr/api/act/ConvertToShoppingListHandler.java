@@ -1,13 +1,11 @@
 package com.weavr.api.act;
 
-import java.time.LocalDate;
-import java.time.temporal.TemporalAdjusters;
-import java.time.DayOfWeek;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.weavr.api.billing.UsageService;
 import com.weavr.api.gemini.BudgetApproved;
 import com.weavr.api.gemini.GeminiBudgetService;
 import com.weavr.api.job.JobHandler;
@@ -44,15 +42,17 @@ class ConvertToShoppingListHandler implements JobHandler {
     private final ShoppingListService lists;
     private final GeminiBudgetService budget;
     private final ObjectMapper objectMapper;
+    private final UsageService usage;
 
     ConvertToShoppingListHandler(JdbcClient jdbc, ShoppingListConverter converter,
                                  ShoppingListService lists, GeminiBudgetService budget,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper, UsageService usage) {
         this.jdbc = jdbc;
         this.converter = converter;
         this.lists = lists;
         this.budget = budget;
         this.objectMapper = objectMapper;
+        this.usage = usage;
     }
 
     @Override
@@ -92,6 +92,16 @@ class ConvertToShoppingListHandler implements JobHandler {
                     "Weavr couldn't find an ingredient list in that recipe.");
         }
 
+        // Re-checked here even though ShoppingListController already refused an
+        // over-cap request: the controller check is for the user's benefit (an
+        // immediate 402 instead of a job that quietly does nothing), this one is
+        // for correctness. Two taps racing each other both pass the controller.
+        UsageService.Allowance allowance = usage.checkActs(recipe.userId());
+        if (!allowance.allowed()) {
+            throw new PermanentJobException("quota_exceeded",
+                    "You've used your free shopping list this week. Upgrade for unlimited.");
+        }
+
         // Spends a request like any other generation call — an Act is not free,
         // and the plan budgets for it explicitly alongside saves and digests.
         BudgetApproved approved = budget.acquire();
@@ -105,42 +115,13 @@ class ConvertToShoppingListHandler implements JobHandler {
         }
 
         lists.addFromSave(recipe.userId(), saveId, drafts);
-        recordActUsage(recipe.userId());
+
+        // Counting moved to UsageService when the cap became enforceable —
+        // metering and enforcement reading the same period boundary from the
+        // same place is the only way they can agree.
+        usage.countAct(recipe.userId());
 
         log.info("Save {} converted to {} shopping list item(s)", saveId, drafts.size());
-    }
-
-    /**
-     * Counts the conversion against this week's Act allowance.
-     *
-     * <p><b>Recorded, not enforced.</b> The free tier is meant to cap Acts at
-     * one per week, but the cap only makes sense once there is a paid tier to
-     * escape to — and `subscriptions` is written by a RevenueCat webhook that
-     * does not exist yet. Enforcing now would cap every user, including paying
-     * ones, at one conversion a week. Counting from the start means the cap can
-     * be switched on later against real numbers instead of an empty table.
-     *
-     * <p>The period is the ISO week containing today, so "one per week" has an
-     * unambiguous boundary rather than a rolling seven days that resets
-     * differently for every user.
-     */
-    private void recordActUsage(UUID userId) {
-        LocalDate weekStart = LocalDate.now().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        try {
-            jdbc.sql("""
-                            insert into usage_counters (user_id, period_start, acts_used)
-                            values (?, ?, 1)
-                            on conflict (user_id, period_start)
-                            do update set acts_used = usage_counters.acts_used + 1
-                            """)
-                    .param(userId)
-                    .param(weekStart)
-                    .update();
-        } catch (RuntimeException e) {
-            // Metering must never fail a conversion the user already paid a
-            // Gemini request for.
-            log.warn("Could not record Act usage for {}: {}", userId, e.toString());
-        }
     }
 
     private List<String> ingredientsOf(String structuredDataJson) {

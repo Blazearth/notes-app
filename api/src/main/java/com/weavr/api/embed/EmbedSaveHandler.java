@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.weavr.api.job.JobHandler;
+import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobRecord;
 import com.weavr.api.job.JobType;
 import com.weavr.api.job.PermanentJobException;
@@ -47,13 +48,15 @@ class EmbedSaveHandler implements JobHandler {
     private final EmbeddingClient embeddings;
     private final EmbeddingProperties props;
     private final ObjectMapper objectMapper;
+    private final JobQueue jobQueue;
 
     EmbedSaveHandler(JdbcClient jdbc, EmbeddingClient embeddings,
-                     EmbeddingProperties props, ObjectMapper objectMapper) {
+                     EmbeddingProperties props, ObjectMapper objectMapper, JobQueue jobQueue) {
         this.jdbc = jdbc;
         this.embeddings = embeddings;
         this.props = props;
         this.objectMapper = objectMapper;
+        this.jobQueue = jobQueue;
     }
 
     @Override
@@ -63,7 +66,7 @@ class EmbedSaveHandler implements JobHandler {
 
     /** What the handler needs, without dragging the whole entity through Hibernate. */
     private record SaveRow(String knowledgeType, String structuredData, String rawCaption,
-                           boolean alreadyEmbedded) {
+                           boolean alreadyEmbedded, UUID spaceId, UUID userId) {
     }
 
     @Override
@@ -74,7 +77,9 @@ class EmbedSaveHandler implements JobHandler {
                         select knowledge_type,
                                structured_data::text as structured_data,
                                raw_caption,
-                               embedding is not null as already_embedded
+                               embedding is not null as already_embedded,
+                               space_id,
+                               user_id
                         from saves
                         where id = ?
                         """)
@@ -83,7 +88,9 @@ class EmbedSaveHandler implements JobHandler {
                         rs.getString("knowledge_type"),
                         rs.getString("structured_data"),
                         rs.getString("raw_caption"),
-                        rs.getBoolean("already_embedded")))
+                        rs.getBoolean("already_embedded"),
+                        rs.getObject("space_id", UUID.class),
+                        rs.getObject("user_id", UUID.class)))
                 .optional()
                 .orElseThrow(() -> new PermanentJobException(
                         "save_deleted", "This save no longer exists."));
@@ -112,6 +119,30 @@ class EmbedSaveHandler implements JobHandler {
 
         log.info("Save {} embedded ({} chars of profile, {} dims)",
                 saveId, profile.length(), vector.length);
+
+        // Only for a shared Space: duplicate detection compares a save against
+        // its neighbours, and a private save has none.
+        if (save.spaceId() != null) {
+            enqueueDuplicateDetection(saveId, save.userId());
+        }
+    }
+
+    /**
+     * Its own job, and its own transaction. A failure to enqueue must not fail
+     * an embedding that already succeeded — the vector is written, the save is
+     * searchable, and the only thing lost is a merge suggestion.
+     */
+    @Transactional
+    void enqueueDuplicateDetection(UUID saveId, UUID userId) {
+        try {
+            jobQueue.enqueueForUser(
+                    JobType.DETECT_DUPLICATES,
+                    Map.of("saveId", saveId.toString()),
+                    JobType.DETECT_DUPLICATES + ":" + saveId,
+                    userId);
+        } catch (RuntimeException e) {
+            log.warn("Could not enqueue duplicate detection for save {}: {}", saveId, e.toString());
+        }
     }
 
     @Transactional

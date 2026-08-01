@@ -1,224 +1,318 @@
-import React, { useState } from 'react';
-import { View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { ActivityIndicator, RefreshControl, TextInput, View } from 'react-native';
 
+import { ApiError, acceptInvite, createSpace, listSpaces } from '@/api/client';
+import type { Space } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
-import { HatchThumb } from '@/components/HatchThumb';
 import { Reveal } from '@/components/Reveal';
 import { Screen } from '@/components/Screen';
-import { Touchable } from '@/components/Touchable';
 import { SectionLabel } from '@/components/SectionLabel';
-import { Segmented } from '@/components/Segmented';
-import { SPACE_DETAIL, type TaskItem } from '@/data/sampleContent';
+import { Touchable } from '@/components/Touchable';
 import { useTheme } from '@/theme/ThemeProvider';
 
-type TabValue = (typeof SPACE_DETAIL.tabs)[number]['value'];
+/**
+ * The Spaces tab, on real data.
+ *
+ * <p>This screen used to render a single hard-coded space from
+ * `sampleContent` — a name, three fake members and a chat thread — because no
+ * endpoint served one. It now lists what the user is actually in, and the
+ * fiction is gone rather than left sitting beside real rows.
+ */
 
-function MemberStack() {
-  const { palette, spacing } = useTheme();
-  const ring = {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: palette.surface,
-    marginLeft: -spacing.sm,
-  } as const;
-
+function RoleBadge({ role }: { role: Space['myRole'] }) {
+  const { palette, radius, spacing } = useTheme();
+  // Only worth showing when it constrains what you can do. Labelling every
+  // owner "owner" in their own list is noise.
+  if (role === 'owner') return null;
   return (
-    <View style={{ flexDirection: 'row' }}>
-      <View style={[ring, { backgroundColor: palette.surfaceVariant }]} />
-      <View style={[ring, { backgroundColor: palette.border }]} />
-      <View
-        style={[
-          ring,
-          {
-            backgroundColor: palette.hatchB,
-            alignItems: 'center',
-            justifyContent: 'center',
-          },
-        ]}
-      >
-        <AppText variant="caption" tone="muted" style={{ fontSize: 10, fontWeight: '600' }}>
-          +{SPACE_DETAIL.extraMembers}
-        </AppText>
-      </View>
+    <View
+      style={{
+        borderRadius: radius.xs,
+        borderWidth: 1,
+        borderColor: palette.border,
+        paddingHorizontal: spacing.xs + 2,
+        paddingVertical: 1,
+      }}
+    >
+      <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>
+        {role}
+      </AppText>
     </View>
   );
 }
 
-function TaskRow({ task }: { task: TaskItem }) {
+function SpaceRow({ space, onPress }: { space: Space; onPress: () => void }) {
   const { palette, radius, spacing, layout } = useTheme();
+  const counts = [
+    `${space.saveCount} ${space.saveCount === 1 ? 'save' : 'saves'}`,
+    `${space.memberCount} ${space.memberCount === 1 ? 'member' : 'members'}`,
+  ].join(' · ');
+
   return (
     <Card radius={radius.md} padding={0}>
-      <View
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel={`${space.name}, ${counts}`}
+        onPress={onPress}
+        haptic="selection"
         style={{
           flexDirection: 'row',
           alignItems: 'center',
-          gap: spacing.smd,
-          paddingVertical: spacing.smd,
+          gap: spacing.md,
+          paddingVertical: spacing.md,
           paddingHorizontal: layout.rowPadding,
         }}
       >
         <View
           style={{
-            width: 18,
-            height: 18,
-            borderRadius: radius.xs,
-            backgroundColor: task.done ? palette.accent : 'transparent',
-            borderWidth: task.done ? 0 : 2,
-            borderColor: palette.textFaint,
+            width: 34,
+            height: 34,
+            borderRadius: radius.sm,
+            backgroundColor: palette.surfaceVariant,
+            alignItems: 'center',
+            justifyContent: 'center',
           }}
-        />
-        <AppText
-          variant="bodySmall"
-          tone={task.done ? 'muted' : 'default'}
-          style={task.done ? { textDecorationLine: 'line-through' } : undefined}
         >
-          {task.title}
-        </AppText>
-      </View>
+          <Glyph name="layers" size={16} />
+        </View>
+
+        <View style={{ flex: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+            <AppText variant="cardTitle" numberOfLines={1} style={{ flexShrink: 1 }}>
+              {space.name}
+            </AppText>
+            <RoleBadge role={space.myRole} />
+          </View>
+          <AppText variant="caption" tone="muted">
+            {counts}
+          </AppText>
+        </View>
+
+        <Glyph name="chevron" size={14} color={palette.textFaint} />
+      </Touchable>
     </Card>
   );
 }
 
 export function SpacesScreen() {
   const { palette, radius, spacing } = useTheme();
-  const [tab, setTab] = useState<TabValue>('saves');
+  const router = useRouter();
+
+  const [spaces, setSpaces] = useState<Space[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setSpaces(await listSpaces());
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Could not load your Spaces.');
+    }
+  }, []);
+
+  // Refetched on focus rather than once on mount: joining a Space or adding a
+  // save happens on other screens, and coming back to a stale count reads as
+  // the action having failed.
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
+
+  const onCreate = useCallback(async () => {
+    const trimmed = name.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const space = await createSpace(trimmed);
+      setName('');
+      await load();
+      router.push({ pathname: '/space/[id]', params: { id: space.id } });
+    } catch (e) {
+      setNotice(e instanceof ApiError ? e.message : 'Could not create that Space.');
+    } finally {
+      setBusy(false);
+    }
+  }, [name, busy, load, router]);
+
+  const onJoin = useCallback(async () => {
+    const trimmed = code.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const space = await acceptInvite(trimmed);
+      setCode('');
+      await load();
+      router.push({ pathname: '/space/[id]', params: { id: space.id } });
+    } catch (e) {
+      // 404 covers expired, revoked and used-up alike — the server does not
+      // distinguish them, and neither should this.
+      setNotice(e instanceof ApiError ? e.message : 'That invite link did not work.');
+    } finally {
+      setBusy(false);
+    }
+  }, [code, busy, load, router]);
+
+  const inputStyle = {
+    flex: 1,
+    color: palette.text,
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.smd,
+    fontSize: 14,
+  } as const;
 
   return (
-    <Screen>
-      {/* Breadcrumb back to the space list */}
-      <Reveal index={0}>
-        <Touchable
-          accessibilityRole="button"
-          // There is no space list to go back to yet.
-          haptic={null}
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            alignSelf: 'flex-start',
-            gap: spacing.xs + 2,
-            marginBottom: spacing.md + 2,
-          }}
-        >
-          <Glyph name="layers" size={14} weight={2} />
-          <AppText tone="muted" style={{ fontSize: 12.5 }}>
-            Spaces
-          </AppText>
-        </Touchable>
+    <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+      <Reveal index={0} style={{ marginBottom: spacing.lg }}>
+        <AppText variant="title">Spaces</AppText>
+        <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
+          Shared collections. Anything you save into one is visible to everybody in it.
+        </AppText>
       </Reveal>
 
-      <Reveal
-        index={1}
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: spacing.lg,
-        }}
-      >
-        <AppText variant="title">{SPACE_DETAIL.name}</AppText>
-        <MemberStack />
+      {notice ? (
+        <Reveal index={1}>
+          <Card style={{ marginBottom: spacing.md }}>
+            <AppText variant="bodySmall">{notice}</AppText>
+          </Card>
+        </Reveal>
+      ) : null}
+
+      <Reveal index={1} style={{ marginBottom: spacing.xl }}>
+        <SectionLabel>New Space</SectionLabel>
+        <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            placeholder="Copenhagen trip"
+            placeholderTextColor={palette.textFaint}
+            style={inputStyle}
+            returnKeyType="done"
+            onSubmitEditing={onCreate}
+            editable={!busy}
+          />
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Create Space"
+            onPress={onCreate}
+            haptic="selection"
+            weight="tile"
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: radius.sm,
+              backgroundColor: name.trim() ? palette.accent : palette.surfaceVariant,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Glyph
+              name="plus"
+              size={16}
+              weight={2.5}
+              color={name.trim() ? palette.onAccent : palette.textFaint}
+            />
+          </Touchable>
+        </View>
       </Reveal>
 
       <Reveal index={2} style={{ marginBottom: spacing.xl }}>
-        <Segmented
-          options={SPACE_DETAIL.tabs.map((t) => ({ value: t.value, label: t.label }))}
-          value={tab}
-          onChange={setTab}
-        />
-      </Reveal>
-
-      {/*
-        The mockup renders Saves, Tasks and Chat stacked under the Saves tab —
-        it is the space overview. The other tabs narrow to one section each so
-        the control does something rather than being decoration.
-      */}
-      {/*
-        Each block is keyed by `tab`, so a tab change remounts it and the
-        content animates in behind the sliding thumb. Two of these sections
-        appear under more than one tab; without the key React would reuse them
-        and the switch would land with the header moving and the body static.
-      */}
-      {tab === 'saves' && (
-        <Reveal key={`saves-${tab}`}>
-          <SectionLabel>Shared saves</SectionLabel>
-          <View
+        <SectionLabel>Join with a code</SectionLabel>
+        <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
+          <TextInput
+            value={code}
+            onChangeText={setCode}
+            placeholder="Paste an invite code"
+            placeholderTextColor={palette.textFaint}
+            style={inputStyle}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="go"
+            onSubmitEditing={onJoin}
+            editable={!busy}
+          />
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Join Space"
+            onPress={onJoin}
+            haptic="selection"
+            weight="tile"
             style={{
-              flexDirection: 'row',
-              gap: spacing.smd,
-              marginBottom: spacing.xxl - 2,
+              width: 42,
+              height: 42,
+              borderRadius: radius.sm,
+              backgroundColor: code.trim() ? palette.accent : palette.surfaceVariant,
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
           >
-            {SPACE_DETAIL.sharedSaves.map((save) => (
-              <Card key={save.id} padding={0} radius={radius.md} style={{ flex: 1, overflow: 'hidden' }}>
-                <HatchThumb label={save.thumbLabel} height={80} radius={0} />
-                <View style={{ padding: spacing.smd }}>
-                  <AppText variant="cardTitle" style={{ fontSize: 12 }} numberOfLines={1}>
-                    {save.title}
-                  </AppText>
-                  <AppText variant="caption" tone="muted" style={{ fontSize: 10.5 }}>
-                    {save.source}
-                  </AppText>
-                </View>
-              </Card>
-            ))}
-          </View>
-        </Reveal>
-      )}
+            <Glyph
+              name="download"
+              size={16}
+              color={code.trim() ? palette.onAccent : palette.textFaint}
+            />
+          </Touchable>
+        </View>
+      </Reveal>
 
-      {tab === 'calendar' && (
-        <Card style={{ marginBottom: spacing.xxl - 2 }}>
+      <SectionLabel>Your Spaces</SectionLabel>
+
+      {spaces === null && !error ? (
+        <View style={{ paddingVertical: spacing.xxl, alignItems: 'center' }}>
+          <ActivityIndicator color={palette.accent} />
+        </View>
+      ) : null}
+
+      {error ? (
+        <Card>
           <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
-            Nothing scheduled
+            Could not load Spaces
           </AppText>
           <AppText variant="caption" tone="muted">
-            Dated saves in this space — reservations, screenings, flights — will land here.
+            {error}
           </AppText>
         </Card>
-      )}
+      ) : null}
 
-      {(tab === 'saves' || tab === 'tasks') && (
-        <Reveal key={`tasks-${tab}`} index={1}>
-          <SectionLabel>Tasks</SectionLabel>
-          <View style={{ gap: spacing.sm, marginBottom: spacing.xxl - 2 }}>
-            {SPACE_DETAIL.tasks.map((task) => (
-              <TaskRow key={task.id} task={task} />
-            ))}
-          </View>
-        </Reveal>
-      )}
+      {spaces && spaces.length === 0 && !error ? (
+        <Card>
+          <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
+            No Spaces yet
+          </AppText>
+          <AppText variant="caption" tone="muted">
+            Create one above for a trip, a project or a household — then invite people with a
+            link.
+          </AppText>
+        </Card>
+      ) : null}
 
-      {(tab === 'saves' || tab === 'chat') && (
-        <Reveal key={`chat-${tab}`} index={2}>
-          <SectionLabel>Chat</SectionLabel>
-          <View style={{ gap: spacing.sm }}>
-            {SPACE_DETAIL.chat.map((message) => (
-              <View
-                key={message.id}
-                style={{
-                  alignSelf: 'flex-start',
-                  maxWidth: '80%',
-                  backgroundColor: palette.surface,
-                  borderWidth: 1,
-                  borderColor: palette.border,
-                  borderRadius: radius.md,
-                  borderBottomLeftRadius: radius.xs - 1,
-                  paddingVertical: spacing.smd,
-                  paddingHorizontal: spacing.md,
-                }}
-              >
-                <AppText variant="label" tone="accent" style={{ fontSize: 11, marginBottom: 2 }}>
-                  {message.author}
-                </AppText>
-                <AppText variant="bodySmall">{message.body}</AppText>
-              </View>
-            ))}
-          </View>
-        </Reveal>
-      )}
+      <View style={{ gap: spacing.sm }}>
+        {spaces?.map((space, index) => (
+          <Reveal key={space.id} index={index}>
+            <SpaceRow space={space} onPress={() => router.push({ pathname: '/space/[id]', params: { id: space.id } })} />
+          </Reveal>
+        ))}
+      </View>
 
       <View style={{ height: spacing.lg }} />
     </Screen>

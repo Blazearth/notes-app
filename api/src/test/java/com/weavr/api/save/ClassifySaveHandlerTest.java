@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.weavr.api.billing.UsageService;
 import com.weavr.api.gemini.BudgetApproved;
 import com.weavr.api.gemini.GeminiBudgetService;
 import com.weavr.api.gemini.GeminiClient;
@@ -58,6 +59,7 @@ class ClassifySaveHandlerTest {
     private GeminiBudgetService budgetService;
     private JdbcClient jdbc;
     private JobQueue jobQueue;
+    private UsageService usage;
     private ClassifySaveHandler handler;
 
     /** stage name -> stored payload; absent means "not written yet". */
@@ -71,12 +73,19 @@ class ClassifySaveHandlerTest {
         budgetService = mock(GeminiBudgetService.class);
         jdbc = mock(JdbcClient.class);
         jobQueue = mock(JobQueue.class);
+        usage = mock(UsageService.class);
         stageRows.clear();
+
+        // Under quota unless a test says otherwise — the cap is off by default
+        // in configuration too, so this is also the shipped behaviour.
+        when(usage.checkSaves(any())).thenReturn(
+                new UsageService.Allowance(true, UsageService.QUOTA_SAVES, -1, 0));
 
         stubStageLookup();
         stubSavesUpdate();
 
-        handler = new ClassifySaveHandler(saves, stages, geminiClient, budgetService, PROPS, jobQueue, jdbc, MAPPER);
+        handler = new ClassifySaveHandler(saves, stages, geminiClient, budgetService, PROPS,
+                jobQueue, jdbc, MAPPER, usage);
     }
 
     /**
@@ -151,6 +160,52 @@ class ClassifySaveHandlerTest {
         verify(stages, never()).record(any(), any(), any());
         // applyResult still runs, from the stored stage payload.
         assertThat(updateParams).contains("ready", "recipe", 0.95, "gemini-2.5-flash-lite");
+    }
+
+    /**
+     * The cap is checked before the budget is acquired, so an over-quota user
+     * never reaches the model at all — spending a request and then refusing to
+     * use it would defeat the point of a cap whose whole purpose is protecting
+     * the shared pool.
+     */
+    @Test
+    void overTheMonthlyCapFailsPermanentlyWithoutSpendingARequest() {
+        UUID saveId = UUID.randomUUID();
+        when(saves.findById(saveId)).thenReturn(Optional.of(textSave("3 eggs, mascarpone")));
+        when(usage.checkSaves(any())).thenReturn(
+                new UsageService.Allowance(false, UsageService.QUOTA_SAVES, 20, 20));
+
+        assertThatThrownBy(() -> handler.handle(classifyJob(saveId)))
+                .isInstanceOf(PermanentJobException.class)
+                .hasMessageContaining("20 free saves");
+
+        verify(budgetService, never()).acquire();
+        verify(geminiClient, never()).classify(any(), any(), any());
+        verify(usage, never()).countSave(any());
+    }
+
+    /**
+     * The counter must move exactly once per save. A retry takes the cached
+     * path above, which returns before reaching the increment — bill the user
+     * twice for one save and the cap silently halves.
+     */
+    @Test
+    void aRetriedJobDoesNotCountTheSaveTwice() {
+        UUID saveId = UUID.randomUUID();
+        Save save = textSave("3 eggs, mascarpone");
+        when(saves.findById(saveId)).thenReturn(Optional.of(save));
+        BudgetApproved primary = budget("gemini-2.5-flash-lite", 500);
+        when(budgetService.acquire()).thenReturn(primary);
+        when(geminiClient.classify(eq(saveId), any(), eq(primary))).thenReturn(
+                new GeminiResponse("recipe", 0.95, Map.of("title", "Tiramisu"), 100, 40, "gemini-2.5-flash-lite"));
+
+        handler.handle(classifyJob(saveId));
+        // What the second delivery sees: the stage the first one wrote.
+        stageRows.put(ClassifySaveHandler.STAGE_CLASSIFIED, Map.of(
+                "knowledgeType", "recipe", "confidence", 0.95, "modelUsed", "gemini-2.5-flash-lite"));
+        handler.handle(classifyJob(saveId));
+
+        verify(usage, times(1)).countSave(save.getUserId());
     }
 
     @Test

@@ -174,8 +174,15 @@ public class Save {
         return lifecycleStatus;
     }
 
+    /**
+     * Also stamps {@code updatedAt}, because the "Continue" rail orders on it
+     * and because the response returned to the caller would otherwise carry the
+     * stale value — the database trigger fixes the row, not the object already
+     * on its way back.
+     */
     public void setLifecycleStatus(LifecycleStatus lifecycleStatus) {
         this.lifecycleStatus = lifecycleStatus;
+        this.updatedAt = Instant.now();
     }
 
     public String getModelUsed() {

@@ -3,9 +3,12 @@ package com.weavr.api.save;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.weavr.api.common.NotFoundException;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.profile.ProfileService;
 import com.weavr.api.save.dto.CreateSaveRequest;
+import com.weavr.api.space.SpaceRole;
+import com.weavr.api.space.SpaceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -35,6 +38,7 @@ class SaveServiceTest {
     private SaveRepository saves;
     private ProfileService profiles;
     private JobQueue jobs;
+    private SpaceService spaces;
     private SaveService service;
 
     @BeforeEach
@@ -42,7 +46,8 @@ class SaveServiceTest {
         saves = mock(SaveRepository.class);
         profiles = mock(ProfileService.class);
         jobs = mock(JobQueue.class);
-        service = new SaveService(saves, profiles, jobs);
+        spaces = mock(SpaceService.class);
+        service = new SaveService(saves, profiles, jobs, spaces);
 
         // @UuidGenerator only assigns `id` on a real flush; simulate that here
         // so create()'s save.getId() (used to build the job payload) isn't null.
@@ -61,6 +66,46 @@ class SaveServiceTest {
 
     private static CreateSaveRequest urlRequest() {
         return new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, null);
+    }
+
+    /**
+     * The hole Spaces opened up, and the reason this check exists at all:
+     * {@code spaceId} used to be written straight through from the request
+     * body with nothing looking at it, so any authenticated user could drop a
+     * save into any Space whose id they had once been shown.
+     */
+    @Test
+    void savingIntoASpaceRequiresMembershipOfIt() {
+        UUID userId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        doThrow(new NotFoundException("Space not found"))
+                .when(spaces).requireRole(userId, spaceId, SpaceRole.EDITOR);
+
+        assertThatThrownBy(() -> service.create(userId,
+                new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, spaceId), null))
+                .isInstanceOf(NotFoundException.class);
+
+        verify(saves, never()).save(any());
+        verify(jobs, never()).enqueueForUser(any(), any(), anyString(), any());
+    }
+
+    /** A viewer may read a Space, not add to it — hence editor, not member. */
+    @Test
+    void savingIntoASpaceNeedsEditorNotJustMembership() {
+        UUID userId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+
+        service.create(userId,
+                new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, spaceId), null);
+
+        verify(spaces).requireRole(userId, spaceId, SpaceRole.EDITOR);
+    }
+
+    @Test
+    void aPrivateSaveNeverTouchesTheSpaceGuard() {
+        service.create(UUID.randomUUID(), urlRequest(), null);
+
+        verify(spaces, never()).requireRole(any(), any(), any());
     }
 
     @Test

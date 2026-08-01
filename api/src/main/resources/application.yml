@@ -247,6 +247,74 @@ weavr:
     max-semantic-distance: ${WEAVR_SEARCH_MAX_DISTANCE:0.40}
     candidate-depth: 50
 
+  # --------------------------------------------------------------------------
+  # Spaces — collaboration, and duplicate detection inside a shared one.
+  # --------------------------------------------------------------------------
+  # Two people save the same restaurant, one from a Reel and one from a Maps
+  # link, calling it different things. Exact-URL matching — as far as every
+  # competitor in the teardown goes — sees nothing in common; the embedding
+  # does, because it was built from structured_data rather than the URL.
+  #
+  # duplicate-max-distance is a GUESS, argued rather than measured, exactly
+  # like the OCR confidence floor. The reasoning: the search half measured real
+  # query hits at 0.27-0.37, and two saves of the *same thing* must be far
+  # closer than a query that merely describes one — anything in that range
+  # would declare every restaurant in a Space the same restaurant. A corpus of
+  # real duplicate pairs is what turns 0.15 into a number.
+  spaces:
+    duplicate-detection-enabled: ${WEAVR_DUPLICATE_DETECTION:true}
+    duplicate-max-distance: ${WEAVR_DUPLICATE_MAX_DISTANCE:0.15}
+    duplicate-max-suggestions: 3
+
+  # --------------------------------------------------------------------------
+  # Enrichment — external APIs that fill gaps the content itself never had.
+  # --------------------------------------------------------------------------
+  # Costs NO Gemini request, which is the whole reason it is worth doing on a
+  # 500-a-day budget: TMDB knows the director for free, and asking a model to
+  # recall one is both a request and a hallucination risk.
+  #
+  # Runs BETWEEN classify and embed, not after. The embedding is built from
+  # structured_data, so embedding first would permanently omit the director,
+  # the address and the coordinates — the highest-signal terms a semantic
+  # search has to match on.
+  #
+  # Every key is optional and a missing one disables only its own enricher.
+  # Enrichment happens to a save that is already `ready` and already
+  # searchable, so it must never be able to fail one.
+  #
+  # tmdb-api-key is the v4 READ ACCESS TOKEN (sent as a bearer), not the v3 API
+  # key — the v3 key goes in a query parameter and will 401 against this code.
+  enrich:
+    enabled: ${WEAVR_ENRICH_ENABLED:true}
+    tmdb-api-key: ${WEAVR_TMDB_API_KEY:}
+    google-places-api-key: ${WEAVR_GOOGLE_PLACES_API_KEY:}
+    timeout: 10s
+
+  # --------------------------------------------------------------------------
+  # Billing — RevenueCat entitlements and the free-tier caps.
+  # --------------------------------------------------------------------------
+  # Entitlements are enforced SERVER-SIDE. A client-only check is trivially
+  # bypassed and the gated resource — a slice of a shared 500-a-day Gemini pool
+  # — is the expensive one.
+  #
+  # webhook-secret is the Authorization header value configured on the webhook
+  # in the RevenueCat dashboard. Unset DISABLES the endpoint rather than opening
+  # it: the route that decides who has paid must fail closed, and "it worked in
+  # dev" is exactly how the opposite ships.
+  #
+  # enforce-free-caps is OFF by default, and that is a product decision rather
+  # than an unfinished one. A cap is only meaningful once there is a paid tier
+  # to escape to, and until the store records and RevenueCat products exist,
+  # nobody can subscribe — enforcing now would cap every user with no way out.
+  # The counters run either way, so the switch can be flipped against real
+  # numbers instead of an empty table.
+  billing:
+    webhook-secret: ${WEAVR_REVENUECAT_WEBHOOK_SECRET:}
+    entitlement-id: ${WEAVR_ENTITLEMENT_ID:pro}
+    free-saves-per-month: ${WEAVR_FREE_SAVES_PER_MONTH:20}
+    free-acts-per-week: ${WEAVR_FREE_ACTS_PER_WEEK:1}
+    enforce-free-caps: ${WEAVR_ENFORCE_FREE_CAPS:false}
+
   supabase:
     # e.g. https://sgjpiordywdklzhlhmwq.supabase.co
     url: ${WEAVR_SUPABASE_URL}

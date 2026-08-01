@@ -7,9 +7,11 @@ import java.util.UUID;
 import com.weavr.api.auth.CurrentUser;
 import com.weavr.api.save.dto.CreateSaveRequest;
 import com.weavr.api.save.dto.SaveResponse;
+import com.weavr.api.save.dto.UpdateLifecycleRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -48,17 +50,37 @@ class SaveController {
                 .body(SaveResponse.from(save));
     }
 
+    /**
+     * @param lifecycle optional filter, comma-separated
+     *                  ({@code ?lifecycle=planned,started}). Backs the app's
+     *                  "Continue" rail, which is otherwise the same feed —
+     *                  a separate endpoint would have duplicated the mapping
+     *                  and the paging for one {@code where} clause.
+     */
     @GetMapping
     List<SaveResponse> list(@CurrentUser UUID userId,
                             @RequestParam(defaultValue = "0") int page,
-                            @RequestParam(defaultValue = "25") int size) {
-        return saveService.listForUser(userId, page, size).stream()
-                .map(SaveResponse::from)
-                .toList();
+                            @RequestParam(defaultValue = "25") int size,
+                            @RequestParam(required = false) List<LifecycleStatus> lifecycle) {
+        List<Save> saves = lifecycle == null || lifecycle.isEmpty()
+                ? saveService.listForUser(userId, page, size)
+                : saveService.listForUserByLifecycle(userId, lifecycle, page, size);
+        return saves.stream().map(SaveResponse::from).toList();
     }
 
     @GetMapping("/{id}")
     SaveResponse get(@CurrentUser UUID userId, @PathVariable UUID id) {
         return SaveResponse.from(saveService.getForUser(userId, id));
+    }
+
+    /**
+     * {@code saved → planned → started → completed}, and back again — see
+     * {@link SaveService#setLifecycle} for why this is not a state machine.
+     */
+    @PatchMapping("/{id}/lifecycle")
+    SaveResponse setLifecycle(@CurrentUser UUID userId, @PathVariable UUID id,
+                              @Valid @RequestBody UpdateLifecycleRequest request) {
+        return SaveResponse.from(
+                saveService.setLifecycle(userId, id, request.lifecycleStatus()));
     }
 }

@@ -15,8 +15,9 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 | 2 — Ingestion cascade | job runner, cascade steps 1–4 — captions, metadata, **verified against a real yt-dlp**; ASR (Groq Whisper) and readable-text/PDF extraction, unit-tested but not live-verified | 1 of 4 — captions proven end to end; ASR/link/PDF are code-complete but unproven live. Android's silent-capture receiver is built (config plugin, never run on a device); the iOS share extension — the actual highest-risk spike — is still unbuilt |
 | 3 — AI pipeline v1 | Gemini classify-and-extract call, budget layer, response-schema registry, **verified live against the real API**; type-specific mobile cards | 3 of 4 — a recipe Reel with captions becomes a structured card, budget exhaustion queues rather than fails, the app shows real cards; blocked-download → `unusable` unverified live |
 | 4 — OCR tier | frames, tesseract, cross-frame voting, escalation gate, sharpness ranking, Flash-vision Tier 2, **live-verified against real ffmpeg + tesseract** | 1 of 4 — an overlay-only card extracts with no vision call; **the eval set does not exist, so every threshold is still a guess**, and both mobile criteria are untouched |
-| 5 — Product | **search half done**: embeddings + FTS/pgvector hybrid with RRF, verified end to end live. Acts, lifecycle, free-tier caps and the RevenueCat webhook are untouched | partial — search works and degrades correctly; nothing monetisation-related exists |
-| 6–8 | — | — |
+| 5 — Product | **complete server-side**: search, the one Act, lifecycle, free-tier caps and the RevenueCat webhook — all verified live. Enrichment (a Phase 3 leftover) landed alongside | 4 of 6 — everything but the store listings and a real sandbox purchase, neither of which is code |
+| 6 — Spaces | CRUD, roles, revocable invites, space feed, comments, votes, activity, embedding-similarity duplicate detection. Authorisation verified live | 2 of 3 — the two-device live-sync criterion needs devices; Realtime sync is not built |
+| 7–8 | — | — |
 
 **The pattern to notice: writing code is running well ahead of proving it.** The
 backend is roughly a phase early, and the app is far ahead of what Phase 1 asked
@@ -480,9 +481,16 @@ remains the highest-risk unbuilt thing in the project.
 - ✅ **Search**: Postgres FTS + pgvector, fused with **RRF** (CA#5, `rank_constant=60`, ignore source scores). Falls back to either half alone. **Done and verified live 2026-08-01** — `GET /v1/saves/search`. Two additions the plan did not anticipate, both forced by the live run: V1's `search_tsv` could not find a `place` by its own name (its field is `name`, not `title`) so V3/V4 rebuild it weighted, and the vector half needed a **distance cutoff** because k-NN has no concept of "no match" — `zzzzqqq` returned the entire library.
 - ✅ **Embeddings**: structured `label: value` profile from `structured_data`, not raw text (CA#8). Separate rate-limit pool — embed freely, and the one Gemini call not behind `BudgetApproved`. **Done and verified live.** Watch out: `gemini-embedding-001` truncates rather than re-embeds for reduced dimensions, so a 1536-d vector comes back un-normalised (L2 0.69) — normalise client-side.
 - ✅ **One Act, done well**: recipe → shopping list. **Done and verified live 2026-08-01** — one open list per user, ingredients normalised into products/quantities/aisles by a single Gemini call and merged across recipes. Two real recipes gave garlic 7 cloves (3 + 4) and olive oil 4 tbsp (2 + 2). The trap: a merged line must store each contributing recipe's own quantity, not a running total — the accumulate-on-add version silently inflated quantities every time the runner re-delivered a job (7 cloves → 10), and only a real retry against a real queue exposed it.
-- **Lifecycle**: `saved → planned → started → completed`.
-- 🟡 **Free-tier caps** enforced in the worker (20 saves/month, 1 Act/week). The Act now *writes* `usage_counters.acts_used`, but nothing enforces a cap: with no paid tier to escape to, enforcing would cap every user including future paying ones. Counting from the start means the cap can be switched on against real numbers rather than an empty table.
-- **RevenueCat webhook** → `subscriptions`, gating server-side.
+- ✅ **Lifecycle**: `saved → planned → started → completed`. `PATCH /v1/saves/{id}/lifecycle`, plus a `?lifecycle=` filter on the feed that backs the app's Continue rail. **Deliberately not a state machine** — un-completing something, or dropping a planned recipe back to saved, are both ordinary things to want, and rejecting them would buy nothing but a 400 the user cannot act on.
+- ✅ **Free-tier caps** enforced in the worker (20 saves/month, 1 Act/week), checked *before* the budget is acquired so an over-quota save never reaches the model. Enforcement is behind `weavr.billing.enforce-free-caps`, **off by default** — a cap only means something once there is a paid tier to escape to, and the counters run either way so the switch can be flipped against real numbers. Two periods share `usage_counters` by writing at their own `period_start` (month for saves, ISO-week Monday for Acts) and only ever reading their own column.
+- ✅ **RevenueCat webhook** → `subscriptions`, gating server-side. **Verified live across six event shapes.** The design decision worth keeping: entitlement is derived from **expiry**, never from the event type. A type-switch — the shape every tutorial shows — revokes on `CANCELLATION`, which means auto-renew off rather than access ended, and so cuts off a user who has paid through the period. Two guards in SQL rather than in code: `on conflict (id) do nothing` for at-least-once delivery, and a `last_event_at <=` clause for out-of-order delivery, which otherwise lets a delayed retry hand a lapsed user a permanent subscription.
+
+### Enrichment — a Phase 3 step that was never built (done 2026-08-01)
+
+- ✅ **TMDB (`movie`) and Google Places (`place`)**, merged into `structured_data`. Costs no Gemini request, which is the whole argument for it on a 500-a-day budget.
+- **It runs between classify and embed, not after.** The embedding is built from `structured_data` (CA#8), so embedding first would permanently omit the director, the address and the coordinates — the highest-signal terms a semantic search has to match on. Re-embedding afterwards is not an option: the embed job is deduped by a key derived from the save id, so a second one silently never runs.
+- **Additive only.** Fills a missing field or the registry's `[unclear]` sentinel; never overwrites a value the content produced. If a caption says 20 minutes and a database says 25, the caption is what the user saw and chose to save — and it bounds the blast radius of a wrong match to an added field rather than a corrupted one.
+- **Every one of these APIs is a nearest-match with no "no result".** TMDB answers a garbled OCR title with *something*; Places answers "Noma" with a coffee roaster. Same failure as the k-NN search returning the whole library for `zzzzqqq`, same fix: a similarity threshold (`TitleMatch`), plus a hard year filter for remakes.
 
 ### Mobile
 
@@ -510,13 +518,16 @@ Store listings, screenshots, privacy policy (**including the Gemini free-tier da
 
 **Goal:** the growth loop from §3 — free users get pulled into a Pro user's Space.
 
-- Spaces CRUD, invite by link + QR, `owner|editor|viewer` **role enum** (not Linkwarden's capability booleans)
-- Realtime sync for shared Spaces
-- **Embedding-similarity dedupe on save into a shared Space** — no competitor does better than exact-URL matching; this is genuinely differentiating
-- Activity feed: meaningful events only (completed, rated, visited)
-- Comments and voting
+- ✅ Spaces CRUD, invite by code (the client builds the link and the QR from it), `owner|editor|viewer` **role enum** — not Linkwarden's capability booleans, which the teardown flagged as a do-not-adopt because every new capability becomes another column and most combinations are nonsense nobody intends to grant.
+- ⬜ Realtime sync for shared Spaces. Not built; the screens refetch on focus and pull-to-refresh.
+- ✅ **Embedding-similarity dedupe on save into a shared Space.** Writes a *suggestion* to `save_duplicates`, never a merge — cosine distance is evidence, not proof, and silently merging someone else's save is not recoverable from the client. "Merge" moves the newer save out of the Space and back to its owner's library rather than deleting it. **Threshold 0.15 is a guess**, argued from the search half's measurements (real query hits at 0.27–0.37; two saves of the *same thing* must be much closer) and never measured against real duplicate pairs.
+- ✅ Activity feed: meaningful events only — created, joined, added, completed, commented, voted. Never a per-scroll signal, both because a feed that logs everything is noise and because this is the fastest-growing table on a 500 MB free tier.
+- ✅ Comments and voting. **Votes are a row per (save, user), not a tally on the save** — the shopping list's accumulate-on-add bug applied before it could bite: a stored total is correct exactly once and drifts on any replay, where a `sum` over rows depends only on who voted.
 
-**Exit criteria:** two devices, one Space, live sync · two people saving the same restaurant from different URLs get a merge suggestion · a free user can use an invited Space fully.
+**Two things the live pass established that the design above did not say.**
+First, **404 and 403 mean different things here**: a non-member gets 404, because the existence of a Space they were never invited to is not theirs to learn, while a member with too low a role gets 403, because they already know it exists and hiding it would only confuse them. Second, **`POST /v1/saves` had been writing `spaceId` straight from the request body since Phase 1 with nothing checking it** — any authenticated user could drop a save into any Space whose id they had once been shown. Closed, and pinned by a test.
+
+**Exit criteria:** ⬜ two devices, one Space, live sync *(needs devices, and Realtime is unbuilt)* · 🟡 two people saving the same restaurant from different URLs get a merge suggestion *(built; never run against two real saves, so the threshold is untested)* · ✅ a free user can use an invited Space fully *(a viewer reads, comments and votes — verified live; only adding content needs editor)*.
 
 ---
 

@@ -5,7 +5,9 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.weavr.api.auth.CurrentUser;
+import com.weavr.api.billing.UsageService;
 import com.weavr.api.common.NotFoundException;
+import com.weavr.api.common.QuotaExceededException;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobType;
 import org.springframework.http.ResponseEntity;
@@ -33,11 +35,14 @@ class ShoppingListController {
     private final ShoppingListService lists;
     private final JobQueue jobQueue;
     private final JdbcClient jdbc;
+    private final UsageService usage;
 
-    ShoppingListController(ShoppingListService lists, JobQueue jobQueue, JdbcClient jdbc) {
+    ShoppingListController(ShoppingListService lists, JobQueue jobQueue, JdbcClient jdbc,
+                           UsageService usage) {
         this.lists = lists;
         this.jobQueue = jobQueue;
         this.jdbc = jdbc;
+        this.usage = usage;
     }
 
     record ItemResponse(UUID id, String name, String quantity, String unit,
@@ -76,6 +81,16 @@ class ShoppingListController {
 
         if (!"recipe".equals(knowledgeType)) {
             throw new NotFoundException("Only recipes can be turned into a shopping list.");
+        }
+
+        // 402 here rather than letting the handler discover it: the user is
+        // watching, and a paywall they can act on beats a conversion that
+        // silently never arrives. The handler re-checks, because this check
+        // loses a race between two taps.
+        UsageService.Allowance allowance = usage.checkActs(userId);
+        if (!allowance.allowed()) {
+            throw new QuotaExceededException(allowance.quota(), allowance.limit(), allowance.used(),
+                    "You've used your free shopping list this week.");
         }
 
         // Keyed by save, so a double tap enqueues one conversion. The handler is

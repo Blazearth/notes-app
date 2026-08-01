@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.ErrorResponseException;
@@ -27,6 +28,26 @@ class ApiExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
     }
 
+    @ExceptionHandler(ForbiddenException.class)
+    ProblemDetail handleForbidden(ForbiddenException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, e.getMessage());
+    }
+
+    /**
+     * A cap the user can escape by upgrading. 402 rather than 403 so the client
+     * can key the paywall off the status alone; {@code entitlement} and
+     * {@code limit} ride along for the copy.
+     */
+    @ExceptionHandler(QuotaExceededException.class)
+    ProblemDetail handleQuota(QuotaExceededException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.PAYMENT_REQUIRED, e.getMessage());
+        problem.setProperty("quota", e.quota());
+        problem.setProperty("limit", e.limit());
+        problem.setProperty("used", e.used());
+        return problem;
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ProblemDetail handleValidation(MethodArgumentNotValidException e) {
         List<String> errors = e.getBindingResult().getAllErrors().stream()
@@ -38,6 +59,25 @@ class ApiExceptionHandler {
                 HttpStatus.BAD_REQUEST, "Request validation failed");
         problem.setProperty("errors", errors);
         return problem;
+    }
+
+    /**
+     * A body Jackson cannot read is the caller's mistake, not ours.
+     *
+     * <p>Without this the catch-all below turns it into a 500, which is
+     * actively misleading: every {@link DbEnum} rejects an unknown value by
+     * throwing from its {@code @JsonCreator}, so a typo'd {@code sourceType} or
+     * {@code lifecycleStatus} looked like a server fault. The message is the
+     * exception's own most-specific cause, which for that case names the bad
+     * value and the field.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    ProblemDetail handleUnreadableBody(HttpMessageNotReadableException e) {
+        Throwable cause = e.getMostSpecificCause();
+        String detail = cause instanceof IllegalArgumentException && cause.getMessage() != null
+                ? cause.getMessage()
+                : "Request body could not be read";
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, detail);
     }
 
     /**

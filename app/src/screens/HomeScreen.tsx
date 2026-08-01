@@ -1,7 +1,9 @@
 import { useRouter } from 'expo-router';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
+import { listSavesByLifecycle, listSpaces } from '@/api/client';
+import type { SaveResponse, Space } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -11,15 +13,9 @@ import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
-import {
-  ACTIVE_SPACES,
-  CONTINUE_ITEMS,
-  GREETING_NAME,
-  WEEKLY_DIGEST,
-  type ContinueItem,
-} from '@/data/sampleContent';
+import { GREETING_NAME, WEEKLY_DIGEST } from '@/data/sampleContent';
 import { usePreferences } from '@/prefs/PreferencesProvider';
-import { STATUS_LABELS } from '@/saves/format';
+import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -44,32 +40,50 @@ function Rail({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ContinueCard({ item }: { item: ContinueItem }) {
+/**
+ * How far along a lifecycle stage reads as a bar. `saved` never appears here —
+ * the rail is what you have started, not what you own.
+ */
+const LIFECYCLE_PROGRESS: Record<string, { fraction: number; label: string }> = {
+  planned: { fraction: 0.33, label: 'Planned' },
+  started: { fraction: 0.66, label: 'In progress' },
+  completed: { fraction: 1, label: 'Done' },
+};
+
+function ContinueCard({ save, onPress }: { save: SaveResponse; onPress: () => void }) {
   const { palette, radius, spacing } = useTheme();
+  const progress = LIFECYCLE_PROGRESS[save.lifecycleStatus ?? 'saved'];
+
   return (
     <Card padding={0} radius={radius.lg} style={{ width: 156, overflow: 'hidden' }}>
-      <HatchThumb label={item.thumbLabel} height={90} radius={0} />
-      <View style={{ padding: spacing.smd }}>
-        <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }} numberOfLines={1}>
-          {item.title}
-        </AppText>
-        {item.progress !== undefined ? (
-          <View style={{ height: 4, borderRadius: 2, backgroundColor: palette.border }}>
+      <Touchable accessibilityRole="button" onPress={onPress} haptic="selection">
+        <HatchThumb label={save.knowledgeType ?? 'save'} height={90} radius={0} />
+        <View style={{ padding: spacing.smd }}>
+          <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }} numberOfLines={1}>
+            {saveTitle(save)}
+          </AppText>
+          <View
+            style={{
+              height: 4,
+              borderRadius: 2,
+              backgroundColor: palette.border,
+              marginBottom: spacing.xs,
+            }}
+          >
             <View
               style={{
-                width: `${Math.round(item.progress * 100)}%`,
+                width: `${Math.round((progress?.fraction ?? 0) * 100)}%`,
                 height: '100%',
                 borderRadius: 2,
                 backgroundColor: palette.accent,
               }}
             />
           </View>
-        ) : (
           <AppText variant="caption" tone="muted" numberOfLines={1}>
-            {item.meta}
+            {progress?.label ?? 'Saved'}
           </AppText>
-        )}
-      </View>
+        </View>
+      </Touchable>
     </Card>
   );
 }
@@ -178,6 +192,32 @@ export function HomeScreen() {
   const name = prefs.userName.trim() || GREETING_NAME;
   const greeting = greetingForHour(new Date().getHours());
 
+  // Its own request rather than a filter over the feed: the rail wants what
+  // was last *touched*, which the server orders by `updated_at`, and the feed
+  // is ordered by `created_at` and paged. Filtering the first page client-side
+  // would miss anything older than 25 saves.
+  const [continueSaves, setContinueSaves] = useState<SaveResponse[]>([]);
+  const [spaces, setSpaces] = useState<Space[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Both sections hide themselves when empty, so a failure here degrades to
+    // absence rather than to an error card sitting above the feed. `allSettled`
+    // so one failing does not blank the other.
+    void Promise.allSettled([listSavesByLifecycle(['planned', 'started']), listSpaces()]).then(
+      ([rail, mySpaces]) => {
+        if (cancelled) return;
+        if (rail.status === 'fulfilled') setContinueSaves(rail.value);
+        if (mySpaces.status === 'fulfilled') setSpaces(mySpaces.value);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // `refreshing` flips on every pull-to-refresh, which is also when the
+    // user expects this to be current.
+  }, [refreshing]);
+
   return (
     <Screen
       cover
@@ -276,16 +316,25 @@ export function HomeScreen() {
         </Touchable>
       </Reveal>
 
-      <Reveal index={2}>
-        <SectionLabel>Continue</SectionLabel>
-        <View style={{ marginBottom: spacing.xxl - 2 }}>
-          <Rail>
-            {CONTINUE_ITEMS.map((item) => (
-              <ContinueCard key={item.id} item={item} />
-            ))}
-          </Rail>
-        </View>
-      </Reveal>
+      {/* Real now, and absent when there is nothing in flight. The rail used
+          to render three invented cards unconditionally; an empty rail is
+          honest, three fake ones are not. */}
+      {continueSaves.length > 0 ? (
+        <Reveal index={2}>
+          <SectionLabel>Continue</SectionLabel>
+          <View style={{ marginBottom: spacing.xxl - 2 }}>
+            <Rail>
+              {continueSaves.map((save) => (
+                <ContinueCard
+                  key={save.id}
+                  save={save}
+                  onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
+                />
+              ))}
+            </Rail>
+          </View>
+        </Reveal>
+      ) : null}
 
       <Reveal index={3}>
         <Card variant="accent" padding={spacing.lg} style={{ marginBottom: spacing.xxl - 2 }}>
@@ -298,35 +347,58 @@ export function HomeScreen() {
         </Card>
       </Reveal>
 
-      <Reveal index={4}>
-        <SectionLabel>Active spaces</SectionLabel>
-        <View style={{ flexDirection: 'row', gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
-          {ACTIVE_SPACES.map((space) => (
-            <Card key={space.id} radius={radius.md} padding={spacing.md} style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
-                <View
+      {/* Real Spaces now, and hidden when the user is in none — the two
+          invented ones that used to sit here were the last fiction on this
+          screen. Capped at two: this is a glance, and the Spaces tab is one
+          tap away. */}
+      {spaces.length > 0 ? (
+        <Reveal index={4}>
+          <SectionLabel>Active spaces</SectionLabel>
+          <View style={{ flexDirection: 'row', gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
+            {spaces.slice(0, 2).map((space) => (
+              <Card key={space.id} radius={radius.md} padding={0} style={{ flex: 1 }}>
+                <Touchable
+                  accessibilityRole="button"
+                  accessibilityLabel={space.name}
+                  onPress={() =>
+                    router.push({ pathname: '/space/[id]', params: { id: space.id } })
+                  }
+                  haptic="selection"
                   style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: radius.sm,
-                    backgroundColor: palette.surfaceVariant,
-                    borderWidth: 1,
-                    borderColor: palette.border,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: spacing.smd,
+                    padding: spacing.md,
                   }}
-                />
-                <View style={{ flex: 1 }}>
-                  <AppText variant="cardTitle" numberOfLines={1}>
-                    {space.name}
-                  </AppText>
-                  <AppText variant="caption" tone="muted">
-                    {space.memberCount} members
-                  </AppText>
-                </View>
-              </View>
-            </Card>
-          ))}
-        </View>
-      </Reveal>
+                >
+                  <View
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: radius.sm,
+                      backgroundColor: palette.surfaceVariant,
+                      borderWidth: 1,
+                      borderColor: palette.border,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Glyph name="layers" size={16} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <AppText variant="cardTitle" numberOfLines={1}>
+                      {space.name}
+                    </AppText>
+                    <AppText variant="caption" tone="muted">
+                      {space.memberCount} {space.memberCount === 1 ? 'member' : 'members'}
+                    </AppText>
+                  </View>
+                </Touchable>
+              </Card>
+            ))}
+          </View>
+        </Reveal>
+      ) : null}
 
       <Reveal index={5}>
         <SectionLabel>Recently captured</SectionLabel>

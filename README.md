@@ -26,7 +26,7 @@ Supabase is a managed **Postgres + Auth + Storage** host here, not the backend.
 No Edge Functions, no Realtime-driven business logic — Spring Boot owns the API
 surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 
-## Status — Phase 1 done, Phase 2 job runner in, Phase 3 Gemini call live, Phase 4 OCR tier in
+## Status — Phases 1–5 backend complete, Phase 6 Spaces in; nothing has run on a device
 
 ### What's real vs. stubbed
 
@@ -50,7 +50,13 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Search (FTS + vector, RRF) | **real, verified live** | `GET /v1/saves/search?q=` fuses Postgres full-text and pgvector with Reciprocal Rank Fusion (k=60), degrading to either half alone. Verified end to end against live Supabase: *"somewhere nice to eat in Denmark"* returns the Noma save on semantics alone — the text says Copenhagen, never Denmark |
 | Acts — recipe → shopping list | **real, verified live** | `V5__shopping_list.sql` + `act/`. One open list per user; a recipe's ingredients are normalised by one Gemini call into products, quantities and supermarket aisles, then **merged** into what's already there. Verified against two real recipes: garlic came out as 7 cloves (3 + 4) and olive oil as 4 tbsp (2 + 2), grouped in shop-layout order |
 | Acts — mobile | **real, never run on a device** | "Add to shopping list" on a recipe's detail screen, plus `/shopping-list` with optimistic tick-off and clear-checked |
-| RevenueCat / entitlements | **schema only** | `subscriptions` exists and is unused. `usage_counters.acts_used` is now *written* by the Act — recorded, not enforced, since there is no paid tier to escape a cap to yet |
+| Lifecycle | **real, verified live** | `PATCH /v1/saves/{id}/lifecycle` (`saved → planned → started → completed`) and `GET /v1/saves?lifecycle=…`, which backs the app's Continue rail. Deliberately not a state machine — going backwards is an ordinary thing to want |
+| Enrichment — TMDB / Google Places | **built, unverified live** | `enrich/`. Runs *between* classify and embed, because the vector is built from `structured_data` — embedding first would permanently omit the director and the address. Additive only: fills `[unclear]` and missing fields, never overwrites what the content said. 26 tests, all mocked; no real TMDB or Places key has been used |
+| RevenueCat / entitlements | **real, verified live** | `billing/` + `V6__billing.sql`. `POST /v1/webhooks/revenuecat`, shared-secret authenticated and **failing closed** when unset. Entitlement derived from expiry rather than event type, with dedupe and out-of-order guards. Six webhook cases driven live — see below |
+| Free-tier caps | **real, enforced, off by default** | 20 AI saves/month, 1 Act/week, checked in the worker before the Gemini request and again at the Act's controller for an immediate 402. `weavr.billing.enforce-free-caps` is off until there is a paid tier to escape to; the counters run regardless |
+| Spaces — CRUD, roles, invites | **real, verified live** | `space/` + `V7__spaces.sql`. Owner/editor/viewer, revocable invite codes with expiry and use limits, a Space feed. Authorisation verified live including the 404-vs-403 distinction |
+| Spaces — comments, votes, activity | **real, verified live** | Votes are a row per (save, user), so the score is a `sum` a replay cannot inflate — the shopping-list lesson applied before it could bite. Activity is deliberately sparse |
+| Spaces — duplicate detection | **built, unverified live** | `DuplicateDetector`. A save landing in a shared Space is compared by embedding distance against its neighbours and a *suggestion* is written — never a merge. The 0.15 threshold is a guess |
 | `POST /v1/saves` idempotency | **real, verified** | Repeated `Idempotency-Key` header returns the existing save, including under a concurrent-retry race (`V2__save_idempotency.sql`, `SaveServiceTest`). No caller sends the header yet — it exists for the still-unbuilt iOS share extension |
 | Expo app — theme & personalisation | **real, bundles clean** | 78 palette combinations, all audited for WCAG AA. Preferences persist |
 | Expo app — auth + save create/list | **real, never run on a device** | Supabase email/password, `POST`/`GET /v1/saves`, all four feed states. Typechecks and bundles; no dev build exists yet |
@@ -58,7 +64,9 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Expo app — search | **real, never run on a device** | `/search` — debounced, race-guarded against out-of-order responses, with idle / searching / results / no-match / error states. A `semantic`-only hit is badged "related", because a result whose words the user never typed reads as a bug otherwise |
 | Expo app — save detail | **real, never run on a device** | `/save/[id]` — full `structuredData` per knowledge type via `buildDetailModel`, numbered steps, chips, source link. A knowledge type this file has never heard of still renders its fields generically, so adding a type stays a server-side data change |
 | Expo app — Library | **real, never run on a device** | Now reads the same `SavesProvider` as the feed: real per-type counts, filter chips built from the types actually present, tappable rows. The fictional "AI groups" grid is gone |
-| Expo app — Spaces / digest / Continue rail | **sample content** | Need collaboration and digest endpoints that do not exist |
+| Expo app — Spaces | **real, never run on a device** | The tab lists real Spaces, creates them, joins by code; `/space/[id]` has saves / people / activity, an invite-code generator, and the duplicate-merge prompt |
+| Expo app — lifecycle, discussion, account | **real, never run on a device** | A progress strip and a comment/vote block on `/save/[id]`, a real Continue rail on Home, and a Settings plan card driven by `GET /v1/me` — the invented "2.1 GB of 5 GB" and the fictional "Connected accounts" rows are gone |
+| Expo app — weekly digest | **sample content** | The last of it. Needs a digest endpoint that does not exist |
 | Silent capture — Android | **built, never run on a device** | A config plugin (`app/plugins/withAndroidShareReceiver.js`) adds a no-display `ShareReceiverActivity` + a `ShareUploadWorker` (WorkManager, network-constrained, retried with exponential backoff up to 8 attempts). `expo prebuild -p android` produces the right manifest entry, Gradle dependency and Kotlin sources, verified by inspecting the generated output — no Android SDK on this machine to build or run it |
 | Silent capture — iOS | **absent** | The *Open app when saving* toggle exists; the native share extension does not. See [app/README.md](app/README.md) |
 
@@ -436,6 +444,85 @@ Suite: **243 tests** green, up from 217.
 > produces a 500 reading `Database error querying schema`, which looks like a
 > broken database rather than a malformed row.
 
+### Also on 2026-08-01 — Phase 5's monetisation half, enrichment, and Spaces
+
+Three phases' worth of remaining backend landed together, and **all of it was
+driven live against Supabase with two throwaway users and `curl`** rather than
+declared done off green unit tests. That found one bug no test could have.
+
+**The bug: every save into a Space failed with a 500, and the `catch` written
+to prevent exactly that did nothing.** `SaveService.create` recorded a
+`save_added` activity row inside its own transaction — but
+`space_activity.save_id` carries a foreign key, and Hibernate has not issued
+the `saves` INSERT at that point, because `persist()` with an
+application-assigned UUID defers it to flush. The activity insert therefore
+violated the constraint. The part worth carrying forward is *why the guard
+failed*: **Postgres aborts the entire transaction on any failed statement**, so
+the `try/catch` inside `recordActivity` — written on the principle that
+metering must never break the thing it describes — was catching an exception
+whose damage was already done, and every subsequent statement returned
+`current transaction is aborted`. Two fixes, both structural: the `save_added`
+row is now written in an **after-commit hook** (an activity entry should
+describe something that actually happened, so a rolled-back save should leave
+no trace), and `recordActivity` is **`REQUIRES_NEW`**, which is the only thing
+that makes its swallow real.
+
+**The RevenueCat webhook derives entitlement from expiry, not from event type**,
+and six cases were driven live to prove it:
+
+| Sent | Result |
+|---|---|
+| `INITIAL_PURCHASE`, unexpired | `applied/active` — `/v1/me` flips to `pro`, limits to unlimited |
+| the same event id again | `ignored/duplicate` |
+| `$RCAnonymousID:…` purchaser | `ignored/unknown_user`, **200** not 4xx |
+| `CANCELLATION` before expiry | still `pro` — cancelled means auto-renew off, **not** access ended |
+| an older `EXPIRATION` arriving late | `ignored/out_of_order`, still `pro` |
+| a current `EXPIRATION` | `applied/inactive`, limits back to 20/1 |
+
+The type-switch implementation every tutorial shows gets rows 4 and 5 wrong:
+it would cut off a user who has paid through to the end of the period, and let
+a delayed retry hand a lapsed one a permanent subscription. Nothing here
+switches on the event type, so a type invented in 2027 still resolves.
+
+**Spaces closed a hole that had been open since Phase 1.** `POST /v1/saves`
+took `spaceId` straight from the request body with nothing checking it — any
+authenticated user could drop a save into any Space whose id they had once been
+shown. Verified fixed live, along with the rest of the authorisation model: a
+non-member gets **404** (the existence of a Space they were never invited to is
+not theirs to learn), a member with too low a role gets **403** (they already
+know it exists, so hiding it would only confuse them), and a single-use invite
+returns 404 on its second use.
+
+**Votes were built as rows, not a tally, because the shopping list already
+taught that lesson.** A stored score is correct exactly once and drifts on any
+replay — the same shape as the accumulate-on-add bug that silently took garlic
+from 7 cloves to 10. `save_votes` has a composite PK and the score is a `sum`,
+so re-sending the same vote is a no-op: verified live at +1, +1 again (still 1),
+a second person (2), cleared (1).
+
+**One thing the live run improved rather than fixed:** re-sending an identical
+vote was writing a second activity row, so a single user action produced three
+lines in a feed documented as "meaningful events only". Now a vote only reaches
+the feed when it actually changed.
+
+**Enrichment guards against a failure the search half already hit in another
+costume.** TMDB answers a garbled title with *something* and Google Places
+answers "Noma" with a coffee roaster — neither has a concept of "no match", the
+same way a k-NN query did not until a distance cutoff was added. `TitleMatch`
+is the cutoff here, and enrichment is additive-only, so the worst a wrong match
+can do is add a field rather than overwrite what the user's own content said.
+
+Suite: **294 tests** green (5 opt-in live tests skipped), up from 243. `tsc
+--noEmit` clean and `expo export --platform android` bundles at 4.8 MB. Two
+migrations (`V6__billing.sql`, `V7__spaces.sql`) applied cleanly to live
+Supabase in 6.8s.
+
+**What is not verified:** enrichment has never used a real TMDB or Places key,
+and duplicate detection has never compared two real saves — both are mocked-test
+green, which is precisely the state that hid three yt-dlp defects and a UTF-8
+bug. The Act cap was unit-tested but not driven live, since exercising it needs
+a real recipe through the Gemini pipeline.
+
 ## Running the app
 
 ```bash
@@ -584,7 +671,22 @@ HTTP ping to a static endpoint.
 
 - **No integration tests against a real database.** Unit tests cover validation
   and enum mapping only. Testcontainers with a `pgvector/pgvector` image is the
-  natural next step.
+  natural next step — and the transaction-abort bug above is the argument for
+  it: no amount of mocking can reproduce "Postgres poisoned the transaction, so
+  your catch block was decorative".
+- **The `Idempotency-Key` race recovery is probably broken, and always has
+  been.** `SaveService.create` catches `DataIntegrityViolationException` and
+  re-reads the winner's row — but that read runs inside the same transaction
+  the violation just aborted, so it would fail with `current transaction is
+  aborted` rather than returning the existing save. It has never been observed,
+  because the pre-check catches every non-concurrent replay and the live
+  idempotency test exercised that path, not this one. The recovery needs its
+  own transaction. Found while fixing the activity-feed bug above; not fixed,
+  because it deserves a test that actually races two requests.
+- **Enrichment and duplicate detection are mocked-test green only.** No real
+  TMDB or Google Places key has been used, and no two real saves have been
+  compared. This is the same shape of gap that hid three yt-dlp defects behind
+  27 passing tests and a UTF-8 bug behind 67.
 - **`SecurityConfig` accepts `{ES256}` and nothing else.** `jwsAlgorithm()` adds
   to a set rather than extending the defaults. Rotating the Supabase signing key
   to RSA 2048 would break auth entirely, with the same misleading "no matching

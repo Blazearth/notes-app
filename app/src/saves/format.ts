@@ -51,6 +51,32 @@ const SOURCE_LABELS: Record<SaveResponse['sourceType'], string> = {
   audio: 'Audio',
 };
 
+/**
+ * "3h ago" for an activity feed or a comment.
+ *
+ * Cuts off at a week and shows a date instead: past that point the exact day is
+ * what people actually want, and "23 days ago" is arithmetic the reader has to
+ * do themselves.
+ */
+export function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+
+  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (seconds < 60) return 'just now';
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days}d ago`;
+
+  return new Date(then).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 export const STATUS_LABELS: Record<SaveStatus, string> = {
   processing: 'Processing',
   // Not a failure. The daily AI budget was spent, so the save waits for the next

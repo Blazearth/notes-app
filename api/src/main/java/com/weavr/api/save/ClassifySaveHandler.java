@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import com.weavr.api.billing.UsageService;
 import com.weavr.api.gemini.BudgetApproved;
 import com.weavr.api.gemini.GeminiBudgetService;
 import com.weavr.api.gemini.GeminiClient;
@@ -63,11 +64,12 @@ class ClassifySaveHandler implements JobHandler {
     private final JobQueue jobQueue;
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
+    private final UsageService usage;
 
     ClassifySaveHandler(SaveRepository saves, SaveStageWriter stages,
                         GeminiClient geminiClient, GeminiBudgetService budgetService,
                         GeminiProperties geminiProps, JobQueue jobQueue, JdbcClient jdbc,
-                        ObjectMapper objectMapper) {
+                        ObjectMapper objectMapper, UsageService usage) {
         this.saves = saves;
         this.stages = stages;
         this.geminiClient = geminiClient;
@@ -76,6 +78,7 @@ class ClassifySaveHandler implements JobHandler {
         this.jobQueue = jobQueue;
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
+        this.usage = usage;
     }
 
     @Override
@@ -101,6 +104,18 @@ class ClassifySaveHandler implements JobHandler {
 
         // Read the extracted text from stage 1.
         String text = extractText(saveId, save);
+
+        // The free-tier cap, checked before the budget rather than after: both
+        // guard the same shared pool, but this one is about *whose* share it is.
+        // Permanent, not retryable — the allowance will not come back within the
+        // job's retry window, and re-queueing a save until next month is worse
+        // than telling the user now.
+        UsageService.Allowance allowance = usage.checkSaves(save.getUserId());
+        if (!allowance.allowed()) {
+            throw new PermanentJobException("quota_exceeded",
+                    "You've used all %d free saves this month. Upgrade for unlimited saves."
+                            .formatted(allowance.limit()));
+        }
 
         // Acquire budget — throws RetryAfterException if daily pool is exhausted.
         BudgetApproved budget = budgetService.acquire();
@@ -138,13 +153,23 @@ class ClassifySaveHandler implements JobHandler {
         // Apply to the save.
         applyResult(saveId, stagePayload);
 
+        // Counted only on the path that actually spent a request. The
+        // early-return above (stage already cached) skips it deliberately, so a
+        // retried job never bills the user twice for one save.
+        usage.countSave(save.getUserId());
+
         log.info("Save {} classified → type={} confidence={} model={}",
                 saveId, response.knowledgeType(), response.confidence(), response.model());
 
-        // The save is already `ready` at this point. Embedding is an
-        // enhancement on top of that, so it gets its own job rather than
-        // holding a complete save behind a second network call.
-        enqueueEmbed(saveId, save.getUserId());
+        // The save is already `ready` at this point. Enrichment and embedding
+        // are enhancements on top of that, so they get their own jobs rather
+        // than holding a complete save behind two more network calls.
+        //
+        // Enrichment first, and it enqueues the embedding itself: the vector is
+        // built from structured_data, so embedding before enrichment would
+        // permanently omit the director and the address — the very terms a
+        // semantic search wants most.
+        enqueueEnrich(saveId, save.getUserId());
     }
 
     /**
@@ -159,15 +184,15 @@ class ClassifySaveHandler implements JobHandler {
      * that succeeded.
      */
     @Transactional
-    void enqueueEmbed(UUID saveId, UUID userId) {
+    void enqueueEnrich(UUID saveId, UUID userId) {
         try {
             jobQueue.enqueueForUser(
-                    JobType.EMBED_SAVE,
+                    JobType.ENRICH_SAVE,
                     Map.of("saveId", saveId.toString()),
-                    "embed_save:" + saveId,
+                    JobType.ENRICH_SAVE + ":" + saveId,
                     userId);
         } catch (RuntimeException e) {
-            log.warn("Could not enqueue embedding for save {}: {}", saveId, e.toString());
+            log.warn("Could not enqueue enrichment for save {}: {}", saveId, e.toString());
         }
     }
 

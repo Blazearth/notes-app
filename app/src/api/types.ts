@@ -96,6 +96,120 @@ export interface ShoppingListResponse {
   categories: string[];
 }
 
+/**
+ * `SpaceRole` — a three-value enum, not capability booleans.
+ *
+ * Ordered: `owner` > `editor` > `viewer`. A viewer can read and comment; adding
+ * content needs editor; deleting the Space needs owner.
+ */
+export type SpaceRole = 'owner' | 'editor' | 'viewer';
+
+/** `SpaceService.Space`. `myRole` is the caller's, not the owner's. */
+export interface Space {
+  id: string;
+  name: string;
+  type: string;
+  ownerId: string;
+  myRole: SpaceRole;
+  memberCount: number;
+  saveCount: number;
+  createdAt: string;
+}
+
+export interface SpaceMember {
+  userId: string;
+  displayName?: string;
+  role: SpaceRole;
+  joinedAt: string;
+}
+
+/**
+ * `SpaceService.Invite`. The server returns a bare `code`, not a URL — the
+ * deep-link scheme is the client's business, and the QR is generated on-device
+ * from whatever link this app decides to build.
+ */
+export interface SpaceInvite {
+  id: string;
+  code: string;
+  role: SpaceRole;
+  /** Absent means the link never expires. */
+  expiresAt?: string;
+  /** Absent means "anyone with the link". */
+  maxUses?: number;
+  uses: number;
+  revoked: boolean;
+  createdAt: string;
+}
+
+/** What the join screen shows before the user commits. */
+export interface InvitePreview {
+  spaceId: string;
+  spaceName: string;
+  invitedBy: string;
+  role: SpaceRole;
+  alreadyMember: boolean;
+}
+
+/**
+ * `SpaceService.ActivityEntry`. Sparse by design — joins, saves, completions,
+ * comments and votes only, never a per-scroll signal.
+ */
+export interface ActivityEntry {
+  id: string;
+  userId: string;
+  displayName: string;
+  saveId?: string;
+  saveTitle?: string;
+  type: string;
+  createdAt: string;
+}
+
+/**
+ * `DuplicateDetector.Suggestion` — two saves in a Space that are probably the
+ * same thing, found by embedding distance rather than by URL.
+ *
+ * Always a suggestion: the server never merges on its own.
+ */
+export interface DuplicateSuggestion {
+  id: string;
+  saveId: string;
+  saveTitle?: string;
+  duplicateOf: string;
+  duplicateTitle?: string;
+  distance: number;
+  status: string;
+}
+
+/** `SaveSocialService.Comment`. `mine` decides whether a delete affordance shows. */
+export interface SaveComment {
+  id: string;
+  userId: string;
+  displayName: string;
+  body: string;
+  createdAt: string;
+  mine: boolean;
+}
+
+/**
+ * `MeController.MeResponse` — entitlement and usage in one call.
+ *
+ * Entitlement comes from the server rather than the RevenueCat SDK because the
+ * two can disagree, and the server's answer is the one that governs what
+ * actually happens. A limit of `-1` means unlimited: either the user is Pro, or
+ * caps are not being enforced yet.
+ */
+export interface MeResponse {
+  userId: string;
+  pro: boolean;
+  entitlement?: string;
+  subscriptionStatus?: string;
+  renewsAt?: string;
+  savesUsed: number;
+  savesLimit: number;
+  actsUsed: number;
+  actsLimit: number;
+}
+
 /** RFC 9457 problem details, as produced by `ApiExceptionHandler`. */
 export interface ProblemDetail {
   type?: string;
@@ -105,4 +219,8 @@ export interface ProblemDetail {
   instance?: string;
   /** Added by the validation handler only. */
   errors?: string[];
+  /** Added by the 402 handler: which cap ran out, and where it stood. */
+  quota?: 'saves' | 'acts';
+  limit?: number;
+  used?: number;
 }

@@ -420,6 +420,66 @@ the plan said. Only the binary knew.
 
 ---
 
+## What running against a real database found (Spaces + billing, 2026-08-01)
+
+The pattern from the two sections above repeated on a third layer. Not a process
+this time and not an HTTP client, but **transaction semantics** — and the bug it
+produced was invisible to 289 passing tests for the same structural reason each
+of the earlier ones was: the thing that behaved unexpectedly was mocked away.
+
+**A `try/catch` around a database write does nothing when it runs inside the
+caller's transaction.**
+
+`SaveService.create` recorded a `save_added` activity row for a save going into
+a Space. `space_activity.save_id` carries a foreign key, and Hibernate had not
+issued the `saves` INSERT yet — `persist()` with an application-assigned UUID
+defers it to flush — so the activity insert violated the constraint. That much
+is an ordinary ordering mistake.
+
+The interesting half is what happened next. `SpaceService.recordActivity` wraps
+its insert in a `try/catch` on the explicit principle that metering must never
+fail the thing it describes. It caught the exception. It changed nothing:
+
+```
+ERROR: insert or update on table "space_activity" violates foreign key constraint
+ERROR: current transaction is aborted, commands ignored until end of transaction block
+```
+
+**Postgres aborts the entire transaction on any failed statement.** Every
+subsequent command — including the ones that had nothing to do with activity —
+returned the second error, and `POST /v1/saves` with a `spaceId` returned 500
+every single time.
+
+Two fixes, both structural rather than a guard:
+
+- The `save_added` row is written in an **after-commit hook**. That is the right
+  answer and not merely a working one: an activity entry should describe
+  something that actually happened, so a save that rolls back should leave no
+  trace of itself in the feed.
+- `recordActivity` is **`@Transactional(REQUIRES_NEW)`**. Its own transaction is
+  the only thing that makes "this must never break its caller" true. Any
+  swallow-and-log around a database write needs the same, or it is decorative.
+
+**Why no test caught it.** Every test of `SaveService` mocks `JdbcClient` and
+`SpaceService`; a mock has no foreign keys and no transaction state, so the
+failure could not occur and the useless catch looked correct. This is the
+clearest argument in the repo for Testcontainers: process bugs were found by
+running the real binary and HTTP bugs by hitting the real API, and this class of
+bug needs a real database in exactly the same way.
+
+Two smaller things the same live pass produced:
+
+- **A vote re-sent unchanged was writing a second activity row**, so one user
+  action put three lines in a feed documented as "meaningful events only". Read
+  before write, and only record when the value actually changed. Not a crash —
+  the sort of thing that only looks wrong when you read the output.
+- **`POST /v1/saves` had never checked `spaceId` against membership**, so any
+  authenticated user could write into any Space whose id they had been shown.
+  It had been that way since Phase 1 and no test asked, because until Spaces
+  existed there was nothing to be a member of.
+
+---
+
 ## Traps
 
 **Two database URLs, and they are not interchangeable.** `WEAVR_DB_URL` is the
@@ -494,7 +554,10 @@ Honest gaps, roughly in order of how much they would cost to discover late.
 | **ASR has never run against a real Groq call.** Download, downmix and transcription are all mocked | `WEAVR_GROQ_API_KEY` set, and a real video with no captions |
 | **The OCR thresholds are guesses.** `min-mean-confidence: 60` and friends have never been measured — only sanity-checked against a synthetic card (95) and a textless clip | The thirty-Reel eval set: measure tesseract against Flash and set the floor from data |
 | **The visual tier has only read synthetic fixtures.** Real-world text over photographs, motion blur and stylised fonts are untested, and that is where tesseract fails hard rather than gracefully | Same eval set |
-| **No integration tests against a real database.** Every SQL statement is validated only by booting the app — and search added three more (the FTS query, the vector query, the RRF-fed fetch) | Testcontainers with a `pgvector/pgvector` image |
+| **No integration tests against a real database.** Every SQL statement is validated only by booting the app. **This one has now actually bitten** — see the transaction-abort bug below | Testcontainers with a `pgvector/pgvector` image |
+| **`SaveService`'s idempotency-race recovery is probably broken.** It catches the constraint violation and re-reads inside the same transaction Postgres has just aborted, so it would fail rather than return the existing save. Never observed, because the pre-check handles every non-concurrent replay | Two genuinely concurrent requests with the same key, against a real database |
+| **Enrichment has never used a real TMDB or Places key.** Request shapes and the match guard are pinned by `MockRestServiceServer`; whether either API answers this way is unknown | Set `WEAVR_TMDB_API_KEY` / `WEAVR_GOOGLE_PLACES_API_KEY` and classify a real film and a real restaurant |
+| **Duplicate detection has never compared two real saves.** The 0.15 cosine threshold is argued from the search half's numbers, not measured | Two people saving the same restaurant from different URLs into one Space |
 | **The search distance cutoff is calibrated on three saves.** 0.40 sits in a real measured gap, but seven queries against a three-item corpus is not a calibration | A few hundred real saves, then re-measure hits vs misses |
 | **Search relevance has no benchmark.** RRF fusion is unit-tested; whether the fused ordering is *good* is unmeasured | A labelled query set, the search analogue of the OCR eval set |
 | **No automated contrast check.** The 78-combination audit is a manual script | A test runner in `app/`, then promote the script above |
