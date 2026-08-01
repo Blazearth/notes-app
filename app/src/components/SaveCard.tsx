@@ -35,6 +35,16 @@ export interface SaveCardProps {
   save: SaveResponse;
   trailing?: React.ReactNode;
   onPress?: () => void;
+  /**
+   * Replaces the derived meta line with a caller-supplied one — Home uses it
+   * for "YouTube • Workout", where source and category say more at a glance
+   * than the knowledge type does.
+   *
+   * An override rather than a flag so the decision stays with the screen: the
+   * Library wants the type, Home wants the provenance, and neither is more
+   * correct in general.
+   */
+  subtitleOverride?: string;
 }
 
 /**
@@ -43,7 +53,7 @@ export interface SaveCardProps {
  * knowledge type without a layout yet) falls back to the flat `ListRow`, so
  * this is the only branch point a screen needs to know about.
  */
-export function SaveCard({ save, trailing, onPress }: SaveCardProps) {
+export function SaveCard({ save, trailing, onPress, subtitleOverride }: SaveCardProps) {
   const { spacing, radius } = useTheme();
   const model = buildCardModel(save);
 
@@ -51,7 +61,7 @@ export function SaveCard({ save, trailing, onPress }: SaveCardProps) {
     return (
       <ListRow
         title={saveTitle(save)}
-        subtitle={saveSubtitle(save)}
+        subtitle={subtitleOverride ?? saveSubtitle(save)}
         tint={save.knowledgeType ? TYPE_COLORS[save.knowledgeType] : undefined}
         trailing={trailing}
         onPress={onPress}
@@ -90,9 +100,9 @@ export function SaveCard({ save, trailing, onPress }: SaveCardProps) {
             </AppText>
             {trailing}
           </View>
-          {model.meta ? (
+          {subtitleOverride ?? model.meta ? (
             <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
-              {model.meta}
+              {subtitleOverride ?? model.meta}
             </AppText>
           ) : null}
           {model.summary ? (

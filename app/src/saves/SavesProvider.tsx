@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
-import { ApiError, listSaves } from '@/api/client';
+import { ApiError } from '@/api/client';
+import { repo } from '@/data';
 import type { SaveResponse } from '@/api/types';
 import { useSession } from '@/auth/SessionProvider';
 
@@ -45,7 +46,7 @@ export function SavesProvider({ children }: { children: React.ReactNode }) {
     setError(null);
 
     try {
-      const items = await listSaves();
+      const items = await repo.listSaves();
       setSaves(items);
       setStatus('ready');
     } catch (e) {

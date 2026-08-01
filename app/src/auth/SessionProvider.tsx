@@ -3,7 +3,30 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { supabase } from './supabase';
+import { USE_MOCK_DATA } from '@/data/config';
+import { MOCK_USER_ID } from '@/data/mockData';
 import { mirrorShareSession } from '@/share/nativeShareConfig';
+
+/**
+ * A session that satisfies the route guards without Supabase being involved.
+ *
+ * Auth is a backend dependency like any other, so `USE_MOCK_DATA` has to cover
+ * it too — otherwise "the frontend runs with no backend" is false at the very
+ * first screen, and every UI review starts with a sign-in form and an account
+ * that has to exist somewhere real.
+ *
+ * Cast rather than constructed in full: `Session` carries a dozen fields that
+ * only the Supabase client reads, and in this mode nothing ever hands this to
+ * the Supabase client. The two things the app itself touches — a truthy
+ * session and `user.id` — are both real here.
+ */
+const MOCK_SESSION = {
+  access_token: 'mock-access-token',
+  refresh_token: 'mock-refresh-token',
+  token_type: 'bearer',
+  expires_in: 3600,
+  user: { id: MOCK_USER_ID, email: 'maya@weavr.app' },
+} as unknown as Session;
 
 export interface SessionContextValue {
   session: Session | null;
@@ -17,10 +40,13 @@ export interface SessionContextValue {
 const SessionContext = createContext<SessionContextValue | null>(null);
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
-  const [hydrated, setHydrated] = useState(false);
+  // Signed in and hydrated from the first frame when mocking, so there is no
+  // splash-then-sign-in flicker on the way to Home.
+  const [session, setSession] = useState<Session | null>(USE_MOCK_DATA ? MOCK_SESSION : null);
+  const [hydrated, setHydrated] = useState(USE_MOCK_DATA);
 
   useEffect(() => {
+    if (USE_MOCK_DATA) return;
     let cancelled = false;
 
     supabase.auth
@@ -51,6 +77,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   // plain file (see nativeShareConfig.ts) since they run outside the JS
   // runtime and cannot reach AsyncStorage.
   useEffect(() => {
+    // Nothing native should be handed a fake token to POST with.
+    if (USE_MOCK_DATA) return;
     mirrorShareSession(session?.access_token ?? null, session?.refresh_token ?? null);
   }, [session]);
 
@@ -58,6 +86,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   // JS runtime is suspended, so a timer that fires there either does nothing or
   // wakes up to a stale clock. Supabase exposes explicit start/stop for this.
   useEffect(() => {
+    if (USE_MOCK_DATA) return;
     const handle = (state: AppStateStatus) => {
       if (state === 'active') {
         void supabase.auth.startAutoRefresh();
@@ -72,6 +101,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
+    if (USE_MOCK_DATA) {
+      setSession(MOCK_SESSION);
+      return;
+    }
     const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
@@ -80,6 +113,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signUp = useCallback(async (email: string, password: string) => {
+    if (USE_MOCK_DATA) {
+      setSession(MOCK_SESSION);
+      return { needsConfirmation: false };
+    }
     const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
     if (error) throw new Error(error.message);
     // With email confirmation enabled, signUp returns a user but no session.
@@ -87,6 +124,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    if (USE_MOCK_DATA) {
+      setSession(null);
+      return;
+    }
     await supabase.auth.signOut();
   }, []);
 

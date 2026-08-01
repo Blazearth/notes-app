@@ -13,6 +13,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { MISSING_CONFIG } from '@/api/config';
 import { SessionProvider, useSession } from '@/auth/SessionProvider';
+import { USE_MOCK_DATA } from '@/data/config';
 import { PreferencesProvider, usePreferences } from '@/prefs/PreferencesProvider';
 import { SavesProvider } from '@/saves/SavesProvider';
 import { ConfigErrorScreen } from '@/screens/ConfigErrorScreen';
@@ -112,7 +113,11 @@ export default function RootLayout() {
   // Before anything else: without configuration the Supabase client and the API
   // client are both inert, so say so plainly instead of failing at the first
   // request with a network error that looks like a server problem.
-  if (MISSING_CONFIG.length > 0) {
+  //
+  // Skipped entirely when mocking — the whole point of that mode is that none
+  // of these three variables is needed, so demanding them would make "runs with
+  // no backend" false at the first frame.
+  if (!USE_MOCK_DATA && MISSING_CONFIG.length > 0) {
     SplashScreen.hideAsync().catch(() => {});
     return (
       <SafeAreaProvider>

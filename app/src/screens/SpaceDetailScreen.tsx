@@ -3,17 +3,8 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, RefreshControl, View } from 'react-native';
 
-import {
-  ApiError,
-  createInvite,
-  dismissDuplicate,
-  getSpace,
-  getSpaceActivity,
-  listDuplicates,
-  listSpaceMembers,
-  listSpaceSaves,
-  mergeDuplicate,
-} from '@/api/client';
+import { ApiError } from '@/api/client';
+import { repo } from '@/data';
 import type {
   ActivityEntry,
   DuplicateSuggestion,
@@ -155,11 +146,11 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       // visible within one tap of each other, and four sequential round trips
       // on a phone network is the difference between instant and sluggish.
       const [s, sv, m, a, d] = await Promise.all([
-        getSpace(spaceId),
-        listSpaceSaves(spaceId),
-        listSpaceMembers(spaceId),
-        getSpaceActivity(spaceId),
-        listDuplicates(spaceId),
+        repo.getSpace(spaceId),
+        repo.listSpaceSaves(spaceId),
+        repo.listSpaceMembers(spaceId),
+        repo.getSpaceActivity(spaceId),
+        repo.listDuplicates(spaceId),
       ]);
       setSpace(s);
       setSaves(sv);
@@ -189,7 +180,7 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       // "Anyone with the link", which is what people expect from a link they
       // are about to paste into a group chat. A single-use invite is a
       // different affordance and would need to say so.
-      const created = await createInvite(spaceId, { role: 'editor' });
+      const created = await repo.createInvite(spaceId, { role: 'editor' });
       setInvite(created.code);
       setCopied(false);
     } catch (e) {
@@ -209,7 +200,7 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       // while a request settles makes the tap feel unregistered.
       setDuplicates((current) => current.filter((d) => d.id !== id));
       try {
-        await (merge ? mergeDuplicate(spaceId, id) : dismissDuplicate(spaceId, id));
+        await (merge ? repo.mergeDuplicate(spaceId, id) : repo.dismissDuplicate(spaceId, id));
         await load();
       } catch {
         await load();

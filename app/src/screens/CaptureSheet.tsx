@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, View } from 'react-native';
 import Animated, {
   interpolate,
@@ -16,7 +16,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ApiError, createSave } from '@/api/client';
+import { ApiError } from '@/api/client';
+import { repo } from '@/data';
 import { AppText } from '@/components/AppText';
 import { Glyph } from '@/components/Glyph';
 import { Touchable } from '@/components/Touchable';
@@ -42,6 +43,11 @@ const PANEL_ENTER_OFFSET = 420;
 /** How far a tile rises into place. Small — this is a garnish on a sheet that is already moving. */
 const TILE_ENTER_OFFSET = 12;
 const TILE_ENTER_MS = 260;
+/** Dismissal duration. Fixed, so navigation lands at a known moment — see `dismiss`. */
+const DISMISS_MS = 160;
+
+/** Module scope so its identity never changes. */
+const noop = () => {};
 
 function chunk<T>(items: T[], size: number): T[][] {
   const rows: T[][] = [];
@@ -58,7 +64,7 @@ function looksLikeUrl(value: string): boolean {
   }
 }
 
-function OptionTile({
+const OptionTile = React.memo(function OptionTile({
   option,
   busy,
   index,
@@ -160,7 +166,7 @@ function OptionTile({
       </Touchable>
     </Animated.View>
   );
-}
+});
 
 /**
  * Universal Capture — the FAB sheet.
@@ -193,15 +199,35 @@ export function CaptureSheet() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const dismiss = () => {
+  /**
+   * Close, fast and deterministically.
+   *
+   * This used to run the entrance spring backwards and navigate from its
+   * completion callback, which is where the lag came from: a spring settles
+   * asymptotically, so it spends a long tail travelling a few pixels nobody can
+   * see, and `router.back()` waited for all of it. The sheet looked gone well
+   * before the screen changed.
+   *
+   * A timing curve has an end. 160 ms is under the threshold where a dismissal
+   * reads as a wait, and because the duration is fixed, the navigation lands at
+   * a known moment rather than whenever the physics decide.
+   *
+   * Guarded against re-entry: two taps on the scrim would otherwise fire
+   * `router.back()` twice and pop the screen underneath as well.
+   */
+  const dismissing = useRef(false);
+  const dismiss = useCallback(() => {
+    if (dismissing.current) return;
+    dismissing.current = true;
+
     if (reducedMotion) {
       router.back();
       return;
     }
-    progress.value = withSpring(0, Spring.enter, (finished) => {
+    progress.value = withTiming(0, { duration: DISMISS_MS }, (finished) => {
       if (finished) runOnJS(router.back)();
     });
-  };
+  }, [reducedMotion, router, progress]);
 
   const blurProps = useAnimatedProps(() => ({
     intensity: progress.value * BACKDROP_BLUR_INTENSITY,
@@ -216,39 +242,71 @@ export function CaptureSheet() {
     transform: [{ translateY: interpolate(progress.value, [0, 1], [PANEL_ENTER_OFFSET, 0]) }],
   }));
 
-  const pasteLink = async () => {
+  /**
+   * Validate on the sheet, then dismiss *before* the network call.
+   *
+   * The split matters. Clipboard read and URL validation are local and
+   * sub-frame, and their failures are the user's to correct — an empty
+   * clipboard has to say so on a sheet that is still open, or the message has
+   * nowhere to land. Creating the save is a round trip, and waiting for it held
+   * the sheet on screen for its whole duration, which is the lag being
+   * reported: the tap looked ignored until the server answered.
+   *
+   * So the create is fired and deliberately not awaited. The sheet is already
+   * closing while it runs, and the feed updates underneath when it lands.
+   */
+  const pasteLink = useCallback(async () => {
     setBusyId('link');
     setError(null);
+
+    let clipboard: string;
     try {
-      const clipboard = (await Clipboard.getStringAsync()).trim();
-      if (!clipboard) {
-        haptic('error');
-        setError('Clipboard is empty. Copy a link first.');
-        return;
-      }
-      if (!looksLikeUrl(clipboard)) {
-        haptic('error');
-        setError('That does not look like a link. Copy an http(s) URL and try again.');
-        return;
-      }
-
-      const save = await createSave({ sourceType: 'url', sourceUrl: clipboard });
-      // The sheet dismisses on success, so the confirmation has to be tactile —
-      // there is no surface left to show a check on.
-      haptic('success');
-      prepend(save);
-      router.back();
-    } catch (e) {
-      // Surface the real reason: an unreachable API and a rejected token look
-      // identical to a user otherwise, and both are common in development.
+      clipboard = (await Clipboard.getStringAsync()).trim();
+    } catch {
       haptic('error');
-      setError(e instanceof ApiError ? e.message : 'Could not save that link');
-    } finally {
+      setError('Could not read the clipboard.');
       setBusyId(null);
+      return;
     }
-  };
 
-  const rows = chunk(CAPTURE_OPTIONS, COLUMNS);
+    if (!clipboard) {
+      haptic('error');
+      setError('Clipboard is empty. Copy a link first.');
+      setBusyId(null);
+      return;
+    }
+    if (!looksLikeUrl(clipboard)) {
+      haptic('error');
+      setError('That does not look like a link. Copy an http(s) URL and try again.');
+      setBusyId(null);
+      return;
+    }
+
+    // Committed from here. Confirm tactilely and get out of the way — there is
+    // no surface left to show a check on.
+    haptic('success');
+    setBusyId(null);
+    dismiss();
+
+    void repo
+      .createSave({ sourceType: 'url', sourceUrl: clipboard })
+      .then(prepend)
+      .catch((e: unknown) => {
+        // The sheet is gone, so this cannot be shown where it was raised. The
+        // save simply never appears in the feed, which understates the problem
+        // — a transient surface for post-dismissal failures is the missing
+        // piece here, and it does not exist yet.
+        haptic('error');
+        console.warn('[capture] save failed:', e instanceof ApiError ? e.message : e);
+      });
+  }, [dismiss, haptic, prepend]);
+
+  // `pasteLink` has to be stable too, or this changes every render and the
+  // `React.memo` on the tiles is decorative.
+  const handlePasteLink = useCallback(() => void pasteLink(), [pasteLink]);
+
+  // Static input, so this must not be rebuilt on every keystroke of state.
+  const rows = useMemo(() => chunk(CAPTURE_OPTIONS, COLUMNS), []);
 
   return (
     <View style={{ flex: 1, justifyContent: 'flex-end' }}>
@@ -325,7 +383,10 @@ export function CaptureSheet() {
                   option={option}
                   busy={busyId === option.id}
                   index={rowIndex * COLUMNS + colIndex}
-                  onPress={option.id === 'link' ? () => void pasteLink() : () => {}}
+                  // Stable identities, or `React.memo` on the tile buys nothing
+                  // — a fresh arrow per render makes every tile re-render on
+                  // every keystroke of sheet state.
+                  onPress={option.id === 'link' ? handlePasteLink : noop}
                 />
               ))}
               {/* Keep the last row's columns aligned with the first. */}

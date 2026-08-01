@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
-import { listSavesByLifecycle, listSpaces } from '@/api/client';
+import { MOCK_CATEGORIES, MOCK_SOURCE_LABELS, repo, type KnowledgeGroup } from '@/data';
 import type { SaveResponse, Space } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -19,6 +19,15 @@ import { usePreferences } from '@/prefs/PreferencesProvider';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/**
+ * How many saves Home shows before deferring to search.
+ *
+ * Five, because Home is a summary and the sections under the feed have to stay
+ * reachable. An uncapped feed pushes everything below it off the screen and
+ * quietly turns the home screen into the library.
+ */
+const RECENT_LIMIT = 5;
 
 function greetingForHour(hour: number): string {
   if (hour < 12) return 'Good morning';
@@ -109,6 +118,49 @@ function StatusPill({ label, tint }: { label: string; tint: string }) {
 }
 
 /**
+ * One AI-derived collection.
+ *
+ * `flexBasis: '48%'` with `flexWrap` rather than two hard-coded columns: the
+ * cards reflow on a wider screen without a breakpoint, and — unlike `flex: 1`
+ * inside a wrapping row — a percentage basis is a real number Yoga can measure,
+ * so the card keeps its content height. That distinction cost a whole debugging
+ * session on the Capture sheet; it is worth not repeating here.
+ */
+const GroupCard = React.memo(function GroupCard({
+  group,
+  onPress,
+}: {
+  group: KnowledgeGroup;
+  onPress: () => void;
+}) {
+  const { spacing, radius } = useTheme();
+  return (
+    <Card padding={0} radius={radius.md} style={{ flexBasis: '48%', flexGrow: 1, overflow: 'hidden' }}>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel={`${group.title}, ${group.itemCount} items`}
+        onPress={onPress}
+        haptic="selection"
+        style={{ padding: spacing.md, gap: spacing.xs }}
+      >
+        <AppText style={{ fontSize: 20 }}>{group.emoji}</AppText>
+        <AppText variant="cardTitle" numberOfLines={1}>
+          {group.title}
+        </AppText>
+        {/* One line, truncated rather than wrapped: a card that grows a second
+            line breaks the grid's rhythm for the sake of a third facet. */}
+        <AppText variant="caption" tone="muted" numberOfLines={1}>
+          {group.facets.join(' • ')}
+        </AppText>
+        <AppText variant="caption" tone="faint">
+          {group.itemCount} items
+        </AppText>
+      </Touchable>
+    </Card>
+  );
+});
+
+/**
  * The live feed section.
  *
  * All four states are real here, because with no job runner yet the interesting
@@ -116,7 +168,7 @@ function StatusPill({ label, tint }: { label: string; tint: string }) {
  * indefinitely, and an unreachable API is the single most likely thing to happen
  * during development.
  */
-function RecentlyCaptured() {
+function RecentlyCaptured({ limit }: { limit: number }) {
   const { palette, spacing } = useTheme();
   const { saves, status, error, refresh } = useSaves();
   const router = useRouter();
@@ -163,9 +215,14 @@ function RecentlyCaptured() {
   const tintFor = (status_: string) =>
     status_ === 'failed' ? palette.danger : status_ === 'pending' ? palette.warning : palette.accent;
 
+  // Home shows a fixed number and stops. The full list is what the Library is
+  // for, and a home screen that grows without bound stops being a summary —
+  // every section below it becomes unreachable without a long scroll.
+  const shown = saves.slice(0, limit);
+
   return (
     <View style={{ gap: spacing.smd }}>
-      {saves.map((save) => (
+      {shown.map((save) => (
         <SaveCard
           key={save.id}
           save={save}
@@ -173,6 +230,7 @@ function RecentlyCaptured() {
           // legitimate thing to open, and the detail screen explains itself
           // rather than rendering empty.
           onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
+          subtitleOverride={sourceLine(save)}
           trailing={
             save.status === 'ready' ? undefined : (
               <StatusPill label={STATUS_LABELS[save.status]} tint={tintFor(save.status)} />
@@ -180,8 +238,46 @@ function RecentlyCaptured() {
           }
         />
       ))}
+      {saves.length > shown.length ? (
+        <Touchable
+          accessibilityRole="button"
+          onPress={() => router.push('/search')}
+          haptic="selection"
+          style={{ alignSelf: 'center', paddingVertical: spacing.sm }}
+        >
+          <AppText variant="label" tone="accent" style={{ fontSize: 13 }}>
+            See all {saves.length}
+          </AppText>
+        </Touchable>
+      ) : null}
     </View>
   );
+}
+
+/**
+ * "YouTube • Workout".
+ *
+ * Source and category are presentation-only and no endpoint serves either, so
+ * they come from the mock layer keyed by save id and fall back to what the save
+ * itself knows. Falling back rather than hiding matters: with the real backend
+ * selected this line still renders, just from `sourceUrl` and `knowledgeType`.
+ */
+function sourceLine(save: SaveResponse): string | undefined {
+  const source =
+    MOCK_SOURCE_LABELS[save.id] ??
+    (save.sourceUrl
+      ? (() => {
+          try {
+            return new URL(save.sourceUrl).hostname.replace(/^www\./, '');
+          } catch {
+            return undefined;
+          }
+        })()
+      : undefined);
+  const category = MOCK_CATEGORIES[save.id] ?? save.knowledgeType;
+
+  const parts = [source, category].filter(Boolean);
+  return parts.length ? parts.join(' • ') : undefined;
 }
 
 export function HomeScreen() {
@@ -205,19 +301,23 @@ export function HomeScreen() {
   // would miss anything older than 25 saves.
   const [continueSaves, setContinueSaves] = useState<SaveResponse[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
+  const [groups, setGroups] = useState<KnowledgeGroup[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     // Both sections hide themselves when empty, so a failure here degrades to
     // absence rather than to an error card sitting above the feed. `allSettled`
     // so one failing does not blank the other.
-    void Promise.allSettled([listSavesByLifecycle(['planned', 'started']), listSpaces()]).then(
-      ([rail, mySpaces]) => {
-        if (cancelled) return;
-        if (rail.status === 'fulfilled') setContinueSaves(rail.value);
-        if (mySpaces.status === 'fulfilled') setSpaces(mySpaces.value);
-      },
-    );
+    void Promise.allSettled([
+      repo.listSavesByLifecycle(['planned', 'started']),
+      repo.listSpaces(),
+      repo.listGroups(),
+    ]).then(([rail, mySpaces, myGroups]) => {
+      if (cancelled) return;
+      if (rail.status === 'fulfilled') setContinueSaves(rail.value);
+      if (mySpaces.status === 'fulfilled') setSpaces(mySpaces.value);
+      if (myGroups.status === 'fulfilled') setGroups(myGroups.value);
+    });
     return () => {
       cancelled = true;
     };
@@ -254,27 +354,11 @@ export function HomeScreen() {
           </AppText>
           <AppText variant="title">{name}</AppText>
         </View>
+        {/* Settings is the only action here.
+            The shopping-list shortcut that used to sit beside it is reachable
+            from the recipe it belongs to, and a header with one control says
+            what the screen is for far better than a row of them. */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
-          {/* The shopping list is the payoff of the one Act, so it gets a
-              permanent way in rather than only appearing after a conversion. */}
-          <Touchable
-            accessibilityRole="button"
-            accessibilityLabel="Shopping list"
-            onPress={() => router.push('/shopping-list')}
-            weight="tile"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: radius.sm,
-              backgroundColor: palette.surface,
-              borderWidth: 1,
-              borderColor: palette.border,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Glyph name="fileText" size={icon.sm} />
-          </Touchable>
           {/* `collapsable={false}` is required, not defensive: Android flattens
               a view that draws nothing out of the native hierarchy, and a
               flattened view has no window position to measure. */}
@@ -350,7 +434,33 @@ export function HomeScreen() {
         </Reveal>
       ) : null}
 
-      <Reveal index={3}>
+      {/* The library, one level up: what the user has, rather than what they
+          most recently added. Hidden when nothing can group — which is the
+          honest rendering under the real backend, where no endpoint serves
+          these yet. */}
+      {groups.length > 0 ? (
+        <Reveal index={3}>
+          <SectionLabel>AI groups</SectionLabel>
+          <View
+            style={{
+              flexDirection: 'row',
+              flexWrap: 'wrap',
+              gap: spacing.smd,
+              marginBottom: spacing.xxl - 2,
+            }}
+          >
+            {groups.map((group) => (
+              <GroupCard
+                key={group.id}
+                group={group}
+                onPress={() => router.push('/search')}
+              />
+            ))}
+          </View>
+        </Reveal>
+      ) : null}
+
+      <Reveal index={4}>
         <Card variant="accent" padding={spacing.lg} style={{ marginBottom: spacing.xxl - 2 }}>
           {/* On the accent container, not the page — so the label uses the
               container's computed on-colour rather than the accent itself. */}
@@ -366,7 +476,7 @@ export function HomeScreen() {
           screen. Capped at two: this is a glance, and the Spaces tab is one
           tap away. */}
       {spaces.length > 0 ? (
-        <Reveal index={4}>
+        <Reveal index={5}>
           <SectionLabel>Active spaces</SectionLabel>
           <View style={{ flexDirection: 'row', gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
             {spaces.slice(0, 2).map((space) => (
@@ -414,9 +524,9 @@ export function HomeScreen() {
         </Reveal>
       ) : null}
 
-      <Reveal index={5}>
-        <SectionLabel>Recently captured</SectionLabel>
-        <RecentlyCaptured />
+      <Reveal index={6}>
+        <SectionLabel>Recently added</SectionLabel>
+        <RecentlyCaptured limit={RECENT_LIMIT} />
       </Reveal>
     </Screen>
   );

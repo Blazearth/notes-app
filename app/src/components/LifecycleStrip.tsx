@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View } from 'react-native';
 
-import { setSaveLifecycle } from '@/api/client';
+import { repo } from '@/data';
 import type { LifecycleStatus } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { SectionLabel } from '@/components/SectionLabel';
@@ -46,7 +46,7 @@ export function LifecycleStrip({
     setLocal(next);
     setBusy(true);
     try {
-      const updated = await setSaveLifecycle(saveId, next);
+      const updated = await repo.setSaveLifecycle(saveId, next);
       // Trust the server's echo rather than the optimistic guess.
       setLocal(updated.lifecycleStatus ?? next);
       onChange?.(updated.lifecycleStatus ?? next);

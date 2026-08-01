@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { TextInput, View } from 'react-native';
 
-import { addComment, deleteComment, listComments, setVote } from '@/api/client';
+import { repo } from '@/data';
 import type { SaveComment } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -28,7 +28,7 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
 
   const load = useCallback(async () => {
     try {
-      setComments(await listComments(saveId));
+      setComments(await repo.listComments(saveId));
     } catch {
       // A save whose comments will not load is still perfectly readable, so
       // this stays quiet rather than pushing an error over the content.
@@ -47,7 +47,7 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
       const previous = myVote;
       setMyVote(next);
       try {
-        const result = await setVote(saveId, next);
+        const result = await repo.setVote(saveId, next);
         setScore(result.score);
       } catch {
         setMyVote(previous);
@@ -61,7 +61,7 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
     if (!body || busy) return;
     setBusy(true);
     try {
-      const created = await addComment(saveId, body);
+      const created = await repo.addComment(saveId, body);
       setComments((current) => [...current, created]);
       setDraft('');
     } catch {
@@ -76,7 +76,7 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
     async (commentId: string) => {
       setComments((current) => current.filter((c) => c.id !== commentId));
       try {
-        await deleteComment(saveId, commentId);
+        await repo.deleteComment(saveId, commentId);
       } catch {
         await load();
       }

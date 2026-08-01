@@ -2,12 +2,8 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, RefreshControl, View } from 'react-native';
 
-import {
-  ApiError,
-  clearCheckedShoppingItems,
-  getShoppingList,
-  setShoppingItemChecked,
-} from '@/api/client';
+import { ApiError } from '@/api/client';
+import { repo } from '@/data';
 import type { ShoppingListItem } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -113,7 +109,7 @@ export function ShoppingListScreen() {
     else setStatus('loading');
     setError(null);
     try {
-      const list = await getShoppingList();
+      const list = await repo.getShoppingList();
       setItems(list.items);
       setCategories(list.categories);
       setStatus('ready');
@@ -139,7 +135,7 @@ export function ShoppingListScreen() {
     const next = !item.checked;
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, checked: next } : i)));
     try {
-      await setShoppingItemChecked(item.id, next);
+      await repo.setShoppingItemChecked(item.id, next);
     } catch {
       setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, checked: !next } : i)));
     }
@@ -149,7 +145,7 @@ export function ShoppingListScreen() {
     const previous = items;
     setItems((prev) => prev.filter((i) => !i.checked));
     try {
-      await clearCheckedShoppingItems();
+      await repo.clearCheckedShoppingItems();
     } catch {
       setItems(previous);
     }

@@ -2,7 +2,8 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Linking, View } from 'react-native';
 
-import { ApiError, convertToShoppingList, getSave } from '@/api/client';
+import { ApiError } from '@/api/client';
+import { repo } from '@/data';
 import type { SaveResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -183,7 +184,7 @@ function AddToShoppingList({ saveId }: { saveId: string }) {
     setState('adding');
     setMessage(null);
     try {
-      await convertToShoppingList(saveId);
+      await repo.convertToShoppingList(saveId);
       setState('added');
     } catch (e) {
       setState('error');
@@ -279,7 +280,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      setSave(await getSave(id));
+      setSave(await repo.getSave(id));
     } catch (e) {
       setError(e instanceof ApiError ? e : new ApiError('server', 'Something went wrong', null));
     } finally {

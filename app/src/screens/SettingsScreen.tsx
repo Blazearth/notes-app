@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { Platform, View } from 'react-native';
 
-import { getMe } from '@/api/client';
+import { repo } from '@/data';
 import type { MeResponse } from '@/api/types';
 import { useSession } from '@/auth/SessionProvider';
 import { AppText } from '@/components/AppText';
@@ -155,7 +155,7 @@ export function SettingsScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    getMe()
+    repo.getMe()
       .then((response) => {
         if (!cancelled) setMe(response);
       })

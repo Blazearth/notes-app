@@ -2,7 +2,8 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, RefreshControl, TextInput, View } from 'react-native';
 
-import { ApiError, acceptInvite, createSpace, listSpaces } from '@/api/client';
+import { ApiError } from '@/api/client';
+import { repo } from '@/data';
 import type { Space } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -111,7 +112,7 @@ export function SpacesScreen() {
 
   const load = useCallback(async () => {
     try {
-      setSpaces(await listSpaces());
+      setSpaces(await repo.listSpaces());
       setError(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not load your Spaces.');
@@ -139,7 +140,7 @@ export function SpacesScreen() {
     setBusy(true);
     setNotice(null);
     try {
-      const space = await createSpace(trimmed);
+      const space = await repo.createSpace(trimmed);
       setName('');
       await load();
       router.push({ pathname: '/space/[id]', params: { id: space.id } });
@@ -156,7 +157,7 @@ export function SpacesScreen() {
     setBusy(true);
     setNotice(null);
     try {
-      const space = await acceptInvite(trimmed);
+      const space = await repo.acceptInvite(trimmed);
       setCode('');
       await load();
       router.push({ pathname: '/space/[id]', params: { id: space.id } });

@@ -2,7 +2,8 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, TextInput, View } from 'react-native';
 
-import { ApiError, searchSaves } from '@/api/client';
+import { ApiError } from '@/api/client';
+import { repo } from '@/data';
 import type { SearchHit } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -82,7 +83,7 @@ export function SearchScreen() {
     setState({ kind: 'searching' });
 
     try {
-      const hits = await searchSaves(trimmed);
+      const hits = await repo.searchSaves(trimmed);
       if (mine !== seq.current) return;
       setState({ kind: 'results', hits, query: trimmed });
     } catch (e) {

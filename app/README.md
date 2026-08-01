@@ -66,6 +66,32 @@ The feed and Capture are wired to the real API. What is left on sample content i
 weekly digest, Spaces and the Library groups all depend on pipeline output or
 collaboration features that no endpoint serves yet.
 
+### Running without a backend
+
+`src/data/config.ts`:
+
+```ts
+export const USE_MOCK_DATA = true;   // ← the only line that changes
+```
+
+`true` runs the whole app on `MockRepository`: no API calls, no database, no
+Supabase session, no `.env` required. `false` restores the real Spring API and
+sign-in. Every screen depends on the `Repository` interface and receives
+whichever implementation `data/index.ts` selects, so no UI code changes either
+way.
+
+```
+        UI  →  Repository (interface)
+                    │
+             USE_MOCK_DATA ?
+              ┌─────┴─────┐
+        MockRepository   ApiRepository
+```
+
+Adding a method: put it on `Repository`, delegate in `apiRepository`, implement
+it in `mockRepository`. TypeScript fails the build if either side is missing,
+which is why the interface is explicit rather than inferred from the API client.
+
 ### What "not yet run on a device" means
 
 `tsc --noEmit` is clean and `expo export` bundles. That proves every module
