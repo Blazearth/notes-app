@@ -16,7 +16,7 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 | 3 — AI pipeline v1 | Gemini classify-and-extract call, budget layer, response-schema registry, **verified live against the real API**; type-specific mobile cards | 3 of 4 — a recipe Reel with captions becomes a structured card, budget exhaustion queues rather than fails, the app shows real cards; blocked-download → `unusable` unverified live |
 | 4 — OCR tier | frames, tesseract, cross-frame voting, escalation gate, sharpness ranking, Flash-vision Tier 2, **live-verified against real ffmpeg + tesseract** | 1 of 4 — an overlay-only card extracts with no vision call; **the eval set does not exist, so every threshold is still a guess**, and both mobile criteria are untouched |
 | 5 — Product | **complete server-side**: search, the one Act, lifecycle, free-tier caps and the RevenueCat webhook — all verified live. Enrichment (a Phase 3 leftover) landed alongside | 4 of 6 — everything but the store listings and a real sandbox purchase, neither of which is code |
-| 6 — Spaces | CRUD, roles, revocable invites, space feed, comments, votes, activity, embedding-similarity duplicate detection. Authorisation verified live | 2 of 3 — the two-device live-sync criterion needs devices; Realtime sync is not built |
+| 6 — Spaces | CRUD, roles, revocable invites, space feed, comments, votes, activity, embedding-similarity duplicate detection. Authorisation verified live. **AI groups landed 2026-08-02** — `GET /v1/groups`, a derived tree costing no Gemini request | 2 of 3 — the two-device live-sync criterion needs devices; Realtime sync is not built |
 | 7–8 | — | — |
 
 **The pattern to notice: writing code is running well ahead of proving it.** The

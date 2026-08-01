@@ -55,7 +55,9 @@ so restart the bundler after changing them.
 | Bottom navigation | **real, works on a device** — painted nothing on the first device run (`TabPane`'s `zIndex` beat a nav that had none); fixed with an explicit `zIndex` on a hoisted nav layer, confirmed in Chrome and on the phone |
 | Capture sheet | **real, fix unverified on a device** — the tiles' rows collapsed to no height on Android (`flex: 1` on an auto-height column child is 0 in Yoga, not in CSS). Chrome renders this screen correctly either way, so the browser cannot confirm the fix |
 | Capture → `POST /v1/saves` | **real, not yet run on a device** — the sheet opens, but no link has actually been posted from a phone |
-| Library / Spaces / Continue / digest | **sample content** — these need features that do not exist yet |
+| AI groups + subgroups | **real, backed by a live endpoint** — `GET /v1/groups`; the grid and `/group/[id]` render any depth from one screen. Verified in Chrome only |
+| Library / Spaces / Continue rail | **real** — all three read the API through the repository |
+| Weekly digest | **sample content** — the last of it; no endpoint serves a digest |
 | Other capture tiles | **inert** — visibly disabled until their capture surfaces exist |
 | Silent capture — Android | **built, never run on a device** — `ShareReceiverActivity` + `ShareUploadWorker` via a config plugin; no Android SDK on this machine to build or run it |
 | Silent capture — iOS | **absent** — the toggle exists, the native share extension does not |
@@ -128,18 +130,9 @@ either way here, because no native project has been generated yet.
 
 ### Deferred by design — easy to mistake for bugs
 
-**Nothing polls, and a save never leaves `processing`.** The job runner exists now
-and claims the job within seconds — but the handler behind it is a stub that
-records an `accepted` stage and stops, because nothing yet fetches captions,
-metadata or audio. So there is still no state transition for a poller to observe,
-and polling would spin for nothing. Pull-to-refresh covers it until the
-extraction cascade lands, or the push notification the pipeline is meant to send.
-A freshly created save keeps its "Processing" pill; that is correct, not stuck.
+**Nothing polls, so a save keeps its "Processing" pill until you pull to refresh.** The pipeline is real now — the runner claims the job, the cascade extracts text and the classify call fills the card in — but the app still deliberately does not poll, because the push notification is meant to be that signal and does not exist yet. The pill is correct, not stuck.
 
-**`POST /v1/saves` is not idempotent yet.** A retry creates a second save. The
-server dedupes the *job* by save id, but not the save. Two callers will hit this:
-the share extension's background upload, and the Paste Link tile if a user taps
-twice on a slow network. Fix before silent capture ships.
+~~**`POST /v1/saves` is not idempotent yet.**~~ **Closed** — `V2__save_idempotency.sql` added a partial unique index on `(user_id, idempotency_key)`, and a repeated `Idempotency-Key` header returns the existing save, including under a concurrent-retry race. No client sends the header yet; it exists for the iOS share extension's background upload.
 
 **Auth is email/password, not anonymous.** Phase 1 of the plan called for
 anonymous auth; password sign-in was used instead because it is the path already

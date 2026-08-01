@@ -56,6 +56,7 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Free-tier caps | **real, enforced, off by default** | 20 AI saves/month, 1 Act/week, checked in the worker before the Gemini request and again at the Act's controller for an immediate 402. `weavr.billing.enforce-free-caps` is off until there is a paid tier to escape to; the counters run regardless |
 | Spaces — CRUD, roles, invites | **real, verified live** | `space/` + `V7__spaces.sql`. Owner/editor/viewer, revocable invite codes with expiry and use limits, a Space feed. Authorisation verified live including the 404-vs-403 distinction |
 | Spaces — comments, votes, activity | **real, verified live** | Votes are a row per (save, user), so the score is a `sum` a replay cannot inflate — the shopping-list lesson applied before it could bite. Activity is deliberately sparse |
+| AI groups (derived tree) | **real, verified live** | `GET /v1/groups` — top level by `knowledge_type`, subdivided by the facet that type already carries (`cuisine`, `genre`, `tags`). A *view* over `saves` rather than a table: no migration, nothing to invalidate, and no Gemini request of its own, because the classify call already produced the signal. `itemCount` is distinct saves in the subtree, not a sum — running it live showed a sum reporting "Watchlist · 2 items" for one film filed under two genres |
 | Spaces — duplicate detection | **built, unverified live** | `DuplicateDetector`. A save landing in a shared Space is compared by embedding distance against its neighbours and a *suggestion* is written — never a merge. The 0.15 threshold is a guess |
 | `POST /v1/saves` idempotency | **real, verified** | Repeated `Idempotency-Key` header returns the existing save, including under a concurrent-retry race (`V2__save_idempotency.sql`, `SaveServiceTest`). No caller sends the header yet — it exists for the still-unbuilt iOS share extension |
 | Expo app — theme & personalisation | **real, bundles clean** | 78 palette combinations, all audited for WCAG AA. Preferences persist |
@@ -697,10 +698,11 @@ HTTP ping to a static endpoint.
   TMDB or Google Places key has been used, and no two real saves have been
   compared. This is the same shape of gap that hid three yt-dlp defects behind
   27 passing tests and a UTF-8 bug behind 67.
-- **`SecurityConfig` accepts `{ES256}` and nothing else.** `jwsAlgorithm()` adds
-  to a set rather than extending the defaults. Rotating the Supabase signing key
-  to RSA 2048 would break auth entirely, with the same misleading "no matching
-  key(s) found". One extra line fixes it; see the gotcha above.
+- ~~**`SecurityConfig` accepts `{ES256}` and nothing else.**~~ **Closed 2026-08-02.**
+  `jwsAlgorithm()` adds to a set rather than extending the defaults, so naming
+  only ES256 left a Supabase key rotation to RSA able to take auth down
+  entirely, reporting the same misleading "no matching key(s) found" the call
+  exists to prevent. Both algorithms are now listed.
 - **Android's silent-share upload can be holding a stale access token.**
   `nativeShareConfig.ts` mirrors the token on session change, but a queued
   `ShareUploadWorker` retry can fire after the token has expired while the app
