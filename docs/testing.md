@@ -43,9 +43,22 @@ Then `Read` the PNG. Four things that are not obvious:
   afterwards.
 - **Use a spare port.** 8081 is normally serving a real device, and killing it
   interrupts whoever is testing on a phone.
-- **It cannot see anything platform-native.** Both bugs it caught were layout
-  and paint. Android view clipping, native draw order and gesture handling are
-  invisible to it, so a green screenshot is not a device.
+- **It cannot see anything platform-native, and on layout it can actively
+  mislead.** Chrome renders through `react-native-web`, so sizing follows CSS,
+  not Yoga — and the two disagree in at least one way that has already cost
+  time here: `flex: 1` (i.e. `flexBasis: 0`) on a child of an auto-height
+  column collapses to **zero height** under Yoga, while CSS sizes the container
+  to max-content and the child measures normally. The Capture sheet was broken
+  on the phone and pristine in Chrome for exactly that reason. Treat "correct
+  on web, wrong on device" as a Yoga sizing rule until proven otherwise, and
+  never read a green screenshot as a device.
+
+React Native also does not clip overflow by default, so a view with a collapsed
+box still paints its children at full size. A zero-height container therefore
+looks like a stuck animation rather than a layout fault — which is precisely
+the wrong direction to start debugging in. Check the *spacing of what comes
+after* the suspect element: if the next sibling has ridden up, the box is
+collapsed and no animation is involved.
 
 ---
 

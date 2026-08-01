@@ -77,22 +77,14 @@ function OptionTile({
     option.tint === 'accent' ? palette.accent : option.tint === 'warm' ? palette.warning : palette.textMuted;
 
   /**
-   * A plain animated style, deliberately not `entering={FadeInDown…}`.
+   * A plain animated style rather than `entering={FadeInDown…}`.
    *
-   * The layout-animation version shipped and broke on Android: the tiles were
-   * stuck at the entrance's first frame — faint and shifted down over the
-   * footer text — and the rows they sit in had collapsed to no height, so the
-   * footer rode up under the subtitle. The same screen's settled layout is
-   * correct in a browser, so this is an entrance that never completed rather
-   * than a layout that was wrong.
-   *
-   * The distinction that matters for the fix: an entering animation is handled
-   * by the layout-animation manager and can therefore affect the view's *box*,
-   * while an animated style only paints. Driving opacity and translate by hand
-   * cannot collapse a row however it is interrupted, so this is safe whatever
-   * the precise cause turned out to be. `Reveal` still uses `entering` and is
-   * fine on Home — this is not a blanket verdict on layout animations, only on
-   * using one here, on a flexed child inside a parent that is itself animating.
+   * Not the fix — the collapsed tiles were a Yoga sizing rule, see the `style`
+   * comment below. This started as a wrong guess at that bug and is kept only
+   * because it is strictly less entangled with layout: an entering animation is
+   * driven by the layout-animation manager and can touch the view's box, while
+   * an animated style only paints. `Reveal` still uses `entering` and is fine,
+   * so there is nothing wrong with the other approach either.
    */
   const progress = useSharedValue(reduced ? 1 : 0);
 
@@ -122,7 +114,29 @@ function OptionTile({
         // something happened, and eleven of these twelve do not act.
         haptic={enabled ? 'medium' : null}
         baseOpacity={enabled ? 1 : alpha.disabled}
-        style={{ flex: 1, alignItems: 'center', gap: spacing.sm }}
+        /*
+         * No `flex: 1` here, and that is the whole bug.
+         *
+         * `flex: 1` means `flexBasis: 0`, and this Pressable's parent is a
+         * column whose height is auto. Yoga resolves a zero-basis child in a
+         * container with an indefinite main axis to **zero height** — so the
+         * tile measured 0 tall, both rows were laid out at the same y, and the
+         * footer rode up under the subtitle. The icons still painted, because
+         * React Native does not clip overflow by default, which is what made it
+         * read as an animation stuck mid-flight rather than as a collapsed box.
+         *
+         * CSS does not do this: an auto-height flex container sizes to
+         * max-content, so the identical tree measures correctly in a browser.
+         * That divergence is why the headless-Chrome check passed this screen —
+         * it is not a harness that can see this class of bug, and any future
+         * "correct on web, wrong on device" layout should be read as a Yoga
+         * sizing rule before anything else.
+         *
+         * The width still comes from the wrapping `Animated.View`'s `flex: 1`,
+         * and a column parent stretches its children horizontally by default,
+         * so dropping this changes nothing about how wide the tile is.
+         */
+        style={{ alignItems: 'center', gap: spacing.sm }}
       >
         <View
           style={{

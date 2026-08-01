@@ -53,7 +53,7 @@ so restart the bundler after changing them.
 | Auth (Supabase email/password) | **real, works on a device** — sign-in succeeded on Android on 2026-08-01 |
 | Home feed ← `GET /v1/saves` | **real, works on a device** — loading / error / empty / per-status states; seen rendering live saves on Android |
 | Bottom navigation | **real, works on a device** — painted nothing on the first device run (`TabPane`'s `zIndex` beat a nav that had none); fixed with an explicit `zIndex` on a hoisted nav layer, confirmed in Chrome and on the phone |
-| Capture sheet | **real, works on a device** — the tiles' `entering` layout animation left them stuck and collapsed the rows on Android; now a plain animated style |
+| Capture sheet | **real, fix unverified on a device** — the tiles' rows collapsed to no height on Android (`flex: 1` on an auto-height column child is 0 in Yoga, not in CSS). Chrome renders this screen correctly either way, so the browser cannot confirm the fix |
 | Capture → `POST /v1/saves` | **real, not yet run on a device** — the sheet opens, but no link has actually been posted from a phone |
 | Library / Spaces / Continue / digest | **sample content** — these need features that do not exist yet |
 | Other capture tiles | **inert** — visibly disabled until their capture surfaces exist |

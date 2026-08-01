@@ -666,10 +666,12 @@ HTTP ping to a static endpoint.
   What it immediately disproved, twice: the bottom nav painted nothing —
   neither the floating pill nor the capture FAB — leaving no way to reach
   Library, Spaces or Capture; and once the nav worked, the Capture sheet's
-  tiles were stuck faint and shifted down over the footer, their rows collapsed
-  to no height. Both are fixed and confirmed on the phone. Both were diagnosed
-  by pointing headless Chrome at `expo start --web` and reading the PNG, after
-  reasoning about the code got the first one wrong — the recipe is in
+  tiles painted over the footer with their rows collapsed to no height. The nav
+  is fixed and confirmed on the phone. The Capture sheet's fix — `flex: 1` on
+  an auto-height column child is zero height in Yoga but not in CSS — is
+  **unverified**, because Chrome renders that screen correctly either way and
+  so cannot confirm it. The headless-Chrome recipe, and the boundary it just
+  ran into, are in
   [docs/testing.md](docs/testing.md#looking-at-a-screen-without-a-device).
   Everything past Home's feed, the nav and the Capture sheet — Library, Spaces,
   save detail, search, the morph — remains written but unwatched, and no link
