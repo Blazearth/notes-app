@@ -17,7 +17,7 @@
  * and a device bundle built from a different shell, which is exactly the kind
  * of ambiguity a development switch must not have.
  */
-export const USE_MOCK_DATA = true;
+export const USE_MOCK_DATA = false;
 
 /**
  * How long mock calls pretend to take, in milliseconds.
