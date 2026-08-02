@@ -18,6 +18,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                       at startup and passed as {@code --cookies} to every
  *                       yt-dlp call — required on cloud IPs where YouTube
  *                       returns "Sign in to confirm you're not a bot"
+ * @param playerClients  comma list for {@code --extractor-args
+ *                       youtube:player_client=...}. Cookies alone did not
+ *                       clear the bot check on Render's datacenter IP (a
+ *                       cookie exported on a residential machine and replayed
+ *                       from an unrelated cloud IP is itself a signal); the
+ *                       {@code web} client's challenge needs a PO token that
+ *                       cookies don't supply. {@code tv} and {@code android}
+ *                       use a simpler auth flow that doesn't ask for one.
+ *                       Empirical, not guaranteed — measure on the real
+ *                       deploy rather than assuming this clears it.
  */
 @ConfigurationProperties(prefix = "weavr.ytdlp")
 public record YtDlpProperties(
@@ -28,7 +38,8 @@ public record YtDlpProperties(
         Duration videoTimeout,
         String videoFormat,
         String subtitleLangs,
-        String cookiesBase64
+        String cookiesBase64,
+        String playerClients
 ) {
 
     public YtDlpProperties {
@@ -40,5 +51,6 @@ public record YtDlpProperties(
         if (videoFormat == null || videoFormat.isBlank()) videoFormat = "worst[height>=360]/worst";
         if (subtitleLangs == null || subtitleLangs.isBlank()) subtitleLangs = "en,en-orig";
         // cookiesBase64 is optional — null means no --cookies flag
+        if (playerClients == null || playerClients.isBlank()) playerClients = "tv,android,web";
     }
 }

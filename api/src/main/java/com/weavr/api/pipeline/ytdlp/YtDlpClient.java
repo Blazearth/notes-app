@@ -72,14 +72,24 @@ public class YtDlpClient {
         }
     }
 
-    /** Prepends --cookies <path> to the given command list if cookies are configured. */
+    /**
+     * Prepends {@code --cookies <path>} (if configured) and
+     * {@code --extractor-args youtube:player_client=...} to the given command.
+     *
+     * <p>Both after the binary name, before the rest of the args. The player-client
+     * override matters independently of cookies: {@code web} needs a PO token to
+     * pass the bot check that cookies alone don't provide, where {@code tv} and
+     * {@code android} use a flow that doesn't ask for one.
+     */
     private List<String> withCookies(List<String> cmd) {
-        if (cookiesFile == null) return cmd;
-        List<String> out = new ArrayList<>(cmd.size() + 2);
-        // Insert after the binary name
+        List<String> out = new ArrayList<>(cmd.size() + 4);
         out.add(cmd.get(0));
-        out.add("--cookies");
-        out.add(cookiesFile.toString());
+        if (cookiesFile != null) {
+            out.add("--cookies");
+            out.add(cookiesFile.toString());
+        }
+        out.add("--extractor-args");
+        out.add("youtube:player_client=" + properties.playerClients());
         out.addAll(cmd.subList(1, cmd.size()));
         return out;
     }

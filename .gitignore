@@ -43,3 +43,7 @@ tmp/
 
 # --- yt-dlp local artifacts ---------------------------------------------------
 *cookies.txt
+
+# --- local scratch docs with credentials, never commit ------------------------
+BACKEND_WORK_GUIDE.md
+QUICK_REFERENCE.md
