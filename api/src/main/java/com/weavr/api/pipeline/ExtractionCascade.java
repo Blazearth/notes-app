@@ -9,11 +9,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
 import com.weavr.api.pipeline.audio.AsrTranscriber;
 import com.weavr.api.pipeline.ocr.VisualTextExtractor;
+import com.weavr.api.pipeline.ytdlp.RapidYtClient;
 import com.weavr.api.pipeline.ytdlp.SourceMetadata;
 import com.weavr.api.pipeline.ytdlp.YtDlpClient;
 import com.weavr.api.pipeline.ytdlp.YtDlpErrors;
@@ -60,14 +60,17 @@ public class ExtractionCascade {
     private static final int USABLE_TEXT_THRESHOLD = 40;
 
     private final YtDlpClient ytDlp;
+    private final RapidYtClient rapidYt;
     private final AsrTranscriber asr;
     private final VisualTextExtractor visual;
     private final LinkExtractor linkExtractor;
     private final PdfExtractor pdfExtractor;
 
-    ExtractionCascade(YtDlpClient ytDlp, AsrTranscriber asr, VisualTextExtractor visual,
-                      LinkExtractor linkExtractor, PdfExtractor pdfExtractor) {
+    ExtractionCascade(YtDlpClient ytDlp, RapidYtClient rapidYt, AsrTranscriber asr,
+                      VisualTextExtractor visual, LinkExtractor linkExtractor,
+                      PdfExtractor pdfExtractor) {
         this.ytDlp = ytDlp;
+        this.rapidYt = rapidYt;
         this.asr = asr;
         this.visual = visual;
         this.linkExtractor = linkExtractor;
@@ -100,22 +103,46 @@ public class ExtractionCascade {
             return extractPdf(url);
         }
 
+        // --- RapidAPI fast path for YouTube (no bot check, includes transcript) ---
+        if (RapidYtClient.extractVideoId(url) != null) {
+            Optional<RapidYtClient.ProbeResult> rapid = rapidYt.probe(url);
+            if (rapid.isPresent()) {
+                RapidYtClient.ProbeResult r = rapid.get();
+                log.info("RapidAPI probe succeeded for {}", url);
+                // Transcript available — best case, no further calls needed
+                if (r.transcript().isPresent()
+                        && r.transcript().get().length() >= USABLE_TEXT_THRESHOLD) {
+                    return new Extraction(combine(r.transcript().get(), r.metadata()),
+                            "captions", r.metadata());
+                }
+                // No transcript but metadata may be enough
+                String metaText = r.metadata().asText();
+                if (metaText.length() >= USABLE_TEXT_THRESHOLD) {
+                    return new Extraction(metaText, "metadata", r.metadata());
+                }
+                // Metadata too thin — fall through to ASR/visual using RapidAPI metadata
+                log.debug("RapidAPI metadata too thin for {}, continuing cascade", url);
+                return continueFromMetadata(url, saveId, r.metadata());
+            }
+            log.warn("RapidAPI probe returned empty for {}, falling back to yt-dlp", url);
+        }
+
+        // --- yt-dlp path (non-YouTube or RapidAPI unavailable/failed) ---
         SourceMetadata metadata;
         try {
             metadata = probe(url);
         } catch (PermanentJobException e) {
-            // Not a video platform at all — a plain article link. This is a
-            // different branch, not a further fallback: none of the
-            // caption/metadata/ASR steps below apply to a page yt-dlp has no
-            // extractor for.
             if ("unsupported_source".equals(e.errorCode())) {
                 return extractLink(url);
             }
             throw e;
         }
 
-        // Captions first when the probe says they exist: they carry the actual
-        // spoken content, where a description only sometimes does.
+        return continueFromMetadata(url, saveId, metadata);
+    }
+
+    /** Runs captions → metadata text → ASR → visual against an already-probed metadata. */
+    private Extraction continueFromMetadata(String url, UUID saveId, SourceMetadata metadata) {
         if (metadata.hasCaptions()) {
             Optional<String> captions = fetchCaptions(url);
             if (captions.isPresent() && captions.get().length() >= USABLE_TEXT_THRESHOLD) {
@@ -129,24 +156,11 @@ public class ExtractionCascade {
             return new Extraction(metadataText, "metadata", metadata);
         }
 
-        // Audio only, bounded, a different provider (Groq Whisper) — reached
-        // only when both free sources above came up empty.
         Optional<String> transcript = asr.transcribe(url);
         if (transcript.isPresent() && transcript.get().length() >= USABLE_TEXT_THRESHOLD) {
             return new Extraction(combine(transcript.get(), metadata), "asr", metadata);
         }
 
-        // The visual tier, last because it is the only step that downloads
-        // video. Everything above has now come back empty, which for a video
-        // post overwhelmingly means the content is on the screen rather than in
-        // the audio or the caption — a recipe card, a workout list, a product
-        // shot. That is the hard case, and it is common.
-        //
-        // The threshold check the other steps get is deliberately absent here.
-        // OCR output has already been through a quality gate that judges it on
-        // confidence rather than length, and a short-but-clean ingredient list
-        // is a perfectly good extraction that a 40-character floor would throw
-        // away.
         Optional<VisualTextExtractor.VisualText> visualText = visual.extract(url, saveId);
         if (visualText.isPresent() && !visualText.get().text().isBlank()) {
             VisualTextExtractor.VisualText v = visualText.get();

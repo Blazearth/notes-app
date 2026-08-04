@@ -136,6 +136,16 @@ weavr:
     player-clients: ${WEAVR_YTDLP_PLAYER_CLIENTS:tv,android,web}
 
   # --------------------------------------------------------------------------
+  # RapidAPI YouTube — primary metadata + transcript path for YouTube URLs.
+  # Bypasses YouTube's datacenter-IP bot check that blocks yt-dlp on Render.
+  # When api-key is blank the client is disabled and yt-dlp is used directly.
+  # Get a key at https://rapidapi.com/ytstream/api/ytstream-download-youtube-videos
+  # --------------------------------------------------------------------------
+  rapid-yt:
+    api-key: ${WEAVR_RAPID_YT_API_KEY:}
+    timeout: 15s
+
+  # --------------------------------------------------------------------------
   # ffmpeg — downmixes ASR audio to 16 kHz mono before it goes to Groq.
   # --------------------------------------------------------------------------
   ffmpeg:

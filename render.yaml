@@ -56,3 +56,6 @@ services:
       # ── yt-dlp cookies — required on Render IPs (YouTube bot check) ─────────
       - key: WEAVR_YTDLP_COOKIES_BASE64
         sync: false
+      # ── RapidAPI YouTube — primary metadata+transcript path for YouTube ──────
+      - key: WEAVR_RAPID_YT_API_KEY
+        sync: false
