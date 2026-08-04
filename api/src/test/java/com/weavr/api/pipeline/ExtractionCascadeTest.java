@@ -9,6 +9,7 @@ import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
 import com.weavr.api.pipeline.audio.AsrTranscriber;
 import com.weavr.api.pipeline.ocr.VisualTextExtractor;
+import com.weavr.api.pipeline.ytdlp.RapidYtClient;
 import com.weavr.api.pipeline.ytdlp.SourceMetadata;
 import com.weavr.api.pipeline.ytdlp.YtDlpClient;
 import com.weavr.api.pipeline.ytdlp.YtDlpFailedException;
@@ -36,12 +37,13 @@ class ExtractionCascadeTest {
     private static final UUID SAVE_ID = UUID.randomUUID();
 
     private final YtDlpClient ytDlp = mock(YtDlpClient.class);
+    private final RapidYtClient rapidYt = mock(RapidYtClient.class);
     private final AsrTranscriber asr = mock(AsrTranscriber.class);
     private final VisualTextExtractor visual = mock(VisualTextExtractor.class);
     private final LinkExtractor linkExtractor = mock(LinkExtractor.class);
     private final PdfExtractor pdfExtractor = mock(PdfExtractor.class);
     private final ExtractionCascade cascade =
-            new ExtractionCascade(ytDlp, asr, visual, linkExtractor, pdfExtractor);
+            new ExtractionCascade(ytDlp, rapidYt, asr, visual, linkExtractor, pdfExtractor);
 
     private static SourceMetadata metadata(String title, String description, List<String> autoCaptions) {
         return new SourceMetadata("vid1", title, description, "someone", 42.0,
