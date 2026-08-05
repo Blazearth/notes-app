@@ -59,7 +59,7 @@ verified; it is verified **against YouTube**.
 | Feature | Status | What's missing |
 |---|---|---|
 | YouTube — captions + metadata | ✅ Done, via RapidAPI not yt-dlp | yt-dlp's own path is proven from a residential IP only — Render's datacenter IP hits YouTube's bot check on every probe, and both cookies and a player-client override were tried live and **confirmed to fail** (8/8 real videos). `RapidYtClient` bypasses YouTube directly instead and **is** confirmed live: two real YouTube URLs completed the full pipeline (process → classify → enrich → embed) on Render on 2026-08-04 |
-| **Instagram Reels** | 🟠 Unverified | Never run against a real Reel. Instagram increasingly **requires authentication**, and cookies risk a ban and sit badly against the ToS posture. Unauthenticated failure may be the permanent outcome — this needs measuring, not assuming |
+| **Instagram Reels** | ✅ Done | **7 of 7 real public Reels** run through the live cascade on Render on 2026-08-05 — one solo, then 6 back-to-back roughly 5-6s apart to check for rate-limiting. All 7 cleared yt-dlp's plain probe directly, no auth wall, no retry, no slowdown across the burst; extracted 117–19,254 chars depending on how much caption text each post actually had, classified and embedded every time. Still unmeasured: private accounts, and whether volume far beyond 6-in-a-row changes anything — but "increasingly requires authentication" was the planning assumption, and Render's IP has not hit it once across 7 tries |
 | **TikTok** | 🟠 Unverified | Same cascade, never exercised against a real TikTok URL |
 | ASR fallback (Groq Whisper) | 🟠 Unverified | 9 tests, all mocked. **No real Groq call has ever been made** |
 | Plain links (Readability4J) | 🟠 Unverified | 7 tests, all mocked. No real page fetched |
@@ -211,12 +211,12 @@ around their assumptions is how a week gets thrown away.
 1. **Verify the real Gemini RPD** in AI Studio. ~5 minutes. 250 vs 500 halves
    the app's daily capacity and moves the paid-tier switch earlier. Every
    capacity decision downstream rests on a number nobody has read.
-2. **Run a real Instagram Reel and a real TikTok through the cascade.** Under an
-   hour, and the single highest-information test available. Instagram
-   increasingly requires authentication, and cookies risk a ban and sit badly
-   against the ToS posture — if it is auth-walled, *the demo narrative and the
-   product pitch both change*, and it is far better to know that on day 1 than
-   in week 6.
+2. ~~**Run a real Instagram Reel and a real TikTok through the cascade.**~~
+   **Instagram half done 2026-08-05** — 7 of 7 real public Reels cleared the
+   live cascade with no auth wall, including a 6-in-a-row burst with no
+   slowdown. TikTok is still untested. Private accounts and higher volume are
+   still open, but the worst-case "auth-walled, demo narrative changes"
+   outcome did not happen across 7 tries.
 3. ~~**`SecurityConfig` RSA line.**~~ **Done 2026-08-02.** Both algorithms are
    accepted, so a Supabase key rotation to RSA no longer takes auth down with a
    failure message that points nowhere.
@@ -306,7 +306,7 @@ starts — item 2 in particular can redirect what "the demo" even means.
 
 ## Summary
 
-**23 done, 16 unverified, 0 mock-only, 23 not built** (62 features).
+**24 done, 15 unverified, 0 mock-only, 23 not built** (62 features).
 
 Under a looser bar the first two columns merge and this reads as 39 of 62 —
 roughly how it feels while writing it, and close to twice what has actually
@@ -323,7 +323,10 @@ rows as features, and the capture section claimed both "nine of twelve" and
 done — not because yt-dlp's own path got fixed on Render (it didn't; both
 attempted fixes were tested live and confirmed to fail), but because
 `RapidYtClient` bypasses YouTube directly and was confirmed live by two real
-saves completing the full pipeline on Render's own logs.*
+saves completing the full pipeline on Render's own logs. Instagram Reels also
+moved to done the same day: a real public Reel cleared yt-dlp's plain probe
+on Render with no auth wall at all, the opposite result from YouTube on the
+same infrastructure.*
 
 
 Done and verified: the **backend spine** — schema, auth, saves, the job runner,
