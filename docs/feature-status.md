@@ -58,7 +58,7 @@ verified; it is verified **against YouTube**.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| YouTube — captions + metadata | 🟠 Unverified on Render | Run against yt-dlp 2026.07.04 and a live video **from a residential IP**. Render's datacenter IP hits YouTube's bot check on every probe instead; a player-client override and a RapidAPI primary path (`RapidYtClient`) both landed as mitigations but neither has a confirmed successful save from the live deploy |
+| YouTube — captions + metadata | ✅ Done, via RapidAPI not yt-dlp | yt-dlp's own path is proven from a residential IP only — Render's datacenter IP hits YouTube's bot check on every probe, and both cookies and a player-client override were tried live and **confirmed to fail** (8/8 real videos). `RapidYtClient` bypasses YouTube directly instead and **is** confirmed live: two real YouTube URLs completed the full pipeline (process → classify → enrich → embed) on Render on 2026-08-04 |
 | **Instagram Reels** | 🟠 Unverified | Never run against a real Reel. Instagram increasingly **requires authentication**, and cookies risk a ban and sit badly against the ToS posture. Unauthenticated failure may be the permanent outcome — this needs measuring, not assuming |
 | **TikTok** | 🟠 Unverified | Same cascade, never exercised against a real TikTok URL |
 | ASR fallback (Groq Whisper) | 🟠 Unverified | 9 tests, all mocked. **No real Groq call has ever been made** |
@@ -180,7 +180,7 @@ renders that screen correctly whether the fix is right or not.
 | Schema + migrations | ✅ Done | Applied against Supabase PG 17.6 |
 | Auth (Supabase JWT, ES256) | ✅ Done | Both accept and reject paths |
 | Job queue + runner | ✅ Done | Claim, exclusion, three error paths, stale sweep |
-| Deployment (Render + Docker) | 🟠 Unverified | Deployed and running — no longer "config just landed". But the deploy hit YouTube's bot check on every probe from Render's datacenter IP, which no local run had ever surfaced; the fixes so far (cookies, player-client override, a RapidAPI primary path) are live but unconfirmed against the real instance. Still true regardless: the image **must** install `yt-dlp`, `ffmpeg`, `tesseract` *and* `tesseract-ocr-eng` — a plain JRE has none, and missing language data reads every frame as nothing, silently |
+| Deployment (Render + Docker) | 🟠 Unverified overall, YouTube path now ✅ | Deployed and running, confirmed live via the Render API: current deploy is `66cca73`, `/actuator/health` returns `UP`, memory sits ~355–373 MB of a 512 MB limit at idle. YouTube extraction is confirmed working end to end via `RapidYtClient` (see above). New finding from that same check: `WEAVR_DB_POOL_MAX=3` saturated under manual test traffic — one request timed out after 12.5s waiting for a connection. Still true regardless: the image **must** install `yt-dlp`, `ffmpeg`, `tesseract` *and* `tesseract-ocr-eng` — a plain JRE has none, and missing language data reads every frame as nothing, silently |
 | Keep-warm cron | 🟠 Unverified | Supabase pauses after ~7 days idle; a paused project during judging is a demo-day failure |
 | Integration tests (Testcontainers) | ⛔ Not built | Unit tests cover validation and enum mapping only |
 | Store records / Apple enrolment | ⛔ Not built | Phase 0, never closed. Not code, and the lead time is external |
@@ -306,7 +306,7 @@ starts — item 2 in particular can redirect what "the demo" even means.
 
 ## Summary
 
-**22 done, 17 unverified, 0 mock-only, 23 not built** (62 features).
+**23 done, 16 unverified, 0 mock-only, 23 not built** (62 features).
 
 Under a looser bar the first two columns merge and this reads as 39 of 62 —
 roughly how it feels while writing it, and close to twice what has actually
@@ -318,6 +318,12 @@ the `SecurityConfig` defect is fixed. Two counting errors are also corrected —
 the first revision said "21 done … 38 of 65", which counted the four legend
 rows as features, and the capture section claimed both "nine of twelve" and
 "eleven of twelve" tiles when there are eight, of which one works.*
+
+*Changed 2026-08-05: YouTube captions + metadata moved from unverified to
+done — not because yt-dlp's own path got fixed on Render (it didn't; both
+attempted fixes were tested live and confirmed to fail), but because
+`RapidYtClient` bypasses YouTube directly and was confirmed live by two real
+saves completing the full pipeline on Render's own logs.*
 
 
 Done and verified: the **backend spine** — schema, auth, saves, the job runner,
