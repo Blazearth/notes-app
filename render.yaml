@@ -20,7 +20,13 @@ services:
       - key: WEAVR_DB_PASSWORD
         sync: false
       - key: WEAVR_DB_POOL_MAX
-        value: "3"              # free tier has scarce connections; keep it tight
+        # Was 3. Measured saturating under ordinary manual test traffic on
+        # 2026-08-05: "Connection is not available, request timed out after
+        # 12502ms (total=3, active=3, idle=0, waiting=1)" from a couple of
+        # concurrent requests, not a load test. CLAUDE.md's own guidance for
+        # Supabase free tier is ~5-10; 3 undershot that. Still conservative,
+        # not re-measured against real concurrent-save load yet.
+        value: "5"
       - key: WEAVR_FLYWAY_URL
         sync: false
       - key: WEAVR_FLYWAY_USER

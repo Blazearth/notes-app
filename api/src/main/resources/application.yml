@@ -216,14 +216,26 @@ weavr:
   # Gemini — AI classification + extraction.
   # --------------------------------------------------------------------------
   # primary-model: used for every save (500 RPD on free tier).
-  # fallback-model: used when primary returns confidence < threshold (20 RPD).
+  # fallback-model: used when primary returns confidence < threshold (20 RPD),
+  # and separately by VisualTextExtractor for the OCR vision-escalation tier —
+  # one config value, two consumers.
   # confidence-threshold: below this, retry with fallback model.
   # primary-rpd / fallback-rpd: the daily request budget ceiling per model.
   # Counters live in ai_budget_days (US/Pacific reset timezone, matching Google).
+  #
+  # gemini-2.5-flash (the original fallback) 404s on this project's key:
+  # "This model models/gemini-2.5-flash is no longer available to new users."
+  # Confirmed live 2026-08-05 by reproducing the exact generateContent call —
+  # ListModels still lists it as supporting generateContent, which is what
+  # made this silent rather than obvious; the model catalog and per-project
+  # access are two different things. Both fallback consumers were failing
+  # closed (silently using the primary result / skipping vision escalation)
+  # with no save-level error, so this had no user-visible symptom to notice.
+  # gemini-3.6-flash confirmed working against the real key before landing.
   gemini:
     api-key: ${WEAVR_GEMINI_API_KEY}
     primary-model: gemini-3.1-flash-lite
-    fallback-model: gemini-2.5-flash
+    fallback-model: gemini-3.6-flash
     primary-rpd: ${WEAVR_GEMINI_PRIMARY_RPD:500}
     fallback-rpd: ${WEAVR_GEMINI_FALLBACK_RPD:20}
     confidence-threshold: ${WEAVR_GEMINI_CONFIDENCE_THRESHOLD:0.7}

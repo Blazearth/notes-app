@@ -79,7 +79,7 @@ motion blur and stylised fonts are exactly where tesseract fails hard.
 | Feature | Status | What's missing |
 |---|---|---|
 | Classify + extract (one Gemini call) | ✅ Done | Ran against the real API and produced real structured saves |
-| Model routing + budget guard | ✅ Done | Primary → fallback, daily counter persisted |
+| Model routing + budget guard | ✅ Done | Primary → fallback, daily counter persisted. The fallback model itself was silently 404ing in production until 2026-08-05 (deprecated `gemini-2.5-flash`) — the routing logic was never the bug, the pinned model name was |
 | Knowledge-type registry | ✅ Done | Adding a type is a data change |
 | Enrichment (TMDB / Google Places) | 🟠 Unverified | 26 tests, all mocked. **No real TMDB or Places key has ever been used** |
 | Embeddings | ✅ Done | 1536-d, normalised client-side |
@@ -193,6 +193,8 @@ renders that screen correctly whether the fix is right or not.
 |---|---|
 | `Idempotency-Key` race recovery re-reads inside an aborted transaction | Would fail rather than return the existing save. Never observed — the pre-check catches every non-concurrent replay |
 | ~~`SecurityConfig` accepts ES256 only~~ | **Fixed 2026-08-02.** Both RS256 and ES256 are now accepted |
+| ~~Gemini fallback model (`gemini-2.5-flash`) 404s on every call~~ | **Fixed 2026-08-05.** Deprecated for this project's key; confidence-retry and OCR vision-escalation were both failing closed with no visible symptom. Now `gemini-3.6-flash` |
+| ~~`WEAVR_DB_POOL_MAX=3` saturates under light concurrent traffic~~ | **Fixed 2026-08-05.** Bumped to 5; not load-tested against real concurrent-save volume |
 | Android share worker can hold a stale access token | A silently dropped share, after the user already saw "Saved" |
 | Capture failure after dismissal has no surface | Warns to console; the save never appears. Needs a toast |
 
