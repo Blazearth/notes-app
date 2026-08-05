@@ -83,7 +83,7 @@ motion blur and stylised fonts are exactly where tesseract fails hard.
 | Knowledge-type registry | ✅ Done | Adding a type is a data change |
 | Enrichment (TMDB / Google Places) | 🟠 Unverified | 26 tests, all mocked. **No real TMDB or Places key has ever been used** |
 | Embeddings | ✅ Done | 1536-d, normalised client-side |
-| Real Gemini RPD | ⛔ Unknown | Still unverified. 250 vs 500 halves capacity and moves the paid-tier switch earlier |
+| Real Gemini RPD | ✅ Done | Confirmed live in AI Studio 2026-08-05: primary (Flash-Lite) really is 500 RPD, the feared reduction to 250 did not happen. But the fallback/vision tier (Flash) is only **20 RPD**, not the ~250 CLAUDE.md had assumed — that pool was never going to add meaningful save capacity, and any future consumer of it (digest, Act conversion) needs to be budgeted against 20/day, not 250 |
 
 ---
 
@@ -210,9 +210,14 @@ tiers overlap — see the note at the end.
 Cheap tests with the highest information per minute. Doing these after building
 around their assumptions is how a week gets thrown away.
 
-1. **Verify the real Gemini RPD** in AI Studio. ~5 minutes. 250 vs 500 halves
-   the app's daily capacity and moves the paid-tier switch earlier. Every
-   capacity decision downstream rests on a number nobody has read.
+1. ~~**Verify the real Gemini RPD** in AI Studio.~~ **Done 2026-08-05.** Primary
+   (Flash-Lite) really is 500 RPD — the feared 250 didn't happen. Surprise the
+   other way: the fallback/vision tier (Flash) is only **20 RPD**, an order of
+   magnitude below the ~250 assumed in CLAUDE.md's capacity math. That pool
+   was never going to add meaningful save throughput; it only ever needed to
+   cover the confidence-retry backstop and OCR vision escalation, and 20/day
+   has been enough for that so far. See CLAUDE.md's request-budget section
+   for the full per-model table.
 2. ~~**Run a real Instagram Reel and a real TikTok through the cascade.**~~
    **Instagram half done 2026-08-05** — 7 of 7 real public Reels cleared the
    live cascade with no auth wall, including a 6-in-a-row burst with no
@@ -308,7 +313,7 @@ starts — item 2 in particular can redirect what "the demo" even means.
 
 ## Summary
 
-**24 done, 15 unverified, 0 mock-only, 23 not built** (62 features).
+**25 done, 15 unverified, 0 mock-only, 22 not built** (62 features).
 
 Under a looser bar the first two columns merge and this reads as 39 of 62 —
 roughly how it feels while writing it, and close to twice what has actually
@@ -328,7 +333,9 @@ attempted fixes were tested live and confirmed to fail), but because
 saves completing the full pipeline on Render's own logs. Instagram Reels also
 moved to done the same day: a real public Reel cleared yt-dlp's plain probe
 on Render with no auth wall at all, the opposite result from YouTube on the
-same infrastructure.*
+same infrastructure. Real Gemini RPD also moved to done: primary is
+confirmed 500 as assumed, but the fallback/vision pool is 20, not the ~250
+the capacity math in CLAUDE.md had assumed.*
 
 
 Done and verified: the **backend spine** — schema, auth, saves, the job runner,

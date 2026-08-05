@@ -201,10 +201,20 @@ Every architectural choice below follows from that. Consequences to internalize:
 - **Saves are not the only consumer.** Weekly digests, AI Project Builder, and Act conversions each cost requests, and digests scale with user count. Budget them explicitly and stagger digest generation; don't let a Sunday-night digest job eat the day's save capacity.
 - **Reserve headroom and degrade gracefully.** When the daily budget is spent, queue saves as `pending` for the next window and tell the user, rather than failing them. Track consumption in Postgres, not just in memory — the counter must survive a restart.
 - **Embeddings are a separate, larger pool** — they do not consume the generation RPD. Embed freely; re-embedding backfills are not a budget event.
-- **Every model has its own pool, so routing across models multiplies daily capacity.** Flash-Lite (~500 RPD) and Flash (~250 RPD) together are ~750 saves/day, not 500. Route by difficulty rather than sending everything to one model — this is the single largest capacity lever available on the free tier, and it is worth more than any prompt optimization.
+- **Every model has its own pool, but the pools are wildly uneven — confirmed, not assumed, as of 2026-08-05.** Routing still matters; it just doesn't multiply capacity the way "~250 RPD for Flash" implied. See below.
 - Check whether the **Batch API** has a separate quota. If it does, non-urgent work (digests, Project Builder) belongs there and frees the interactive budget for saves. Verify before designing around it.
 
-> ⚠️ **Verify the actual RPD in [AI Studio](https://aistudio.google.com/rate-limit) — it is per-project and Google no longer publishes it in the docs.** Third-party trackers currently report **250 RPD / 10 RPM** for `gemini-2.5-flash` free tier, not 500, following a reduction in December 2025. If it is 250, the one-request-per-save design isn't just an optimization — it is the only thing that keeps the app viable, and the paid-tier switch moves earlier. Do not size the launch against a remembered number.
+> ✅ **Verified against this project's own AI Studio rate-limit dashboard on 2026-08-05** — no longer a guess, no longer sized against a remembered or third-party number:
+>
+> | Model | RPM limit | TPM limit | RPD limit |
+> |---|---|---|---|
+> | `gemini-3.1-flash-lite` (primary) | 15 | 250K | **500** |
+> | `gemini-3.6-flash` (fallback, confidence-retry + OCR vision escalation) | 5 | 250K | **20** |
+> | `gemini-2.5-flash` (old, now-dead fallback) | 5 | 250K | 20 |
+> | `gemini-3-flash`, `gemini-3.5-flash` (unused) | 5 each | 250K each | 20 each |
+> | `gemini-embedding-001` (separate pool, not RPD-gated) | 100 | 30K | **1000** |
+>
+> **The primary model's 500 RPD was right all along** — the feared "250, following a December 2025 reduction" scenario this warning used to size against did not happen, at least not for this project's Flash-Lite tier. But the "Flash-Lite (~500) and Flash (~250) together are ~750/day" multiplication in the bullet above this box was **wrong in the other direction**: the Flash tier's real ceiling is **20 RPD, not 250** — over an order of magnitude smaller. That pool was never going to meaningfully add save-processing capacity; its actual job (the one it's used for) is the confidence-retry backstop and OCR vision escalation, both already designed as a small minority of saves, which is the only reason 20/day has been enough so far. Do not budget a digest, an Act conversion, or any second consumer against the Flash pool without re-checking this table — 20/day disappears fast.
 
 **This collides with the growth strategy.** §11 of the spec targets viral growth, and the Grand Prize is judged on traction *during* the event — but 500 RPD is roughly 400 saves/day after headroom. A successful launch exhausts the free tier immediately. Plan the paid-tier switch as a launch prerequisite, not a scaling problem for later.
 
