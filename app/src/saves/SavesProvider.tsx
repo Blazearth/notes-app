@@ -20,9 +20,7 @@ interface SavesContextValue {
 
 const SavesContext = createContext<SavesContextValue | null>(null);
 
-// Poll schedule: 3s → 6s → 12s → 24s → 48s → 60s steady until ready/failed/timeout
-const POLL_INTERVALS = [3000, 6000, 12000, 24000, 48000];
-const POLL_STEADY = 60000;
+const POLL_INTERVAL = 2000;
 const POLL_TIMEOUT = 10 * 60 * 1000; // give up after 10 min
 
 /**
@@ -84,16 +82,10 @@ export function SavesProvider({ children }: { children: React.ReactNode }) {
 
   const refresh = useCallback(() => load(true), [load]);
 
-  /** Replace a single save in the array by id. */
-  const patchSave = useCallback((updated: SaveResponse) => {
-    setSaves((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-  }, []);
-
-  /** Poll GET /saves/:id with exponential backoff until ready/failed or timeout. */
-  const startPolling = useCallback((saveId: string, startedAt: number, step: number) => {
+  /** Poll GET /saves/:id every 2s until ready/failed or timeout. */
+  const startPolling = useCallback((saveId: string, startedAt: number) => {
+    // Already polling this save — don't double-schedule
     if (pollTimers.current.has(saveId)) return;
-
-    const delay = step < POLL_INTERVALS.length ? POLL_INTERVALS[step]! : POLL_STEADY;
 
     const timer = setTimeout(async () => {
       pollTimers.current.delete(saveId);
@@ -102,24 +94,24 @@ export function SavesProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const updated = await repo.getSave(saveId);
-        patchSave(updated);
+        setSaves((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
         if (updated.status === 'processing') {
-          startPolling(saveId, startedAt, step + 1);
+          startPolling(saveId, startedAt);
         }
       } catch {
-        // Network hiccup — retry at next interval
-        startPolling(saveId, startedAt, step + 1);
+        // Network hiccup — retry
+        startPolling(saveId, startedAt);
       }
-    }, delay);
+    }, POLL_INTERVAL);
 
     pollTimers.current.set(saveId, timer);
-  }, [patchSave]);
+  }, []);
 
   const prepend = useCallback((save: SaveResponse) => {
     setSaves((prev) => [save, ...prev.filter((s) => s.id !== save.id)]);
     setStatus('ready');
     if (save.status === 'processing') {
-      startPolling(save.id, Date.now(), 0);
+      startPolling(save.id, Date.now());
     }
   }, [startPolling]);
 
