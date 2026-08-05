@@ -148,7 +148,7 @@ RevenueCat hackathon; this is a submission requirement, not a feature.
 | Feature | Status | What's missing |
 |---|---|---|
 | Push notification on `ready` | ⛔ Not built | No `expo-notifications`, nothing server-side. **This matters more than it looks:** the app deliberately does not poll, because the notification is meant to be the signal. Without it a save shows "Processing" until you pull to refresh |
-| Weekly digest | ⛔ Not built | The last sample content in the app. No endpoint, no generator |
+| Weekly digest | 🟠 Unverified | Built 2026-08-06 — `GET /v1/digest`, generated on demand, Home's tile wired to it. No longer sample content, but not yet run against the live deploy or a real week of saves |
 | AI Project Builder | ⛔ Not built | In the spec's budget planning; no code |
 
 ---
@@ -280,9 +280,15 @@ These gate TestFlight and sandbox purchases, which gate the submission.
     classify call already extracted, so it costs no Gemini request and cannot
     go stale. What remains is judging whether facet-derived folders are good
     enough, or whether a periodic clustering pass is worth the requests.
-16. **Weekly digest endpoint and generator.** The last sample content in the
-    app. Budget it explicitly: digests scale with user count and can eat a
-    day's save capacity.
+16. ~~**Weekly digest endpoint and generator.**~~ **Built 2026-08-06** — no
+    longer the last sample content. `GET /v1/digest` generates on demand
+    (enqueued the first time a week has no cached row), not by a scheduler,
+    which is the "budget it explicitly" concern resolving itself: nobody pays
+    for a digest nobody opens, and one Gemini call per user per week draws
+    from the same primary pool as saves. Full backend suite green, app
+    typechecks and bundles. **Not yet run against the live deploy or a real
+    week of saves** — same "built, unverified live" gap as ASR and
+    enrichment before it.
 
 ### Tier 6 — quality, and the guards against silent failure
 
@@ -313,7 +319,7 @@ starts — item 2 in particular can redirect what "the demo" even means.
 
 ## Summary
 
-**25 done, 15 unverified, 0 mock-only, 22 not built** (62 features).
+**25 done, 16 unverified, 0 mock-only, 21 not built** (62 features).
 
 Under a looser bar the first two columns merge and this reads as 39 of 62 —
 roughly how it feels while writing it, and close to twice what has actually
@@ -336,6 +342,14 @@ on Render with no auth wall at all, the opposite result from YouTube on the
 same infrastructure. Real Gemini RPD also moved to done: primary is
 confirmed 500 as assumed, but the fallback/vision pool is 20, not the ~250
 the capacity math in CLAUDE.md had assumed.*
+
+*Changed 2026-08-06: the weekly digest moved from not-built to unverified —
+`GET /v1/digest`, on-demand generation, no scheduler, and Home's tile reads
+it instead of a hardcoded string. That was the last sample content anywhere
+in the app. Two live bugs were also found and fixed the same session:
+`gemini-2.5-flash` (the fallback model) was silently 404ing on every call —
+deprecated for this project's key — and `WEAVR_DB_POOL_MAX=3` was saturating
+under ordinary test traffic.*
 
 
 Done and verified: the **backend spine** — schema, auth, saves, the job runner,
