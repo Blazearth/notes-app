@@ -84,6 +84,13 @@ public class GroupService {
     private static final String ID_SEPARATOR = "~";
 
     /**
+     * Minimum number of saves that must share a facet value before it gets
+     * its own subgroup. Values shared by fewer saves fall to the parent's
+     * loose list instead — a subgroup of 1 is just noise.
+     */
+    private static final int MIN_GROUP_SIZE = 5;
+
+    /**
      * The only thing the tree needs from a save.
      *
      * <p>Exists so {@link #buildTree} can be a pure function of plain data
@@ -178,12 +185,20 @@ public class GroupService {
         }
 
         List<GroupNode> subgroups = new ArrayList<>();
-        byFacet.forEach((value, facetSaves) -> subgroups.add(GroupNode.of(
-                type + ID_SEPARATOR + slug(value),
-                titleCase(value),
-                null,
-                List.of(),
-                facetSaves.stream().map(SaveFacts::id).toList())));
+        byFacet.forEach((value, facetSaves) -> {
+            if (facetSaves.size() >= MIN_GROUP_SIZE) {
+                subgroups.add(GroupNode.of(
+                        type + ID_SEPARATOR + slug(value),
+                        titleCase(value),
+                        null,
+                        List.of(),
+                        facetSaves.stream().map(SaveFacts::id).toList()));
+            } else {
+                // Too few saves share this value — add them to loose so they
+                // still appear under the parent type, not in a solo subgroup.
+                facetSaves.forEach(s -> loose.add(s.id()));
+            }
+        });
 
         return GroupNode.of(type, displayName(type), null, subgroups, loose);
     }
