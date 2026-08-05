@@ -21,6 +21,7 @@ export const apiRepository: Repository = {
   searchSaves: client.searchSaves,
 
   getMe: client.getMe,
+  getWeeklyDigest: client.getDigest,
 
   convertToShoppingList: client.convertToShoppingList,
   getShoppingList: client.getShoppingList,

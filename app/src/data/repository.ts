@@ -17,6 +17,7 @@
 import type {
   ActivityEntry,
   CreateSaveRequest,
+  DigestResponse,
   DuplicateSuggestion,
   InvitePreview,
   LifecycleStatus,
@@ -42,6 +43,12 @@ export interface Repository {
 
   // Account
   getMe(): Promise<MeResponse>;
+
+  /**
+   * The current week's summary. `status: 'pending'` means the server just
+   * enqueued generation — call again shortly rather than treating it as done.
+   */
+  getWeeklyDigest(): Promise<DigestResponse>;
 
   // The one Act
   convertToShoppingList(saveId: string): Promise<{ status: string }>;

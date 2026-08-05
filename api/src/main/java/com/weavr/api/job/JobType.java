@@ -43,6 +43,14 @@ public final class JobType {
      */
     public static final String CONVERT_TO_SHOPPING_LIST = "convert_to_shopping_list";
 
+    /**
+     * One Gemini call summarising a user's saves from the current ISO week.
+     * Enqueued on demand by {@code GET /v1/digest} the first time a week has
+     * no cached row yet — there is no scheduler, so nobody pays for a digest
+     * nobody opens.
+     */
+    public static final String GENERATE_DIGEST = "generate_digest";
+
     private JobType() {
     }
 }

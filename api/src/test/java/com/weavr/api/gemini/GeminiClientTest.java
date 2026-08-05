@@ -249,4 +249,51 @@ class GeminiClientTest {
                 new BudgetApproved("gemini-2.5-flash-lite", 500)))
                 .isInstanceOf(RetryableJobException.class);
     }
+
+    @Test
+    void digestRequestIsPlainTextWithNoSchemaAndNoImages() {
+        server.expect(requestTo(startsWith("https://generativelanguage.googleapis.com/v1beta/models/")))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.contents[0].parts[0].text").exists())
+                .andExpect(jsonPath("$.contents[0].parts[1]").doesNotExist())
+                // Prose, not classification: no responseSchema, same reasoning
+                // as the vision-escalation request.
+                .andExpect(jsonPath("$.generationConfig.responseSchema").doesNotExist())
+                .andRespond(withSuccess(
+                        visionEnvelope("You saved 5 items this week, mostly recipes."),
+                        MediaType.APPLICATION_JSON));
+
+        String summary = client.summarizeDigest(UUID.randomUUID(),
+                List.of("recipe: Tiramisu", "movie: Interstellar"),
+                new BudgetApproved("gemini-2.5-flash-lite", 500));
+
+        assertThat(summary).isEqualTo("You saved 5 items this week, mostly recipes.");
+    }
+
+    /** Same missing-charset shape as classify and vision — a recap is free text too. */
+    @Test
+    void decodesDigestTextAsUtf8RegardlessOfMissingCharsetHeader() {
+        server.expect(requestTo(startsWith("https://generativelanguage.googleapis.com/v1beta/models/")))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .body(visionEnvelope("Mostly café reviews and crème brûlée recipes this week.")));
+
+        String summary = client.summarizeDigest(UUID.randomUUID(), List.of("place: Café Nakamura"),
+                new BudgetApproved("gemini-2.5-flash-lite", 500));
+
+        assertThat(summary).isEqualTo("Mostly café reviews and crème brûlée recipes this week.");
+    }
+
+    @Test
+    void digestRateLimitIsRetryable() {
+        server.expect(requestTo(startsWith("https://generativelanguage.googleapis.com/v1beta/models/")))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS)
+                        .contentType(MediaType.APPLICATION_JSON).body("{}"));
+
+        assertThatThrownBy(() -> client.summarizeDigest(UUID.randomUUID(), List.of("recipe: Tiramisu"),
+                new BudgetApproved("gemini-2.5-flash-lite", 500)))
+                .isInstanceOf(RetryableJobException.class)
+                .hasMessageContaining("rate limit");
+    }
 }

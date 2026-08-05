@@ -3,6 +3,7 @@ import { API_BASE_URL } from './config';
 import type {
   ActivityEntry,
   CreateSaveRequest,
+  DigestResponse,
   DuplicateSuggestion,
   InvitePreview,
   KnowledgeGroupResponse,
@@ -258,6 +259,17 @@ export function convertToShoppingList(saveId: string): Promise<{ status: string 
 /** `GET /v1/shopping-list` — already ordered by aisle, then by name. */
 export function getShoppingList(): Promise<ShoppingListResponse> {
   return request<ShoppingListResponse>('/v1/shopping-list');
+}
+
+/**
+ * `GET /v1/digest` — the current week's summary, generated on demand.
+ *
+ * A 202 (`status: 'pending'`) is not an error: the server just enqueued the
+ * Gemini call this request triggered. `request()` treats any 2xx as success,
+ * so this resolves with the pending body rather than throwing.
+ */
+export function getDigest(): Promise<DigestResponse> {
+  return request<DigestResponse>('/v1/digest');
 }
 
 export function setShoppingItemChecked(itemId: string, checked: boolean): Promise<void> {

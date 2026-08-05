@@ -97,6 +97,22 @@ export interface ShoppingListResponse {
 }
 
 /**
+ * `DigestController.DigestResponse`.
+ *
+ * `status` is the whole story, not a side channel: `'ready'` has `summary`
+ * populated, `'pending'` means the server just enqueued a Gemini call and the
+ * screen should poll or wait for a push, `'empty'` means the week genuinely
+ * had nothing saved — three different reasons to show nothing, and the caller
+ * should not have to guess which one a missing `summary` means.
+ */
+export interface DigestResponse {
+  summary: string | null;
+  saveCount: number;
+  weekStart: string;
+  status: 'ready' | 'pending' | 'empty';
+}
+
+/**
  * `SpaceRole` — a three-value enum, not capability booleans.
  *
  * Ordered: `owner` > `editor` > `viewer`. A viewer can read and comment; adding

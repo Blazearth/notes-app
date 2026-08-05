@@ -297,6 +297,109 @@ public class GeminiClient {
     }
 
     /**
+     * One Gemini call: a short natural-language summary of what a user saved
+     * this week, for the Home feed's digest tile.
+     *
+     * <p>Plain text in, plain text out — same shape as {@link
+     * #transcribeFrames}, for the same reason: the output is prose, not
+     * structured data, so a {@code responseSchema} would only add an escaping
+     * layer around a string this method hands straight to a UI label.
+     *
+     * <p>Logged to {@code gemini_calls} with a {@code null} {@code save_id} —
+     * a digest is not about any one save, and the column is nullable
+     * precisely for calls like this one.
+     *
+     * @param saveLines one line per save, already assembled by the caller
+     *                  (e.g. {@code "recipe: Creamy Tomato Pasta"}) — this
+     *                  method does not read the database
+     * @return one or two sentences, or blank if Gemini declines to summarise
+     */
+    public String summarizeDigest(UUID userId, List<String> saveLines, BudgetApproved budget) {
+        String model = budget.model();
+        Instant callStart = Instant.now();
+        String outcome = "success";
+        int inputTokens = 0;
+        int outputTokens = 0;
+
+        try {
+            String url = GEMINI_BASE + model + ":generateContent?key=" + props.apiKey();
+
+            log.debug("Gemini digest: user={} model={} saves={}", userId, model, saveLines.size());
+
+            byte[] rawResponse = http.post()
+                    .uri(url)
+                    .body(objectMapper.writeValueAsString(buildDigestRequest(saveLines)))
+                    .retrieve()
+                    // Raw bytes, not String — see classify() for why.
+                    .body(byte[].class);
+
+            JsonNode root = objectMapper.readTree(rawResponse);
+            JsonNode usage = root.path("usageMetadata");
+            inputTokens = usage.path("promptTokenCount").asInt(0);
+            outputTokens = usage.path("candidatesTokenCount").asInt(0);
+
+            String text = root
+                    .path("candidates").get(0)
+                    .path("content").path("parts").get(0)
+                    .path("text").asText();
+
+            log.info("Gemini digest user={} model={} saves={} in={}tok out={}tok",
+                    userId, model, saveLines.size(), inputTokens, outputTokens);
+
+            return text == null ? "" : text.strip();
+
+        } catch (HttpClientErrorException e) {
+            outcome = "client_error_" + e.getStatusCode().value();
+            if (e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
+                throw new RetryableJobException("Gemini rate limit hit (429) on digest.", e);
+            }
+            throw new RetryableJobException("Gemini digest call returned " + e.getStatusCode(), e);
+        } catch (HttpServerErrorException e) {
+            outcome = "server_error_" + e.getStatusCode().value();
+            throw new RetryableJobException(
+                    "Gemini is temporarily unavailable (" + e.getStatusCode() + "), will retry.", e);
+        } catch (Exception e) {
+            outcome = "error";
+            throw new RetryableJobException(
+                    "An error occurred calling Gemini for the digest: " + e.getMessage(), e);
+        } finally {
+            // null save_id: a digest is not about any one save, and the
+            // column is nullable precisely for calls like this one. Passing
+            // userId here instead would violate the FK on nearly every call,
+            // silently, since gemini_calls logging swallows its own errors.
+            logCall(null, model, inputTokens, outputTokens, 0.0, outcome, callStart, "digest");
+        }
+    }
+
+    /**
+     * The week's saves, one per line, plus an instruction to write one or two
+     * sentences in the voice of a friendly recap — not a bulleted report.
+     * {@code temperature} is left at the API default rather than pinned to
+     * 0.0 the way {@link #buildVisionRequest} is: transcription wants the
+     * single most likely reading, a recap benefits from sounding like prose
+     * rather than the most statistically probable sentence.
+     */
+    private Map<String, Object> buildDigestRequest(List<String> saveLines) {
+        String prompt = """
+                Here is everything a user saved this week, one item per line as
+                "type: title":
+
+                %s
+
+                Write exactly one or two sentences summarising the week, in a warm,
+                casual voice — like a friend saying "here's what you've been into
+                lately", not a report. Mention a count and call out any pattern or
+                theme across items (a cuisine, a place, a topic) if one is genuinely
+                there; do not invent one. Do not use bullet points, headings or
+                markdown. Reply with only the summary text.
+                """.formatted(String.join("\n", saveLines));
+
+        return Map.of(
+                "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt))))
+        );
+    }
+
+    /**
      * Frames plus a transcription instruction. No {@code responseSchema} here —
      * the output is prose, and forcing JSON would only add an escaping layer
      * around a string.

@@ -16,6 +16,7 @@
 import type {
   ActivityEntry,
   CreateSaveRequest,
+  DigestResponse,
   DuplicateSuggestion,
   InvitePreview,
   LifecycleStatus,
@@ -40,6 +41,7 @@ import {
   MOCK_SHOPPING_LIST,
   MOCK_SPACES,
   MOCK_USER_ID,
+  MOCK_WEEKLY_DIGEST,
 } from './mockData';
 import type { KnowledgeGroup, Repository } from './repository';
 
@@ -59,6 +61,16 @@ function delay<T>(value: T): Promise<T> {
  */
 function copy<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** Monday of the current ISO week, UTC — mirrors `UsageService.weekStart()` server-side. */
+function mondayOfThisWeek(): string {
+  const now = new Date();
+  const day = now.getUTCDay(); // 0 = Sunday
+  const diffToMonday = day === 0 ? 6 : day - 1;
+  const monday = new Date(now);
+  monday.setUTCDate(now.getUTCDate() - diffToMonday);
+  return monday.toISOString().slice(0, 10);
 }
 
 let idCounter = 100;
@@ -183,6 +195,15 @@ export const mockRepository: Repository = {
       savesLimit: 20,
       actsUsed: 1,
       actsLimit: 1,
+    });
+  },
+
+  getWeeklyDigest(): Promise<DigestResponse> {
+    return delay<DigestResponse>({
+      summary: MOCK_WEEKLY_DIGEST,
+      saveCount: saves.length,
+      weekStart: mondayOfThisWeek(),
+      status: 'ready',
     });
   },
 

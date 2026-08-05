@@ -157,8 +157,12 @@ public class UsageService {
      * The Monday of the current ISO week, UTC — so "one per week" has one
      * boundary for everybody rather than a rolling seven days that resets at a
      * different moment for each user.
+     *
+     * <p>Public because the weekly digest ({@code com.weavr.api.digest}) uses
+     * the same boundary — one definition of "this week" for the whole app,
+     * not a second one invented to match.
      */
-    static LocalDate weekStart() {
+    public static LocalDate weekStart() {
         return LocalDate.now(ZoneOffset.UTC).with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
     }
 }

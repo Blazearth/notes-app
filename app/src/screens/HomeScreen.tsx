@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import { MOCK_CATEGORIES, MOCK_SOURCE_LABELS, repo, type KnowledgeGroup } from '@/data';
-import type { SaveResponse, Space } from '@/api/types';
+import type { DigestResponse, SaveResponse, Space } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -13,7 +13,7 @@ import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
-import { GREETING_NAME, WEEKLY_DIGEST } from '@/data/sampleContent';
+import { GREETING_NAME } from '@/data/sampleContent';
 import { morphFrom } from '@/motion/morph';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
@@ -327,21 +327,29 @@ export function HomeScreen() {
   const [continueSaves, setContinueSaves] = useState<SaveResponse[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [groups, setGroups] = useState<KnowledgeGroup[]>([]);
+  const [digest, setDigest] = useState<DigestResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    // Both sections hide themselves when empty, so a failure here degrades to
-    // absence rather than to an error card sitting above the feed. `allSettled`
-    // so one failing does not blank the other.
+    // All four sections hide themselves when there is nothing to show, so a
+    // failure here degrades to absence rather than to an error card sitting
+    // above the feed. `allSettled` so one failing does not blank the others.
     void Promise.allSettled([
       repo.listSavesByLifecycle(['planned', 'started']),
       repo.listSpaces(),
       repo.listGroups(),
-    ]).then(([rail, mySpaces, myGroups]) => {
+      repo.getWeeklyDigest(),
+    ]).then(([rail, mySpaces, myGroups, weeklyDigest]) => {
       if (cancelled) return;
       if (rail.status === 'fulfilled') setContinueSaves(rail.value);
       if (mySpaces.status === 'fulfilled') setSpaces(mySpaces.value);
       if (myGroups.status === 'fulfilled') setGroups(myGroups.value);
+      // 'pending' means the server just enqueued the Gemini call this request
+      // triggered — nothing to show yet, so it renders the same as absent
+      // rather than a loading state nobody would wait around for.
+      if (weeklyDigest.status === 'fulfilled' && weeklyDigest.value.status === 'ready') {
+        setDigest(weeklyDigest.value);
+      }
     });
     return () => {
       cancelled = true;
@@ -485,16 +493,21 @@ export function HomeScreen() {
         </Reveal>
       ) : null}
 
-      <Reveal index={4}>
-        <Card variant="accent" padding={spacing.lg} style={{ marginBottom: spacing.xxl - 2 }}>
-          {/* On the accent container, not the page — so the label uses the
-              container's computed on-colour rather than the accent itself. */}
-          <AppText variant="sectionLabel" tone="onAccentContainer" style={{ marginBottom: spacing.sm }}>
-            Weekly digest
-          </AppText>
-          <AppText tone="onAccentContainer">{WEEKLY_DIGEST}</AppText>
-        </Card>
-      </Reveal>
+      {/* Hidden until a real digest exists — 'pending' and 'empty' both
+          render as absent rather than as a loading or error state, since
+          nobody is waiting on this tile the way they wait on the feed. */}
+      {digest ? (
+        <Reveal index={4}>
+          <Card variant="accent" padding={spacing.lg} style={{ marginBottom: spacing.xxl - 2 }}>
+            {/* On the accent container, not the page — so the label uses the
+                container's computed on-colour rather than the accent itself. */}
+            <AppText variant="sectionLabel" tone="onAccentContainer" style={{ marginBottom: spacing.sm }}>
+              Weekly digest
+            </AppText>
+            <AppText tone="onAccentContainer">{digest.summary}</AppText>
+          </Card>
+        </Reveal>
+      ) : null}
 
       {/* Real Spaces now, and hidden when the user is in none — the two
           invented ones that used to sit here were the last fiction on this
