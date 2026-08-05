@@ -21,26 +21,25 @@ jobs:
             exit 1
           fi
 
-          # Capture status and body separately. A plain `curl | jq` swallows
-          # the actual response on failure -- this project's own deploy hook
-          # hit that blind spot: a non-JSON (or empty) body crashed jq with a
-          # cryptic parse error instead of showing what Render actually sent
-          # back, and this trigger is redundant with Render's own native
-          # auto-deploy on push, so the failure went unnoticed for a while.
+          # Capture status and body separately rather than `curl | jq` --
+          # that swallowed the actual response on failure and crashed jq with
+          # a cryptic parse error instead of showing what Render sent back.
+          #
+          # The status code is the ONLY success signal: verified live that
+          # Render's deploy hook responds 202 with a plain-text "Accepted"
+          # body on a real, working trigger -- not the JSON object the
+          # authenticated Deploys API (POST /v1/services/{id}/deploys)
+          # returns. The original `| jq .` assumed every Render endpoint
+          # returns JSON; this one doesn't, on success or failure. Pretty-
+          # print the body only if it happens to parse as JSON; otherwise
+          # print it raw. Either way, a 2xx never fails the job.
           http_code=$(curl -s -o /tmp/render_hook_response.json -w "%{http_code}" -X POST "$HOOK_URL")
           echo "HTTP status: $http_code"
           echo "Response body:"
-          cat /tmp/render_hook_response.json
+          jq . /tmp/render_hook_response.json 2>/dev/null || cat /tmp/render_hook_response.json
           echo
 
           if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
             echo "::error::Render deploy hook returned HTTP $http_code -- see response body above."
             exit 1
           fi
-
-          if ! jq . /tmp/render_hook_response.json > /dev/null 2>&1; then
-            echo "::error::Render deploy hook returned HTTP $http_code but a non-JSON body -- the hook URL is likely stale. Regenerate it in the Render dashboard (Service -> Settings -> Deploy Hook) and update the RENDER_DEPLOY_HOOK_URL repo secret."
-            exit 1
-          fi
-
-          jq . /tmp/render_hook_response.json
