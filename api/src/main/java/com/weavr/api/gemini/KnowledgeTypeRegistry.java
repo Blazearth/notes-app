@@ -133,26 +133,151 @@ public final class KnowledgeTypeRegistry {
         ));
 
         // -----------------------------------------------------------------
+        // article / blog post / tutorial
+        // -----------------------------------------------------------------
+        register(new KnowledgeType(
+                "article",
+                "A written article, blog post, essay, tutorial, or guide.",
+                List.of(
+                        field("title", "string", "Article title"),
+                        field("summary", "string", "2-3 sentence summary of the main point"),
+                        field("category", "string",
+                                "One of: Technology, Health, Finance, Science, Design, " +
+                                "Business, Politics, Sports, Entertainment, Lifestyle, Education, Other"),
+                        field("tags", "array", "Up to 3 specific topic tags, e.g. ['machine learning', 'Python']")
+                ),
+                """
+                Input: "How I optimised my React app from 8s to 1.2s load time. \
+                Key wins: lazy loading, code splitting, and moving to a CDN. \
+                Full walkthrough with benchmarks."
+                Output:
+                {
+                  "knowledgeType": "article",
+                  "confidence": 0.93,
+                  "title": "How I Optimised My React App from 8s to 1.2s",
+                  "summary": "A practical walkthrough of frontend performance optimisation techniques including lazy loading, code splitting, and CDN migration, with before/after benchmarks.",
+                  "category": "Technology",
+                  "tags": ["React", "performance", "web development"]
+                }
+                """
+        ));
+
+        // -----------------------------------------------------------------
+        // product — something to buy or already bought
+        // -----------------------------------------------------------------
+        register(new KnowledgeType(
+                "product",
+                "A product, gadget, tool, or item to buy or that was reviewed.",
+                List.of(
+                        field("title", "string", "Product name and model if known"),
+                        field("summary", "string", "One sentence on what it is and why it's notable"),
+                        field("category", "string",
+                                "One of: Electronics, Clothing, Books, Home, Kitchen, " +
+                                "Sports, Beauty, Toys, Software, Other"),
+                        field("price", "string", "Price if mentioned, e.g. '$49' or '[unclear]'"),
+                        field("whereTo", "string", "Where to buy if mentioned, or '[unclear]'")
+                ),
+                """
+                Input: "The Kindle Paperwhite 2024 — 7 inch 300ppi display, 16GB, waterproof. \
+                $139 on Amazon. Best e-reader for the price, hands down."
+                Output:
+                {
+                  "knowledgeType": "product",
+                  "confidence": 0.95,
+                  "title": "Kindle Paperwhite 2024",
+                  "summary": "A 7-inch waterproof e-reader with 300ppi display and 16GB storage, widely regarded as the best value e-reader.",
+                  "category": "Electronics",
+                  "price": "$139",
+                  "whereTo": "Amazon"
+                }
+                """
+        ));
+
+        // -----------------------------------------------------------------
+        // book
+        // -----------------------------------------------------------------
+        register(new KnowledgeType(
+                "book",
+                "A book recommendation, review, or reading note.",
+                List.of(
+                        field("title", "string", "Book title"),
+                        field("author", "string", "Author name or '[unclear]'"),
+                        field("genre", "array", "e.g. ['non-fiction', 'psychology']"),
+                        field("summary", "string", "One-sentence description of what the book is about"),
+                        field("rating", "string", "Rating or score if mentioned, or '[unclear]'")
+                ),
+                """
+                Input: "Finished Atomic Habits by James Clear. Changed how I think about \
+                building routines. Core idea: 1% better every day compounds massively. 5/5."
+                Output:
+                {
+                  "knowledgeType": "book",
+                  "confidence": 0.96,
+                  "title": "Atomic Habits",
+                  "author": "James Clear",
+                  "genre": ["non-fiction", "self-help", "psychology"],
+                  "summary": "A practical guide to building good habits and breaking bad ones through small, incremental daily improvements.",
+                  "rating": "5/5"
+                }
+                """
+        ));
+
+        // -----------------------------------------------------------------
+        // workout / fitness
+        // -----------------------------------------------------------------
+        register(new KnowledgeType(
+                "workout",
+                "A workout routine, exercise plan, or fitness content.",
+                List.of(
+                        field("title", "string", "Workout name or type"),
+                        field("summary", "string", "What the workout involves"),
+                        field("category", "string",
+                                "One of: Strength, Cardio, Yoga, HIIT, Stretching, Sports, Other"),
+                        field("duration", "string", "Duration if mentioned, e.g. '30 min' or '[unclear]'"),
+                        field("equipment", "array", "Equipment needed, e.g. ['dumbbells', 'resistance band'], or []")
+                ),
+                """
+                Input: "20-minute no-equipment HIIT: 40s work / 20s rest. \
+                Burpees, jump squats, mountain climbers, push-ups. 4 rounds. Burns ~300 cal."
+                Output:
+                {
+                  "knowledgeType": "workout",
+                  "confidence": 0.94,
+                  "title": "20-Minute No-Equipment HIIT",
+                  "summary": "A 4-round HIIT circuit with burpees, jump squats, mountain climbers, and push-ups on a 40s/20s work-rest interval.",
+                  "category": "HIIT",
+                  "duration": "20 min",
+                  "equipment": []
+                }
+                """
+        ));
+
+        // -----------------------------------------------------------------
         // other — anything that doesn't fit a specific type
         // -----------------------------------------------------------------
         register(new KnowledgeType(
                 "other",
-                "Interesting content that doesn't fit a specific category.",
+                "Interesting content that doesn't fit any of the above types.",
                 List.of(
                         field("title", "string", "A descriptive title for this save"),
                         field("summary", "string", "2-3 sentence summary of what this is about"),
-                        field("tags", "array", "Relevant topic tags, e.g. ['productivity', 'design']")
+                        field("category", "string",
+                                "One of: Technology, Health, Finance, Science, Design, " +
+                                "Business, Politics, Sports, Entertainment, Lifestyle, Education, Other"),
+                        field("tags", "array", "Up to 3 specific topic tags, e.g. ['productivity', 'design']")
                 ),
                 """
-                Input: "10 rules for writing great software: 1. Make it work, 2. Make it right, \
-                3. Make it fast. Premature optimization is the root of all evil. ..."
+                Input: "The Feynman Technique: to learn anything deeply, explain it in simple \
+                language as if teaching a child. Where you get stuck is where you don't really \
+                understand it yet. Go back to the source, fill the gap, repeat."
                 Output:
                 {
                   "knowledgeType": "other",
                   "confidence": 0.88,
-                  "title": "10 Rules for Writing Great Software",
-                  "summary": "A guide to software engineering principles, emphasizing correctness before optimization and simplicity over complexity.",
-                  "tags": ["software engineering", "programming", "best practices"]
+                  "title": "The Feynman Technique for Deep Learning",
+                  "summary": "A learning method where you explain a concept in simple language to expose gaps in your understanding, then fill those gaps by revisiting the source material.",
+                  "category": "Education",
+                  "tags": ["learning", "productivity", "mental models"]
                 }
                 """
         ));

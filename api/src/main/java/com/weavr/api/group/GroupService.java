@@ -48,18 +48,20 @@ public class GroupService {
      *
      * <p>Chosen because the value is a <em>closed-ish vocabulary the model
      * already emits</em> — cuisines and genres repeat across saves, so they
-     * cluster. A free-text field like {@code title} would produce one subgroup
-     * per save, which is not a grouping, and {@code summary} would produce
-     * none that ever match.
+     * cluster. `category` is now the primary facet for article/product/other/workout
+     * since it uses a controlled vocabulary (10-15 values), preventing the
+     * tag-per-save explosion that free-text `tags` caused.
      */
     private static final Map<String, String> FACETS = Map.of(
             "recipe", "cuisine",
             "restaurant", "cuisine",
             "movie", "genre",
-            "place", "tags",
-            "product", "tags",
-            "article", "tags",
-            "other", "tags");
+            "book", "genre",
+            "place", "cuisine",
+            "article", "category",
+            "product", "category",
+            "workout", "category",
+            "other", "category");
 
     /**
      * Product-facing names for the types the registry emits.
@@ -72,12 +74,12 @@ public class GroupService {
     private static final Map<String, String> DISPLAY_NAMES = Map.of(
             "recipe", "Recipes",
             "movie", "Watchlist",
-            "place", "Travel",
+            "place", "Places",
             "restaurant", "Restaurants",
             "product", "Shopping",
             "article", "Reading",
-            "workout", "Workout",
-            "book", "Reading",
+            "workout", "Workouts",
+            "book", "Books",
             "other", "Other");
 
     /** Separates the type segment from the facet segment in an id. */
