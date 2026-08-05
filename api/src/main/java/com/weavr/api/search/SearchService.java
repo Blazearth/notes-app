@@ -183,24 +183,66 @@ public class SearchService {
     }
 
     /**
-     * <p>{@code plainto_tsquery} rather than {@code to_tsquery}: the input is a
-     * user's search box, and {@code to_tsquery} would throw a syntax error on
-     * an unbalanced quote or a bare {@code &}. {@code websearch_to_tsquery} is
-     * the richer alternative worth considering once anyone asks for phrase
-     * search.
+     * Builds a prefix-aware tsquery so partial words still match — "chick"
+     * finds "chicken", "past rec" finds "pasta recipe".
+     *
+     * <p>Strategy: run {@code websearch_to_tsquery} on the whole input (safe on
+     * raw user text — no syntax errors), then OR it with a prefix tsquery built
+     * from just the last word. The last word gets {@code :*} so it acts as a
+     * prefix match; earlier words must match (stemmed) as normal. This gives
+     * search-as-you-type behaviour without requiring trigram indexes.
+     *
+     * <p>If the whole query is a single word the websearch and the prefix query
+     * are equivalent, but ORing them is harmless.
      *
      * <p>Ordering is by {@code ts_rank}, which honours the A/B/C weights V3
      * assigns — a save whose <em>title</em> matches outranks one that merely
      * mentions the term in an ingredient list.
      */
     private List<UUID> fullTextCandidates(UUID userId, String query) {
+        // Last whitespace-delimited token, sanitised for to_tsquery syntax:
+        // strip everything except letters, digits and hyphens.
+        String[] tokens = query.trim().split("\\s+");
+        String lastWord = tokens[tokens.length - 1].replaceAll("[^\\p{L}\\p{N}-]", "");
+        // If the last word sanitises to empty (e.g. user typed a symbol),
+        // fall back to plain websearch query with no prefix extension.
+        boolean hasLastWord = !lastWord.isBlank();
+
+        if (hasLastWord) {
+            // websearch_to_tsquery(...) || to_tsquery('english', 'lastword:*')
+            return jdbc.sql("""
+                            select id
+                            from saves
+                            where user_id = ?
+                              and status = 'ready'
+                              and search_tsv @@ (
+                                  websearch_to_tsquery('english', ?)
+                                  || to_tsquery('english', ? || ':*')
+                              )
+                            order by ts_rank(search_tsv,
+                                         websearch_to_tsquery('english', ?)
+                                         || to_tsquery('english', ? || ':*')
+                                     ) desc,
+                                     created_at desc
+                            limit ?
+                            """)
+                    .param(userId)
+                    .param(query)
+                    .param(lastWord)
+                    .param(query)
+                    .param(lastWord)
+                    .param(props.candidateDepth())
+                    .query(UUID.class)
+                    .list();
+        }
+
         return jdbc.sql("""
                         select id
                         from saves
                         where user_id = ?
                           and status = 'ready'
-                          and search_tsv @@ plainto_tsquery('english', ?)
-                        order by ts_rank(search_tsv, plainto_tsquery('english', ?)) desc,
+                          and search_tsv @@ websearch_to_tsquery('english', ?)
+                        order by ts_rank(search_tsv, websearch_to_tsquery('english', ?)) desc,
                                  created_at desc
                         limit ?
                         """)
