@@ -1,6 +1,6 @@
 # Feature status
 
-**As of 2026-08-02, the Shipaton build window (Aug 1 – Sep 30).**
+**As of 2026-08-05, the Shipaton build window (Aug 1 – Sep 30).**
 
 ## The bar
 
@@ -58,7 +58,7 @@ verified; it is verified **against YouTube**.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| YouTube — captions + metadata | ✅ Done | Run against yt-dlp 2026.07.04 and a live video. Found and fixed three real defects |
+| YouTube — captions + metadata | 🟠 Unverified on Render | Run against yt-dlp 2026.07.04 and a live video **from a residential IP**. Render's datacenter IP hits YouTube's bot check on every probe instead; a player-client override and a RapidAPI primary path (`RapidYtClient`) both landed as mitigations but neither has a confirmed successful save from the live deploy |
 | **Instagram Reels** | 🟠 Unverified | Never run against a real Reel. Instagram increasingly **requires authentication**, and cookies risk a ban and sit badly against the ToS posture. Unauthenticated failure may be the permanent outcome — this needs measuring, not assuming |
 | **TikTok** | 🟠 Unverified | Same cascade, never exercised against a real TikTok URL |
 | ASR fallback (Groq Whisper) | 🟠 Unverified | 9 tests, all mocked. **No real Groq call has ever been made** |
@@ -180,7 +180,7 @@ renders that screen correctly whether the fix is right or not.
 | Schema + migrations | ✅ Done | Applied against Supabase PG 17.6 |
 | Auth (Supabase JWT, ES256) | ✅ Done | Both accept and reject paths |
 | Job queue + runner | ✅ Done | Claim, exclusion, three error paths, stale sweep |
-| Deployment (Render + Docker) | 🟠 Unverified | Config just landed. The image **must** install `yt-dlp`, `ffmpeg`, `tesseract` *and* `tesseract-ocr-eng` — a plain JRE has none, and missing language data reads every frame as nothing, silently |
+| Deployment (Render + Docker) | 🟠 Unverified | Deployed and running — no longer "config just landed". But the deploy hit YouTube's bot check on every probe from Render's datacenter IP, which no local run had ever surfaced; the fixes so far (cookies, player-client override, a RapidAPI primary path) are live but unconfirmed against the real instance. Still true regardless: the image **must** install `yt-dlp`, `ffmpeg`, `tesseract` *and* `tesseract-ocr-eng` — a plain JRE has none, and missing language data reads every frame as nothing, silently |
 | Keep-warm cron | 🟠 Unverified | Supabase pauses after ~7 days idle; a paused project during judging is a demo-day failure |
 | Integration tests (Testcontainers) | ⛔ Not built | Unit tests cover validation and enum mapping only |
 | Store records / Apple enrolment | ⛔ Not built | Phase 0, never closed. Not code, and the lead time is external |

@@ -38,7 +38,7 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | `GET /v1/saves`, `/{id}` | **real, verified** | `200` on both; `/{id}` returns the created save, the list returns it too |
 | Job queue | **real, verified** | Enqueue runs as part of the create path; the runner drains it |
 | Job runner | **real, verified** | `SKIP LOCKED` claim, per-group exclusion, three error paths, stale-claim sweep. Claimed and completed a real job against live Supabase |
-| Extraction cascade — metadata + captions | **real, verified** | `--dump-single-json` probe then `--write-auto-subs`, VTT to prose, error classification. Run against yt-dlp 2026.07.04 and a live YouTube video by the opt-in `YtDlpLiveTest`; it found and fixed three defects |
+| Extraction cascade — metadata + captions | **real, verified locally; Render deploy hits YouTube's bot check** | `--dump-single-json` probe then `--write-auto-subs`, VTT to prose, error classification. Run against yt-dlp 2026.07.04 and a live YouTube video by the opt-in `YtDlpLiveTest` — but that runs from a residential IP. On Render's datacenter IP every YouTube probe hit "Sign in to confirm you're not a bot"; cookies alone didn't clear it, a player-client override (`tv,android,web`) is the empirical fix and is unconfirmed against the real deploy. `RapidYtClient` (2026-08-05) now tries a RapidAPI path first for YouTube, bypassing YouTube directly, with yt-dlp as fallback — also unconfirmed live. See below |
 | Extraction cascade — ASR | **built, unverified live** | yt-dlp audio download → ffmpeg 16 kHz mono downmix → Groq Whisper. A different provider with its own key, so it costs no Gemini RPD. 9 unit tests, all mocked — no real Groq call made yet |
 | Extraction cascade — link / PDF | **built, unverified live** | Readability4J for plain links, PDFBox for PDFs — the non-video branch, reached when yt-dlp has no extractor for the URL or it's a `.pdf`. 7 unit tests, all mocked — no real page or PDF fetched yet |
 | `process_save` handler | **real** | Runs the cascade and parks the text in `save_stages` for `classify_save` to pick up |
@@ -524,6 +524,17 @@ green, which is precisely the state that hid three yt-dlp defects and a UTF-8
 bug. The Act cap was unit-tested but not driven live, since exercising it needs
 a real recipe through the Gemini pipeline.
 
+### Also on 2026-08-02 through 2026-08-05 — Render's YouTube bot check, and a path around it
+
+**The Render deployment hit a failure `YtDlpLiveTest` had never exercised: YouTube's "Sign in to confirm you're not a bot" on every probe.** The live test runs from a residential dev machine's IP; Render's is a datacenter IP, which YouTube challenges far more aggressively. Two mitigations landed, in order, both against the real deploy:
+
+- `WEAVR_YTDLP_COOKIES_BASE64` decodes to a `--cookies` file at startup — present and correct in the probe command, and the job still failed twice. A cookie exported on a residential machine and replayed from an unrelated cloud IP is itself a bot signal, and the `web` player client's challenge separately wants a PO token cookies don't supply.
+- `--extractor-args youtube:player_client=tv,android,web` (`WEAVR_YTDLP_PLAYER_CLIENTS`) routes around the `web` client's PO-token requirement. **Empirical, not measured against the real deploy** — the commit that added it says so explicitly, and nothing since has closed that gap.
+
+**A live-cookies file was accidentally committed while debugging this** (`www.youtube.com_cookies.txt`) and had to be scrubbed from tracking; `*cookies.txt` is now `.gitignore`d. Worth repeating for the next debugging session that writes a credential to disk: the gitignore entry belongs in the same commit as the code that writes the file, not a follow-up commit after it's already leaked once.
+
+**`RapidYtClient` (2026-08-05) sidesteps the bot check instead of continuing to negotiate with it.** A two-call RapidAPI path (`ytstream-download-youtube-videos`) fetches metadata and a caption-track XML without yt-dlp ever contacting YouTube directly; `ExtractionCascade` tries it first for any URL it recognises as YouTube, and falls through to the unchanged yt-dlp path on empty result or failure. Gated by `WEAVR_RAPID_YT_API_KEY` — blank disables it, same opt-in shape as the Groq and enrichment keys. **This has not been confirmed against the real Render deploy** — it removes the mechanism the bot check exploits rather than working around the symptom, which is the argument for it being the more durable fix, but that is a claim about the mechanism, not a live result.
+
 ## Running the app
 
 ```bash
@@ -636,6 +647,11 @@ judging is a demo-day failure. The keep-warm job must issue a real query, not an
 HTTP ping to a static endpoint.
 
 ## Known gaps
+
+**Render's YouTube bot check — mitigated, not confirmed** — see the dated section above.
+
+- `YtDlpLiveTest` proves the cascade works from a residential IP; it says nothing about Render's datacenter IP, which is where the actual failure showed up (`"Sign in to confirm you're not a bot"` on every probe). Cookies alone didn't clear it. The player-client override and the RapidAPI primary path are both live-deployed but neither has a confirmed successful YouTube save from the real Render instance to point to — "should fix it" and "fixed it" are still two different claims here.
+- If `WEAVR_RAPID_YT_API_KEY` is unset, the app is exactly as exposed to the bot check as before RapidAPI was added — the key exists in `render.yaml` but `sync: false` means it is not set automatically, so an operator has to add it manually in the Render dashboard.
 
 **Verified against a real yt-dlp** (closed — see [testing.md](docs/testing.md#what-running-the-real-binary-found))
 
