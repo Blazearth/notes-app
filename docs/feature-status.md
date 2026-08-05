@@ -148,7 +148,7 @@ RevenueCat hackathon; this is a submission requirement, not a feature.
 | Feature | Status | What's missing |
 |---|---|---|
 | Push notification on `ready` | ⛔ Not built | No `expo-notifications`, nothing server-side. **This matters more than it looks:** the app deliberately does not poll, because the notification is meant to be the signal. Without it a save shows "Processing" until you pull to refresh |
-| Weekly digest | 🟠 Unverified | Built 2026-08-06 — `GET /v1/digest`, generated on demand, Home's tile wired to it. No longer sample content, but not yet run against the live deploy or a real week of saves |
+| Weekly digest | 🟠 Unverified | Built and deployed 2026-08-06 — `GET /v1/digest`, generated on demand, Home's tile wired to it. `V8__digests.sql` confirmed applied live and `generate_digest` confirmed registered in the job runner. No longer sample content, but the endpoint itself has not yet been hit against a real week of saves |
 | AI Project Builder | ⛔ Not built | In the spec's budget planning; no code |
 
 ---
