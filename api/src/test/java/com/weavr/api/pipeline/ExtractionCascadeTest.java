@@ -47,7 +47,13 @@ class ExtractionCascadeTest {
 
     private static SourceMetadata metadata(String title, String description, List<String> autoCaptions) {
         return new SourceMetadata("vid1", title, description, "someone", 42.0,
-                "https://example.com/thumb.jpg", List.of(), autoCaptions);
+                "https://example.com/thumb.jpg", List.of(), autoCaptions, null);
+    }
+
+    private static SourceMetadata metadataWithPinnedComment(
+            String title, String description, List<String> autoCaptions, String pinnedComment) {
+        return new SourceMetadata("vid1", title, description, "someone", 42.0,
+                "https://example.com/thumb.jpg", List.of(), autoCaptions, pinnedComment);
     }
 
     @Test
@@ -64,6 +70,33 @@ class ExtractionCascadeTest {
                 .contains("Miso ramen")
                 .contains("first brown the onions");
         verify(asr, never()).transcribe(anyString());
+    }
+
+    /**
+     * The bug this covers: a video whose caption/description only summarises
+     * ("garlic, butter, chili flakes...") while the creator's pinned comment
+     * carries the real recipe with exact quantities and numbered steps. The
+     * pinned comment must reach the model even though captions already won —
+     * it is additive, not a fallback used only when captions are thin.
+     */
+    @Test
+    void appendsPinnedCommentAlongsideWhicheverSourceWon() {
+        when(ytDlp.probe(anyString())).thenReturn(metadataWithPinnedComment(
+                "Cheesy Garlic Bread",
+                "garlic, butter, chili flakes, dough, mozzarella",
+                List.of("en"),
+                "1½ cups maida, 25-30 garlic cloves, bake at 180C for 15-20 minutes"));
+        when(ytDlp.fetchCaptions(anyString(), any(Path.class)))
+                .thenReturn(Optional.of("today we're making extra cheesy garlic bread"));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl("https://example.com/v", SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("captions");
+        assertThat(extraction.text())
+                .contains("today we're making extra cheesy garlic bread")
+                .contains("Pinned comment:")
+                .contains("1½ cups maida")
+                .contains("bake at 180C for 15-20 minutes");
     }
 
     /** The cheap path: a rich description means no caption fetch at all. */

@@ -123,9 +123,13 @@ public class RapidYtClient {
             }
         }
 
+        // RapidAPI's /dl response carries no comment data — pinnedComment stays
+        // null here. A YouTube save only gets one when this probe fails and the
+        // cascade falls through to the plain yt-dlp path (below), or on Render
+        // where yt-dlp itself is bot-blocked for YouTube, not at all yet.
         SourceMetadata metadata = new SourceMetadata(
                 videoId, title, desc, uploader, duration, thumbnail,
-                List.copyOf(langCodes), List.of());
+                List.copyOf(langCodes), List.of(), null);
 
         // --- transcript ---
         Optional<String> transcript = Optional.empty();

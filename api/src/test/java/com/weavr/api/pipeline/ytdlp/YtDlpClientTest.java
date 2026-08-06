@@ -228,6 +228,60 @@ class YtDlpClientTest {
         assertThat(metadata.asText()).contains("TEDxVienna");
     }
 
+    /**
+     * Field name and array shape taken from a real {@code --write-comments}
+     * dump: {@code is_pinned: true} on exactly the pinned comment, others
+     * false or absent. Confirmed against a real video whose pinned comment
+     * carried the full recipe the description only summarised.
+     */
+    @Test
+    void probeExtractsThePinnedComment() {
+        String json = """
+                {
+                  "id": "x",
+                  "subtitles": {},
+                  "automatic_captions": {},
+                  "comments": [
+                    { "text": "first!", "is_pinned": false },
+                    { "text": "1½ cups maida, bake at 180C for 15-20 minutes", "is_pinned": true },
+                    { "text": "nice recipe", "is_pinned": false }
+                  ]
+                }
+                """;
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(
+                new ExternalProcess.Result(0, json, "", false, false));
+
+        SourceMetadata metadata = client.probe("https://example.com/v");
+
+        assertThat(metadata.pinnedComment()).isEqualTo("1½ cups maida, bake at 180C for 15-20 minutes");
+        assertThat(metadata.asText()).contains("Pinned comment:", "180C for 15-20 minutes");
+    }
+
+    /** No comment is pinned, comments are off, or the field is absent entirely — all the same to the caller. */
+    @Test
+    void probeReturnsNullPinnedCommentWhenNoneIsPinned() {
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(new ExternalProcess.Result(
+                0, "{\"id\":\"x\",\"subtitles\":{},\"automatic_captions\":{},\"comments\":[{\"text\":\"hi\",\"is_pinned\":false}]}",
+                "", false, false));
+
+        assertThat(client.probe("https://example.com/v").pinnedComment()).isNull();
+    }
+
+    /** The probe call is one process invocation, not two — comments piggyback on the same dump. */
+    @Test
+    void probeFetchesCommentsInTheSameCallBoundedToTwenty() {
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(new ExternalProcess.Result(
+                0, "{\"id\":\"x\",\"subtitles\":{},\"automatic_captions\":{}}", "", false, false));
+
+        client.probe("https://example.com/v");
+
+        org.mockito.ArgumentCaptor<List<String>> command =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(processes).run(command.capture(), any(Duration.class));
+        assertThat(command.getValue())
+                .contains("--write-comments", "--extractor-args", "youtube:max_comments=20,20,0,0");
+    }
+
     /** A post with neither kind of track: the cascade must not attempt a fetch. */
     @Test
     void probeReportsNoCaptionsWhenBothMapsAreEmpty() {

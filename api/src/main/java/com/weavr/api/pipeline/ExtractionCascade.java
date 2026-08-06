@@ -225,7 +225,7 @@ public class ExtractionCascade {
 
     /** Neither a plain link nor a PDF has a yt-dlp probe result behind it. */
     private static SourceMetadata emptyMetadata(String title) {
-        return new SourceMetadata(null, title, null, null, null, null, List.of(), List.of());
+        return new SourceMetadata(null, title, null, null, null, null, List.of(), List.of(), null);
     }
 
     private static boolean looksLikePdf(String url) {
