@@ -221,9 +221,27 @@ export const mockRepository: Repository = {
 
   convertToShoppingList(saveId: string): Promise<{ status: string }> {
     const save = requireSave(saveId);
-    const ingredients = Array.isArray(save.structuredData?.ingredients)
-      ? (save.structuredData.ingredients as string[])
-      : [];
+    // Both ingredient shapes, same as the server: legacy flat strings and the
+    // post-2026-08-07 {name, quantity, note} objects.
+    const ingredients = (Array.isArray(save.structuredData?.ingredients)
+      ? save.structuredData.ingredients
+      : []
+    )
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (typeof item === 'object' && item !== null) {
+          const parts = item as { name?: unknown; quantity?: unknown; note?: unknown };
+          const clean = (v: unknown) =>
+            typeof v === 'string' && v.trim() && v.trim() !== '[unclear]' ? v.trim() : null;
+          const name = clean(parts.name);
+          if (!name) return null;
+          const quantity = clean(parts.quantity);
+          const note = clean(parts.note);
+          return `${quantity ? `${quantity} ` : ''}${name}${note ? `, ${note}` : ''}`;
+        }
+        return null;
+      })
+      .filter((v): v is string => v !== null);
 
     // Contribution-per-save, exactly as the server folds it: re-converting the
     // same recipe replaces its lines instead of doubling every quantity.

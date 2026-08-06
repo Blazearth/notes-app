@@ -132,14 +132,54 @@ export const MOCK_SAVES: SaveResponse[] = [
     status: 'ready',
     favorite: false,
     archived: false,
-    knowledgeType: 'other',
+    knowledgeType: 'workout',
     confidence: 0.93,
     lifecycleStatus: 'started',
+    // The full post-2026-08-07 workout shape, exercises included, so mock mode
+    // renders the new nested-object detail layout through its real branch.
     structuredData: {
       title: 'Resistance Band Full-Body Workout',
       summary:
         'A 25-minute circuit using a single loop band — three rounds of six movements, no floor work, designed for a hotel room.',
-      highlights: ['25 min', '3 rounds', 'No floor work'],
+      category: 'Strength',
+      goal: 'full-body maintenance while travelling',
+      muscleGroups: ['legs', 'back', 'chest', 'core'],
+      duration: '25 min',
+      difficulty: '[unclear]',
+      equipment: ['loop resistance band'],
+      warmup: ['2 min marching in place', 'arm circles, 30s each way'],
+      exercises: [
+        {
+          name: 'Banded squat',
+          sets: '3',
+          reps: '15',
+          rest: '45s',
+          tempo: '[unclear]',
+          cues: ['band above knees', 'drive the knees out'],
+          alternatives: [],
+        },
+        {
+          name: 'Banded row',
+          sets: '3',
+          reps: '12',
+          rest: '45s',
+          tempo: '2-1-2',
+          cues: ['anchor at chest height', 'squeeze the shoulder blades'],
+          alternatives: ['Single-arm row'],
+        },
+        {
+          name: 'Band pull-apart',
+          sets: '3',
+          reps: '20',
+          rest: '30s',
+          tempo: '[unclear]',
+          cues: ['keep the elbows soft'],
+          alternatives: [],
+        },
+      ],
+      cooldown: ['chest doorway stretch, 30s per side'],
+      progression: 'Move to the next band thickness once all rounds feel easy',
+      warnings: ['Check the band for tears before loading it'],
     },
     createdAt: hoursAgo(3),
     updatedAt: hoursAgo(1),
@@ -177,15 +217,16 @@ export const MOCK_SAVES: SaveResponse[] = [
       title: 'Weeknight Miso Ramen',
       servings: '2',
       totalTime: '35 min',
+      // Post-2026-08-07 structured shape: {name, quantity, note} objects.
       ingredients: [
-        '2 tbsp white miso',
-        '1 tbsp toasted sesame oil',
-        '4 cloves garlic, grated',
-        '1 thumb ginger, grated',
-        '600 ml chicken stock',
-        '2 portions fresh ramen noodles',
-        '2 soft-boiled eggs',
-        '1 handful spinach',
+        { name: 'white miso', quantity: '2 tbsp', note: '[unclear]' },
+        { name: 'toasted sesame oil', quantity: '1 tbsp', note: '[unclear]' },
+        { name: 'garlic', quantity: '4 cloves', note: 'grated' },
+        { name: 'ginger', quantity: '1 thumb', note: 'grated' },
+        { name: 'chicken stock', quantity: '600 ml', note: '[unclear]' },
+        { name: 'fresh ramen noodles', quantity: '2 portions', note: '[unclear]' },
+        { name: 'eggs', quantity: '2', note: 'soft-boiled' },
+        { name: 'spinach', quantity: '1 handful', note: '[unclear]' },
       ],
       steps: [
         'Fry the garlic and ginger in the sesame oil until fragrant, about 90 seconds.',
@@ -212,6 +253,9 @@ export const MOCK_SAVES: SaveResponse[] = [
       title: 'Sourdough Starter, Day by Day',
       servings: '1 starter',
       totalTime: '7 days',
+      // Deliberately the LEGACY flat-string shape: saves classified before
+      // 2026-08-07 hold this forever (no reprocess path), so one fixture must
+      // keep exercising the old-shape rendering path.
       ingredients: ['100 g wholemeal flour', '100 g strong white flour', '200 ml water at 28°C'],
       steps: [
         'Day 1: mix 50 g wholemeal with 50 ml water, cover loosely, leave at room temperature.',

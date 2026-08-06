@@ -125,22 +125,50 @@ class ConvertToShoppingListHandler implements JobHandler {
     }
 
     private List<String> ingredientsOf(String structuredDataJson) {
-        Map<String, Object> data = parse(structuredDataJson);
-        Object raw = data.get("ingredients");
+        return ingredientLines(parse(structuredDataJson).get("ingredients"));
+    }
+
+    /**
+     * Ingredients arrive in two shapes and both must work forever: saves
+     * classified before 2026-08-07 hold flat strings ("250g mascarpone"),
+     * newer ones hold {@code {name, quantity, note}} objects — there is no
+     * reprocess path, so the old shape never ages out. Objects are folded
+     * back into the line the converter's prompt was written for.
+     */
+    static List<String> ingredientLines(Object raw) {
         if (!(raw instanceof List<?> list)) {
             return List.of();
         }
         List<String> ingredients = new ArrayList<>();
         for (Object item : list) {
-            String text = String.valueOf(item).trim();
-            // "[unclear]" is the registry's sentinel for absent information;
-            // sending it to the model would produce a shopping list line
-            // saying "unclear".
-            if (!text.isEmpty() && !"[unclear]".equalsIgnoreCase(text)) {
+            String text = item instanceof Map<?, ?> parts ? lineOf(parts) : clean(item);
+            if (text != null) {
                 ingredients.add(text);
             }
         }
         return ingredients;
+    }
+
+    private static String lineOf(Map<?, ?> parts) {
+        String name = clean(parts.get("name"));
+        if (name == null) {
+            return null;
+        }
+        String quantity = clean(parts.get("quantity"));
+        String note = clean(parts.get("note"));
+        return (quantity == null ? "" : quantity + " ") + name + (note == null ? "" : ", " + note);
+    }
+
+    /**
+     * "[unclear]" is the registry's sentinel for absent information; sending
+     * it to the model would produce a shopping list line saying "unclear".
+     */
+    private static String clean(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() || "[unclear]".equalsIgnoreCase(text) ? null : text;
     }
 
     private String title(String structuredDataJson) {

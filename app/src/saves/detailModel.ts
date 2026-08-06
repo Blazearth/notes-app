@@ -1,13 +1,31 @@
 import type { SaveResponse } from '@/api/types';
 
-/** A field rendered as its own block: either one value or a list of them. */
+/** One row inside a {@link DetailObject} — a labelled value or chip list. */
+export interface DetailObjectRow {
+  label: string;
+  text?: string;
+  items?: string[];
+}
+
+/**
+ * One entry of a nested object array — an exercise, a structured ingredient.
+ * Renders as a sub-card: title, a compact meta line, then labelled rows.
+ */
+export interface DetailObject {
+  title?: string;
+  meta?: string;
+  rows: DetailObjectRow[];
+}
+
+/** A field rendered as its own block: one value, a list of them, or objects. */
 export interface DetailField {
   label: string;
   /** Exactly one of these is set. */
   text?: string;
   items?: string[];
+  objects?: DetailObject[];
   /** Steps render numbered; ingredients and tags render as chips. */
-  style: 'text' | 'chips' | 'steps';
+  style: 'text' | 'chips' | 'steps' | 'objects';
 }
 
 export interface SaveDetailModel {
@@ -64,6 +82,95 @@ function compact(fields: Array<DetailField | null>): DetailField[] {
   return fields.filter((f): f is DetailField => f !== null);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Ingredients exist in two shapes forever: saves classified before 2026-08-07
+ * hold flat strings ("250g mascarpone"), newer ones hold
+ * `{name, quantity, note}` objects — there is no reprocess path, so the old
+ * shape never ages out. Both fold to the same display line.
+ */
+function ingredientText(value: unknown): string | null {
+  if (isRecord(value)) {
+    const name = clean(value.name);
+    if (!name) return null;
+    const quantity = clean(value.quantity);
+    const note = clean(value.note);
+    return `${quantity ? `${quantity} ` : ''}${name}${note ? `, ${note}` : ''}`;
+  }
+  return clean(value);
+}
+
+function ingredientChips(value: unknown): DetailField | null {
+  if (!Array.isArray(value)) return null;
+  const items = value.map(ingredientText).filter((v): v is string => v !== null);
+  return items.length ? { label: 'Ingredients', items, style: 'chips' } : null;
+}
+
+/**
+ * The bespoke exercises layout: name as the card title, the prescription
+ * (sets × reps · rest · tempo) as one compact meta line, cues and
+ * alternatives as chip rows.
+ */
+function exercisesField(value: unknown): DetailField | null {
+  if (!Array.isArray(value)) return null;
+  const objects: DetailObject[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    const name = clean(raw.name);
+    if (!name) continue;
+    const sets = clean(raw.sets);
+    const reps = clean(raw.reps);
+    const rows: DetailObjectRow[] = [];
+    const cues = cleanList(raw.cues);
+    if (cues.length) rows.push({ label: 'Cues', items: cues });
+    const alternatives = cleanList(raw.alternatives);
+    if (alternatives.length) rows.push({ label: 'Alternatives', items: alternatives });
+    objects.push({
+      title: name,
+      meta: join([
+        sets && reps ? `${sets} × ${reps}` : sets ? `${sets} sets` : reps,
+        clean(raw.rest) ? `rest ${clean(raw.rest)}` : null,
+        clean(raw.tempo) ? `tempo ${clean(raw.tempo)}` : null,
+      ]),
+      rows,
+    });
+  }
+  return objects.length ? { label: 'Exercises', objects, style: 'objects' } : null;
+}
+
+/**
+ * The generic shape for a nested object array the client has no bespoke
+ * layout for — the same promise `leftovers` makes for flat fields, extended
+ * one level down: a new objectArray field in the registry renders as
+ * sub-cards instead of silently vanishing.
+ */
+function objectListField(label: string, value: unknown): DetailField | null {
+  if (!Array.isArray(value)) return null;
+  const objects: DetailObject[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    const titleKey = clean(raw.name) ? 'name' : clean(raw.title) ? 'title' : null;
+    const rows: DetailObjectRow[] = [];
+    for (const [key, v] of Object.entries(raw)) {
+      if (key === titleKey) continue;
+      if (Array.isArray(v)) {
+        const items = cleanList(v);
+        if (items.length) rows.push({ label: humanise(key), items });
+      } else {
+        const text = clean(v);
+        if (text) rows.push({ label: humanise(key), text });
+      }
+    }
+    if (titleKey || rows.length) {
+      objects.push({ title: titleKey ? (clean(raw[titleKey]) as string) : undefined, rows });
+    }
+  }
+  return objects.length ? { label, objects, style: 'objects' } : null;
+}
+
 /**
  * Fields the detail view must never render as content — they are either shown
  * elsewhere (the title, the meta line) or they are bookkeeping.
@@ -72,6 +179,10 @@ const HANDLED_ELSEWHERE: Record<string, ReadonlySet<string>> = {
   recipe: new Set(['title', 'servings', 'prepTime', 'cookTime', 'cuisine', 'ingredients', 'steps', 'dietaryNotes']),
   movie: new Set(['title', 'year', 'director', 'genre', 'rating', 'synopsis', 'whereTo']),
   place: new Set(['name', 'type', 'address', 'cuisine', 'priceRange', 'highlights', 'rating']),
+  workout: new Set([
+    'title', 'summary', 'category', 'goal', 'muscleGroups', 'duration', 'difficulty',
+    'equipment', 'warmup', 'exercises', 'cooldown', 'progression', 'warnings',
+  ]),
   other: new Set(['title', 'summary', 'tags']),
   unusable: new Set(['reason']),
 };
@@ -91,7 +202,11 @@ function leftovers(data: Record<string, unknown>, knowledgeType: string): Detail
     Object.entries(data)
       .filter(([key]) => !claimed.has(key))
       .map(([key, value]) =>
-        Array.isArray(value) ? listField(humanise(key), value) : textField(humanise(key), value),
+        Array.isArray(value) && value.some(isRecord)
+          ? objectListField(humanise(key), value)
+          : Array.isArray(value)
+            ? listField(humanise(key), value)
+            : textField(humanise(key), value),
       ),
   );
 }
@@ -126,9 +241,31 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
         ]),
         fields: [
           ...compact([
-            listField('Ingredients', d.ingredients),
+            ingredientChips(d.ingredients),
             listField('Steps', d.steps, 'steps'),
             listField('Dietary notes', d.dietaryNotes),
+          ]),
+          ...leftovers(d, type),
+        ],
+      };
+    }
+
+    case 'workout': {
+      const title = clean(d.title);
+      if (!title) return null;
+      return {
+        title,
+        meta: join([clean(d.duration), clean(d.category), clean(d.goal), clean(d.difficulty)]),
+        lede: clean(d.summary) ?? undefined,
+        fields: [
+          ...compact([
+            listField('Muscle groups', d.muscleGroups),
+            listField('Equipment', d.equipment),
+            listField('Warm-up', d.warmup, 'steps'),
+            exercisesField(d.exercises),
+            listField('Cool-down', d.cooldown, 'steps'),
+            textField('Progression', d.progression),
+            listField('Watch out', d.warnings),
           ]),
           ...leftovers(d, type),
         ],
