@@ -143,12 +143,49 @@ public class ExtractionCascade {
 
     /** Runs captions → metadata text → ASR → visual against an already-probed metadata. */
     private Extraction continueFromMetadata(String url, UUID saveId, SourceMetadata metadata) {
+        // For Instagram Reels: always attempt visual extraction in parallel with
+        // captions/ASR, because cooking/tutorial content commonly has ingredients
+        // or key info as on-screen text overlays while captions only capture
+        // background speech or music. The visual result is merged with whatever
+        // captions produce — more text, not a replacement.
+        boolean isInstagram = url.contains("instagram.com");
+
+        Optional<String> captions = Optional.empty();
         if (metadata.hasCaptions()) {
-            Optional<String> captions = fetchCaptions(url);
+            captions = fetchCaptions(url);
+            if (captions.isPresent() && captions.get().length() >= USABLE_TEXT_THRESHOLD
+                    && !isInstagram) {
+                return new Extraction(combine(captions.get(), metadata), "captions", metadata);
+            }
+            if (captions.isEmpty() || captions.get().length() < USABLE_TEXT_THRESHOLD) {
+                log.debug("Captions were advertised for {} but produced nothing usable", url);
+            }
+        }
+
+        // For Instagram, run visual in parallel with captions and merge both
+        if (isInstagram) {
+            Optional<VisualTextExtractor.VisualText> visualText = visual.extract(url, saveId);
+            String captionText = captions.orElse("");
+            if (visualText.isPresent() && !visualText.get().text().isBlank()) {
+                VisualTextExtractor.VisualText v = visualText.get();
+                // Merge: captions give spoken context, visual gives on-screen text
+                String merged = captionText.isBlank()
+                        ? combine(v.text(), metadata)
+                        : combine(captionText + "\n\n" + v.text(), metadata);
+                log.info("Instagram: merged captions ({} chars) + visual ({} chars) for {}",
+                        captionText.length(), v.text().length(), url);
+                return new Extraction(merged, "captions+visual", metadata,
+                        VisualTextExtractor.stagePayload(v));
+            }
+            // Visual failed — fall through with captions alone if we have them
+            if (!captionText.isBlank() && captionText.length() >= USABLE_TEXT_THRESHOLD) {
+                return new Extraction(combine(captionText, metadata), "captions", metadata);
+            }
+        } else {
+            // Non-Instagram: use captions if we have them
             if (captions.isPresent() && captions.get().length() >= USABLE_TEXT_THRESHOLD) {
                 return new Extraction(combine(captions.get(), metadata), "captions", metadata);
             }
-            log.debug("Captions were advertised for {} but produced nothing usable", url);
         }
 
         String metadataText = metadata.asText();
@@ -161,6 +198,7 @@ public class ExtractionCascade {
             return new Extraction(combine(transcript.get(), metadata), "asr", metadata);
         }
 
+        // Non-Instagram visual tier (last resort)
         Optional<VisualTextExtractor.VisualText> visualText = visual.extract(url, saveId);
         if (visualText.isPresent() && !visualText.get().text().isBlank()) {
             VisualTextExtractor.VisualText v = visualText.get();
