@@ -5,7 +5,9 @@ import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Screen } from '@/components/Screen';
 import { Touchable } from '@/components/Touchable';
+import { WeavrMark } from '@/components/WeavrMark';
 import { useSession } from '@/auth/SessionProvider';
+import { usePreferences } from '@/prefs/PreferencesProvider';
 import { useTheme } from '@/theme/ThemeProvider';
 
 type Mode = 'signIn' | 'signUp';
@@ -13,15 +15,21 @@ type Mode = 'signIn' | 'signUp';
 export function SignInScreen() {
   const { palette, radius, spacing } = useTheme();
   const { signIn, signUp } = useSession();
+  const { setPreference } = usePreferences();
 
   const [mode, setMode] = useState<Mode>('signIn');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
 
-  const canSubmit = email.trim().length > 3 && password.length >= 6 && !busy;
+  const canSubmit =
+    email.trim().length > 3 &&
+    password.length >= 6 &&
+    (mode === 'signIn' || name.trim().length > 0) &&
+    !busy;
 
   const submit = async () => {
     setBusy(true);
@@ -33,7 +41,10 @@ export function SignInScreen() {
         // A successful sign-in flips the session, and the route guard in
         // `app/sign-in.tsx` redirects — nothing to do here.
       } else {
-        const { needsConfirmation } = await signUp(email, password);
+        const { needsConfirmation } = await signUp(email, password, name);
+        // Local-only and immediate — this is what Home's greeting reads, so
+        // it must not wait on a server round trip or an email confirmation.
+        setPreference('userName', name.trim());
         if (needsConfirmation) {
           setMessage(
             'Account created. Confirm the email address before signing in — this project has email confirmation on.',
@@ -64,7 +75,8 @@ export function SignInScreen() {
     >
       <Screen reserveNavSpace={false}>
         <View style={{ marginTop: spacing.xxxl, marginBottom: spacing.xxl }}>
-          <AppText variant="display" style={{ marginBottom: spacing.sm }}>
+          <WeavrMark size={36} />
+          <AppText variant="display" style={{ marginTop: spacing.md, marginBottom: spacing.sm }}>
             Weavr
           </AppText>
           <AppText tone="muted">
@@ -73,6 +85,18 @@ export function SignInScreen() {
         </View>
 
         <Card padding={spacing.lg} style={{ gap: spacing.md }}>
+          {mode === 'signUp' ? (
+            <TextInput
+              value={name}
+              onChangeText={setName}
+              placeholder="Your name"
+              placeholderTextColor={palette.textFaint}
+              autoCapitalize="words"
+              autoComplete="name"
+              editable={!busy}
+              style={field}
+            />
+          ) : null}
           <TextInput
             value={email}
             onChangeText={setEmail}

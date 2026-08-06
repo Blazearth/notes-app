@@ -13,12 +13,26 @@ import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
+import { useSession } from '@/auth/SessionProvider';
+import { USE_MOCK_DATA } from '@/data/config';
 import { GREETING_NAME } from '@/data/sampleContent';
 import { morphFrom } from '@/motion/morph';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/**
+ * `GREETING_NAME` ('Maya') is mock-mode demo content and must never leak into
+ * a real session as a fallback — that read as the app mistaking a stranger
+ * for a fixture. A real user with no `prefs.userName` set yet gets their
+ * email's local part instead of a fake name or a generic "You".
+ */
+function fallbackName(email: string | null | undefined): string {
+  if (USE_MOCK_DATA) return GREETING_NAME;
+  const local = email?.split('@')[0];
+  return local ? local.charAt(0).toUpperCase() + local.slice(1) : 'there';
+}
 
 /**
  * How many saves Home shows before deferring to search.
@@ -308,10 +322,11 @@ function sourceLine(save: SaveResponse): string | undefined {
 export function HomeScreen() {
   const { palette, radius, spacing, icon } = useTheme();
   const { prefs } = usePreferences();
+  const { session } = useSession();
   const { refresh, refreshing } = useSaves();
   const router = useRouter();
 
-  const name = prefs.userName.trim() || GREETING_NAME;
+  const name = prefs.userName.trim() || fallbackName(session?.user.email);
   const greeting = greetingForHour(new Date().getHours());
 
   // Settings does not push — it grows out of this tile and collapses back into

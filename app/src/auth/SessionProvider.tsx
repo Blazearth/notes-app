@@ -33,7 +33,7 @@ export interface SessionContextValue {
   /** False until the stored session has been read from AsyncStorage. */
   hydrated: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<{ needsConfirmation: boolean }>;
+  signUp: (email: string, password: string, name?: string) => Promise<{ needsConfirmation: boolean }>;
   signOut: () => Promise<void>;
 }
 
@@ -112,12 +112,23 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (error) throw new Error(error.message);
   }, []);
 
-  const signUp = useCallback(async (email: string, password: string) => {
+  const signUp = useCallback(async (email: string, password: string, name?: string) => {
     if (USE_MOCK_DATA) {
       setSession(MOCK_SESSION);
       return { needsConfirmation: false };
     }
-    const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
+    const trimmedName = name?.trim();
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      // Stored as Supabase user metadata (`raw_user_meta_data`). Not read by
+      // anything server-side yet — `ProfileService.ensureExists` only inserts
+      // the id, so `profiles.display_name` stays null regardless. Harmless to
+      // send now and there for a future backend read; the local greeting
+      // (`prefs.userName`, set right after this call) is what actually fixes
+      // the "shows Maya" bug today.
+      options: trimmedName ? { data: { full_name: trimmedName } } : undefined,
+    });
     if (error) throw new Error(error.message);
     // With email confirmation enabled, signUp returns a user but no session.
     return { needsConfirmation: data.session == null };
