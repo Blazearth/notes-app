@@ -22,7 +22,8 @@ class GroupServiceTest {
     }
 
     private static List<GroupNode> tree(SaveFacts... all) {
-        return GroupService.buildTree(List.of(all));
+        // Use minGroupSize=1 so test fixtures with small datasets still produce subgroups.
+        return GroupService.buildTree(List.of(all), 1);
     }
 
     @Test

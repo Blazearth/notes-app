@@ -122,6 +122,11 @@ public class GroupService {
 
     /** Pure: no database, no Spring, no clock. Everything interesting is here. */
     public static List<GroupNode> buildTree(List<SaveFacts> ready) {
+        return buildTree(ready, MIN_GROUP_SIZE);
+    }
+
+    /** Overload used by tests to bypass the production threshold. */
+    static List<GroupNode> buildTree(List<SaveFacts> ready, int minGroupSize) {
         // Insertion-ordered so the response is stable between calls: saves come
         // back newest-first, so the most recently added type leads. A HashMap
         // here would reshuffle the whole grid on every refresh.
@@ -138,7 +143,7 @@ public class GroupService {
         }
 
         List<GroupNode> groups = new ArrayList<>();
-        byType.forEach((type, typeSaves) -> groups.add(buildTypeGroup(type, typeSaves)));
+        byType.forEach((type, typeSaves) -> groups.add(buildTypeGroup(type, typeSaves, minGroupSize)));
         return groups;
     }
 
@@ -161,7 +166,7 @@ public class GroupService {
 
     // ------------------------------------------------------------------ internals
 
-    private static GroupNode buildTypeGroup(String type, List<SaveFacts> typeSaves) {
+    private static GroupNode buildTypeGroup(String type, List<SaveFacts> typeSaves, int minGroupSize) {
         String facetField = FACETS.get(type);
 
         Map<String, List<SaveFacts>> byFacet = new LinkedHashMap<>();
@@ -193,7 +198,7 @@ public class GroupService {
 
         List<GroupNode> subgroups = new ArrayList<>();
         byFacet.forEach((value, facetSaves) -> {
-            if (facetSaves.size() >= MIN_GROUP_SIZE) {
+            if (facetSaves.size() >= minGroupSize) {
                 subgroups.add(GroupNode.of(
                         type + ID_SEPARATOR + slug(value),
                         titleCase(value),
