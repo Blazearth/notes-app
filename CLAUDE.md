@@ -333,6 +333,23 @@ Steps:
 
 Keep per-type few-shot examples and schemas in a registry keyed by `knowledge_type`, so adding a type is a data change rather than a code change.
 
+### Design principle: optimize for future usability, not faithful summary *(added 2026-08-07)*
+
+The parser's job is not to preserve the source document — it is to produce the most useful **interactive object** the user can act on later. A workout video is a routine to follow in the gym, not a description of one; a "top 10 anime" video is a watchlist, not a synopsis. When mirroring the source and building a more usable structure conflict, prefer the structure — **as long as no factual information is invented**: the `[unclear]` sentinel contract stays absolute, and derived fields must be distinguishable from extracted ones (a difficulty *estimate* is not something the creator said).
+
+What this means concretely, inside the existing one-call architecture:
+
+- **Classify by intent, not by media.** The classify prompt's question is "what will the user do with this later?", not "what kind of document is this." Steer it with type descriptions and few-shot examples — tokens, not requests.
+- **One taxonomy, named by intent.** No separate knowledge-type→object-type mapping layer: the knowledge type *is* the object choice, and its registry entry carries everything downstream keys off (schema, renderer, actions). Two types that want the same UI share a renderer — registry data, not a second classification decision.
+- **Derived value comes in exactly three cost classes:**
+  1. *Same-call tokens* — fields the model can infer during extraction (muscles trained, difficulty, suggested viewing order, substitutions) go in the extraction schema itself. Default home for anything inferable.
+  2. *Deterministic local compute* — serving scaling, workout duration from sets×rest, timers, progress models. Pure code, per-type, post-extraction, zero AI cost.
+  3. *External lookups* — runtimes, genres, "similar items": the existing enrichment stage (additive-only, threshold-guarded) and the embedding pool.
+  A second Gemini generation call per save for "post-processing" is never on the table — same reason classify-and-extract is one call.
+- **Interactivity is client + Postgres, not AI.** Watch status, per-exercise completion, checklist progress are user-mutable state layered on the extracted object (the shopping list's ticked-item pattern generalizes), never re-generation.
+
+Sequencing agreed 2026-08-07: **(1)** nested-object support in the registry schema builder + a recursive renderer app-side — the enabler everything else waits on (`FieldSpec` currently supports only strings and string-arrays, which is why `workout` discards the entire routine); **(2)** deepen existing types, workout first; **(3)** new intent-named types (`recommendation_list`, itinerary, course, github_repo, checklist); **(4)** object behaviors (timers, watch status, cook mode); **(5)** derived intelligence within the cost classes above. Before committing to a much larger `anyOf`, verify Gemini's responseSchema size/nesting limits against the real API — the registry's schema is about to get an order of magnitude bigger.
+
 ## Non-obvious constraints
 
 **Gemini free tier**
