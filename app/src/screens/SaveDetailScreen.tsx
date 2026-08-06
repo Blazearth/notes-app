@@ -340,7 +340,8 @@ export function SaveDetailScreen({ id }: { id: string }) {
   const model = save ? buildDetailModel(save) : null;
 
   return (
-    <Screen>
+    <>
+      <Screen>
       <Reveal index={0}>
         <BackButton />
       </Reveal>
@@ -508,5 +509,6 @@ export function SaveDetailScreen({ id }: { id: string }) {
     {save && showSpaceSheet ? (
       <AddToSpaceSheet save={save} onClose={() => setShowSpaceSheet(false)} />
     ) : null}
+    </>
   );
 }
