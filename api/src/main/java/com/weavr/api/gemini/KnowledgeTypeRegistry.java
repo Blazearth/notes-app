@@ -42,7 +42,10 @@ public final class KnowledgeTypeRegistry {
                         field("servings", "string", "Number of servings, e.g. '4' or '4-6'"),
                         field("prepTime", "string", "Prep time, e.g. '15 min' or '[unclear]'"),
                         field("cookTime", "string", "Cook/bake time, e.g. '30 min' or '[unclear]'"),
-                        field("ingredients", "array", "List of ingredients with quantities"),
+                        objectArray("ingredients", "Every ingredient, in the order listed",
+                                field("name", "string", "The ingredient itself, e.g. 'mascarpone' — no quantity, no preparation"),
+                                field("quantity", "string", "Amount as written, unit included, e.g. '250g' or '2 tbsp', or '[unclear]'"),
+                                field("note", "string", "Preparation or qualifier, e.g. 'minced', 'optional', or '[unclear]'")),
                         field("steps", "array", "Ordered list of preparation steps"),
                         field("cuisine", "string", "Cuisine type, e.g. 'Italian' or '[unclear]'"),
                         field("dietaryNotes", "array", "e.g. ['gluten-free', 'vegan'], or []")
@@ -58,7 +61,13 @@ public final class KnowledgeTypeRegistry {
                   "servings": "[unclear]",
                   "prepTime": "15 min",
                   "cookTime": "0 min",
-                  "ingredients": ["3 eggs", "250g mascarpone", "2 tbsp sugar", "ladyfingers", "coffee"],
+                  "ingredients": [
+                    {"name": "eggs", "quantity": "3", "note": "[unclear]"},
+                    {"name": "mascarpone", "quantity": "250g", "note": "[unclear]"},
+                    {"name": "sugar", "quantity": "2 tbsp", "note": "[unclear]"},
+                    {"name": "ladyfingers", "quantity": "[unclear]", "note": "[unclear]"},
+                    {"name": "coffee", "quantity": "[unclear]", "note": "for soaking"}
+                  ],
                   "steps": ["Beat egg yolks with sugar", "Fold in mascarpone", "Dip ladyfingers in coffee", "Layer and chill 4 hours"],
                   "cuisine": "Italian",
                   "dietaryNotes": []
@@ -227,27 +236,72 @@ public final class KnowledgeTypeRegistry {
         // -----------------------------------------------------------------
         register(new KnowledgeType(
                 "workout",
-                "A workout routine, exercise plan, or fitness content.",
+                "A workout routine, exercise plan, or fitness content — extract the full routine so it can be followed in the gym.",
                 List.of(
                         field("title", "string", "Workout name or type"),
-                        field("summary", "string", "What the workout involves"),
+                        field("summary", "string", "One sentence on what the workout involves"),
                         field("category", "string",
                                 "One of: Strength, Cardio, Yoga, HIIT, Stretching, Sports, Other"),
+                        field("goal", "string", "Stated goal, e.g. 'hypertrophy', 'fat loss', or '[unclear]'"),
+                        field("muscleGroups", "array", "Muscle groups trained, e.g. ['chest', 'triceps'], or []"),
                         field("duration", "string", "Duration if mentioned, e.g. '30 min' or '[unclear]'"),
-                        field("equipment", "array", "Equipment needed, e.g. ['dumbbells', 'resistance band'], or []")
+                        field("difficulty", "string",
+                                "Only if the content states it, e.g. 'beginner' — never inferred; '[unclear]' otherwise"),
+                        field("equipment", "array", "Equipment needed, e.g. ['dumbbells', 'resistance band'], or []"),
+                        field("warmup", "array", "Warm-up steps if given, or []"),
+                        objectArray("exercises", "Every exercise, in the order performed",
+                                field("name", "string", "Exercise name, e.g. 'Incline dumbbell press'"),
+                                field("sets", "string", "Number of sets, e.g. '3', or '[unclear]'"),
+                                field("reps", "string", "Reps or work time, e.g. '8-12' or '40s', or '[unclear]'"),
+                                field("rest", "string", "Rest between sets, e.g. '90s', or '[unclear]'"),
+                                field("tempo", "string", "Tempo if mentioned, e.g. '3-1-1', or '[unclear]'"),
+                                field("cues", "array", "Technique and execution cues mentioned for this exercise, or []"),
+                                field("alternatives", "array", "Substitute exercises if mentioned, or []")),
+                        field("cooldown", "array", "Cool-down steps if given, or []"),
+                        field("progression", "string", "Progression advice if given, or '[unclear]'"),
+                        field("warnings", "array", "Safety warnings or common mistakes called out, or []")
                 ),
                 """
-                Input: "20-minute no-equipment HIIT: 40s work / 20s rest. \
-                Burpees, jump squats, mountain climbers, push-ups. 4 rounds. Burns ~300 cal."
+                Input: "Science-based push day. Start with 5 min band shoulder warm-up. \
+                Flat DB press 4x8-10, 2 min rest — control the negative, don't flare elbows. \
+                No dumbbells? Barbell bench works. Then cable flys 3x12-15, 60s rest, \
+                squeeze at the peak. Add a rep each week. Skip flys if your shoulder clicks."
                 Output:
                 {
                   "knowledgeType": "workout",
-                  "confidence": 0.94,
-                  "title": "20-Minute No-Equipment HIIT",
-                  "summary": "A 4-round HIIT circuit with burpees, jump squats, mountain climbers, and push-ups on a 40s/20s work-rest interval.",
-                  "category": "HIIT",
-                  "duration": "20 min",
-                  "equipment": []
+                  "confidence": 0.95,
+                  "title": "Science-Based Push Day",
+                  "summary": "A chest-focused push workout of dumbbell pressing and cable flys with prescribed sets, reps, and rest.",
+                  "category": "Strength",
+                  "goal": "[unclear]",
+                  "muscleGroups": ["chest", "shoulders", "triceps"],
+                  "duration": "[unclear]",
+                  "difficulty": "[unclear]",
+                  "equipment": ["dumbbells", "cable machine", "resistance band"],
+                  "warmup": ["5 min band shoulder warm-up"],
+                  "exercises": [
+                    {
+                      "name": "Flat dumbbell press",
+                      "sets": "4",
+                      "reps": "8-10",
+                      "rest": "2 min",
+                      "tempo": "[unclear]",
+                      "cues": ["control the negative", "don't flare elbows"],
+                      "alternatives": ["Barbell bench press"]
+                    },
+                    {
+                      "name": "Cable flys",
+                      "sets": "3",
+                      "reps": "12-15",
+                      "rest": "60s",
+                      "tempo": "[unclear]",
+                      "cues": ["squeeze at the peak"],
+                      "alternatives": []
+                    }
+                  ],
+                  "cooldown": [],
+                  "progression": "Add a rep each week",
+                  "warnings": ["Skip cable flys if your shoulder clicks"]
                 }
                 """
         ));
@@ -368,6 +422,12 @@ public final class KnowledgeTypeRegistry {
                 then extract all available structured fields for that type.
 
                 Rules:
+                - Classify by what the user will most likely DO with this content \
+                  later, not by its surface format. A workout video is a routine \
+                  to follow in the gym; a recipe Reel is a dish to cook. Extract \
+                  toward that use: prefer the complete, structured, actionable \
+                  form over a faithful prose summary — without ever inventing \
+                  facts that are not in the content.
                 - Return valid JSON matching the schema exactly.
                 - Use "[unclear]" (the literal string) for string fields where \
                   the information is genuinely not present in the content. \
@@ -425,15 +485,42 @@ public final class KnowledgeTypeRegistry {
                     "description", f.description()
             );
         }
+        if ("objectArray".equals(f.type())) {
+            Map<String, Object> props = new LinkedHashMap<>();
+            for (FieldSpec sub : f.fields()) {
+                props.put(sub.name(), fieldSchema(sub));
+            }
+            return Map.of(
+                    "type", "array",
+                    "items", Map.of(
+                            "type", "object",
+                            "properties", props,
+                            // Every sub-field required, same contract as the top
+                            // level: strings use [unclear], arrays use [].
+                            "required", f.fields().stream().map(FieldSpec::name).toList()
+                    ),
+                    "description", f.description()
+            );
+        }
         return Map.of("type", f.type(), "description", f.description());
     }
 
     private static FieldSpec field(String name, String type, String description) {
-        return new FieldSpec(name, type, description);
+        return new FieldSpec(name, type, description, List.of());
     }
 
-    /** A single field in a knowledge type's schema. */
-    public record FieldSpec(String name, String type, String description) {
+    /**
+     * An array of nested objects — a workout's exercises, a recipe's
+     * ingredients. One level of structure the flat string-array could not
+     * carry; sub-fields may themselves be strings or string-arrays (deeper
+     * nesting works by construction but no type needs it yet).
+     */
+    private static FieldSpec objectArray(String name, String description, FieldSpec... fields) {
+        return new FieldSpec(name, "objectArray", description, List.of(fields));
+    }
+
+    /** A single field in a knowledge type's schema. {@code fields} is empty unless {@code type} is {@code objectArray}. */
+    public record FieldSpec(String name, String type, String description, List<FieldSpec> fields) {
     }
 
     /** A registered knowledge type with its schema and few-shot example. */

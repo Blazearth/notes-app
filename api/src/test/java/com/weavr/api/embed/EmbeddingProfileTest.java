@@ -40,6 +40,33 @@ class EmbeddingProfileTest {
     }
 
     /**
+     * Nested object arrays (2026-08-07: a workout's exercises, a recipe's
+     * structured ingredients) render as their values space-joined — never
+     * their keys. "sets" and "reps" appearing in every workout would be
+     * shared noise, the same failure the sentinel test below guards against.
+     */
+    @Test
+    void rendersNestedObjectsAsValuesOnlyWithUnclearDroppedAtEveryLevel() {
+        Map<String, Object> exercise = new LinkedHashMap<>();
+        exercise.put("name", "Flat dumbbell press");
+        exercise.put("sets", "4");
+        exercise.put("reps", "8-10");
+        exercise.put("tempo", "[unclear]");
+        exercise.put("cues", List.of("control the negative", "[unclear]"));
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("title", "Push Day");
+        data.put("exercises", List.of(exercise));
+
+        String profile = EmbeddingProfile.build("workout", data, null, 8000);
+
+        assertThat(profile)
+                .contains("Exercises: Flat dumbbell press 4 8-10 control the negative")
+                .doesNotContain("[unclear]")
+                .doesNotContain("sets")
+                .doesNotContain("tempo");
+    }
+
+    /**
      * "[unclear]" is the registry's sentinel for genuinely absent information
      * and appears in most saves. Embedded, it becomes a term every sparse save
      * shares — making sparse saves similar to each other rather than to

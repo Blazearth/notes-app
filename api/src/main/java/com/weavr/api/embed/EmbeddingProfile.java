@@ -104,22 +104,34 @@ public final class EmbeddingProfile {
     }
 
     /**
-     * Collections join with commas; everything else is its own text. Nested
-     * maps are rendered by {@code toString} rather than recursed into — no v1
-     * knowledge type has one, and inventing a traversal for a shape that does
-     * not exist yet would be guessing at its eventual form.
+     * Collections join with commas; nested objects (a workout's exercises, a
+     * recipe's structured ingredients) render as their values space-joined in
+     * field order — "mascarpone 250g", "Flat dumbbell press 4 8-10" — with
+     * {@code [unclear]} dropped at every level. Keys are never rendered:
+     * "sets" and "reps" appearing in every workout would be shared noise, the
+     * same failure the sentinel fix addressed.
      */
     private static String render(Object value) {
         if (value == null) {
             return "";
+        }
+        if (value instanceof Map<?, ?> object) {
+            List<String> parts = new ArrayList<>();
+            for (Object nested : object.values()) {
+                String text = render(nested);
+                if (!text.isEmpty()) {
+                    parts.add(text);
+                }
+            }
+            return String.join(" ", parts);
         }
         if (value instanceof Collection<?> items) {
             // LinkedHashSet: a card that repeats an ingredient should not
             // weight that ingredient twice, but order still carries meaning.
             Set<String> rendered = new LinkedHashSet<>();
             for (Object item : items) {
-                String text = String.valueOf(item).strip();
-                if (!text.isEmpty() && !UNCLEAR.equalsIgnoreCase(text)) {
+                String text = render(item);
+                if (!text.isEmpty()) {
                     rendered.add(text);
                 }
             }

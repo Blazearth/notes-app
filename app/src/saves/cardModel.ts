@@ -34,6 +34,32 @@ function withOverflow(items: string[], max: number): { chips: string[]; overflow
   return { chips: items.slice(0, max), overflow: Math.max(0, items.length - max) };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A card chip per ingredient, whichever shape the save holds: legacy flat
+ * strings ("250g mascarpone") or the registry's `{name, quantity, note}`
+ * objects from 2026-08-07 on. Old saves are never reprocessed, so both shapes
+ * are permanent. The chip keeps just the name for objects — a card is a
+ * glance, and "mascarpone" glances better than "250g mascarpone, softened".
+ */
+function ingredientChips(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => (isRecord(v) ? clean(v.name) : clean(v)))
+    .filter((v): v is string => v !== null);
+}
+
+/** Exercise names for the workout card; legacy saves without them fall back to equipment. */
+function exerciseChips(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => (isRecord(v) ? clean(v.name) : null))
+    .filter((v): v is string => v !== null);
+}
+
 /**
  * Turns a save's untyped `structuredData` into a layout `SaveCard` can render
  * without every screen re-deriving field names — the mirror, client-side, of
@@ -50,7 +76,7 @@ export function buildCardModel(save: SaveResponse): SaveCardModel | null {
       const title = clean(d.title);
       if (!title) return null;
       const servings = clean(d.servings);
-      const { chips, overflow } = withOverflow(cleanList(d.ingredients), 4);
+      const { chips, overflow } = withOverflow(ingredientChips(d.ingredients), 4);
       return {
         kind: 'recipe',
         title,
@@ -128,7 +154,8 @@ export function buildCardModel(save: SaveResponse): SaveCardModel | null {
     case 'workout': {
       const title = clean(d.title);
       if (!title) return null;
-      const { chips, overflow } = withOverflow(cleanList(d.equipment), 4);
+      const exercises = exerciseChips(d.exercises);
+      const { chips, overflow } = withOverflow(exercises.length ? exercises : cleanList(d.equipment), 4);
       return {
         kind: 'workout',
         title,

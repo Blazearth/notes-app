@@ -82,23 +82,66 @@ class KnowledgeTypeRegistryTest {
     @Test
     void arrayFieldsGetStringItemsInTheSchema() {
         KnowledgeTypeRegistry.KnowledgeType recipe = KnowledgeTypeRegistry.get("recipe");
-        Map<String, Object> schema = KnowledgeTypeRegistry.buildResponseSchema();
+        Map<String, Object> properties = branchProperties("recipe");
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> anyOf = (List<Map<String, Object>>) schema.get("anyOf");
-        Map<String, Object> recipeBranch = anyOf.stream()
-                .filter(b -> matchesType(b, "recipe"))
-                .findFirst().orElseThrow();
+        Map<String, Object> steps = (Map<String, Object>) properties.get("steps");
+
+        assertThat(recipe.fields()).extracting(KnowledgeTypeRegistry.FieldSpec::name).contains("steps");
+        assertThat(steps.get("type")).isEqualTo("array");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> items = (Map<String, Object>) steps.get("items");
+        assertThat(items.get("type")).isEqualTo("string");
+    }
+
+    @Test
+    void objectArrayFieldsNestAnObjectSchemaWithEverySubFieldRequired() {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> exercises =
+                (Map<String, Object>) branchProperties("workout").get("exercises");
+
+        assertThat(exercises.get("type")).isEqualTo("array");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> items = (Map<String, Object>) exercises.get("items");
+        assertThat(items.get("type")).isEqualTo("object");
 
         @SuppressWarnings("unchecked")
-        Map<String, Object> properties = (Map<String, Object>) recipeBranch.get("properties");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> ingredients = (Map<String, Object>) properties.get("ingredients");
+        Map<String, Object> props = (Map<String, Object>) items.get("properties");
+        assertThat(props).containsKeys("name", "sets", "reps", "rest", "tempo", "cues", "alternatives");
 
-        assertThat(recipe.fields()).extracting(KnowledgeTypeRegistry.FieldSpec::name).contains("ingredients");
-        assertThat(ingredients.get("type")).isEqualTo("array");
+        // Sub-fields keep the top level's contract: everything required,
+        // strings use [unclear], arrays use [].
+        @SuppressWarnings("unchecked")
+        List<String> required = (List<String>) items.get("required");
+        assertThat(required).containsExactlyInAnyOrderElementsOf(props.keySet());
+
+        // A nested string-array (cues) still gets string items.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cues = (Map<String, Object>) props.get("cues");
+        assertThat(cues.get("type")).isEqualTo("array");
+    }
+
+    @Test
+    void recipeIngredientsAreStructuredObjects() {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ingredients =
+                (Map<String, Object>) branchProperties("recipe").get("ingredients");
+
         @SuppressWarnings("unchecked")
         Map<String, Object> items = (Map<String, Object>) ingredients.get("items");
-        assertThat(items.get("type")).isEqualTo("string");
+        assertThat(items.get("type")).isEqualTo("object");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> props = (Map<String, Object>) items.get("properties");
+        assertThat(props).containsKeys("name", "quantity", "note");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> branchProperties(String typeName) {
+        Map<String, Object> schema = KnowledgeTypeRegistry.buildResponseSchema();
+        List<Map<String, Object>> anyOf = (List<Map<String, Object>>) schema.get("anyOf");
+        Map<String, Object> branch = anyOf.stream()
+                .filter(b -> matchesType(b, typeName))
+                .findFirst().orElseThrow();
+        return (Map<String, Object>) branch.get("properties");
     }
 
     @Test

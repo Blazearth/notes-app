@@ -98,12 +98,55 @@ function Steps({ items }: { items: string[] }) {
   );
 }
 
+/**
+ * One entry of a nested object array — an exercise card, a structured item.
+ * The same surface treatment as a chip, scaled up to hold a title, a compact
+ * meta line, and labelled rows.
+ */
+function ObjectCards({ objects }: { objects: NonNullable<DetailField['objects']> }) {
+  const { palette, radius, spacing } = useTheme();
+  return (
+    <View style={{ gap: spacing.smd }}>
+      {objects.map((object, i) => (
+        <View
+          key={`${object.title ?? 'item'}-${i}`}
+          style={{
+            padding: spacing.md,
+            borderRadius: radius.md,
+            backgroundColor: palette.surfaceVariant,
+            borderWidth: 1,
+            borderColor: palette.border,
+            gap: spacing.xs,
+          }}
+        >
+          {object.title ? <AppText variant="cardTitle">{object.title}</AppText> : null}
+          {object.meta ? (
+            <AppText variant="bodySmall" tone="muted">
+              {object.meta}
+            </AppText>
+          ) : null}
+          {object.rows.map((row) => (
+            <View key={row.label} style={{ gap: 4 }}>
+              <AppText variant="caption" tone="muted">
+                {row.label}
+              </AppText>
+              {row.items ? <Chips items={row.items} /> : <AppText variant="bodySmall">{row.text}</AppText>}
+            </View>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function Field({ field }: { field: DetailField }) {
   const { spacing } = useTheme();
   return (
     <View style={{ marginBottom: spacing.xl }}>
       <SectionLabel>{field.label}</SectionLabel>
-      {field.style === 'steps' && field.items ? (
+      {field.style === 'objects' && field.objects ? (
+        <ObjectCards objects={field.objects} />
+      ) : field.style === 'steps' && field.items ? (
         <Steps items={field.items} />
       ) : field.items ? (
         <Chips items={field.items} />
