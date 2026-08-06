@@ -277,6 +277,31 @@ public class SaveService {
         return save;
     }
 
+    /**
+     * Moves an existing save into a Space, or back to the user's private feed
+     * (when {@code spaceId} is null).
+     *
+     * <p>The caller must own the save and hold EDITOR in the target Space (if
+     * non-null). Removing from a Space (null target) only requires ownership —
+     * a member cannot yank someone else's save out of a shared Space.
+     */
+    @Transactional
+    public Save setSpace(UUID userId, UUID saveId, UUID spaceId) {
+        Save save = saves.findByIdAndUserId(saveId, userId)
+                .orElseThrow(() -> new NotFoundException("Save not found"));
+        if (spaceId != null) {
+            spaces.requireRole(userId, spaceId, SpaceRole.EDITOR);
+        }
+        UUID previousSpace = save.getSpaceId();
+        save.setSpaceId(spaceId);
+        // Record activity on the new space
+        if (spaceId != null && !spaceId.equals(previousSpace)) {
+            recordSaveAddedAfterCommit(spaceId, userId, saveId);
+        }
+        log.info("Save {} moved to space={}", saveId, spaceId);
+        return save;
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
     }

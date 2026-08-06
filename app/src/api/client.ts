@@ -209,6 +209,18 @@ export function setSaveLifecycle(
 }
 
 /**
+ * `PATCH /v1/saves/{id}/space` — move a save into a Space or back to private.
+ * Pass `null` to remove it from its current Space.
+ */
+export function setSaveSpace(id: string, spaceId: string | null): Promise<SaveResponse> {
+  return request<SaveResponse>(`/v1/saves/${id}/space`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spaceId }),
+  });
+}
+
+/**
  * `PATCH /v1/saves/{id}/flags` — the Library's swipe-to-favorite and
  * swipe-to-archive actions. Either field may be omitted to leave it as-is.
  */

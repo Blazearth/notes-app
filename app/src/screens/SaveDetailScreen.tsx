@@ -19,6 +19,7 @@ import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
 import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
+import { AddToSpaceSheet } from './AddToSpaceSheet';
 
 function BackButton() {
   const { palette, radius, icon, spacing } = useTheme();
@@ -319,6 +320,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
   const [save, setSave] = useState<SaveResponse | null>(cached);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(!cached);
+  const [showSpaceSheet, setShowSpaceSheet] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -413,6 +415,35 @@ export function SaveDetailScreen({ id }: { id: string }) {
             </Reveal>
           ) : null}
 
+          {/* Add to Space */}
+          {save.status === 'ready' ? (
+            <Reveal index={2}>
+              <Touchable
+                accessibilityRole="button"
+                accessibilityLabel={save.spaceId ? 'Move to a different Space' : 'Add to a Space'}
+                onPress={() => setShowSpaceSheet(true)}
+                haptic="light"
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: spacing.sm,
+                  paddingVertical: spacing.md,
+                  borderRadius: radius.sm,
+                  borderWidth: 1,
+                  borderColor: palette.border,
+                  backgroundColor: palette.surface,
+                  marginBottom: spacing.smd,
+                }}
+              >
+                <Glyph name="layers" size={16} weight={2} color={palette.textMuted} />
+                <AppText variant="label" tone="muted">
+                  {save.spaceId ? 'Move Space' : 'Add to Space'}
+                </AppText>
+              </Touchable>
+            </Reveal>
+          ) : null}
+
           {model ? (
             model.fields.map((field, i) => (
               <Reveal key={field.label} index={3 + i}>
@@ -474,5 +505,8 @@ export function SaveDetailScreen({ id }: { id: string }) {
         </>
       ) : null}
     </Screen>
+    {save && showSpaceSheet ? (
+      <AddToSpaceSheet save={save} onClose={() => setShowSpaceSheet(false)} />
+    ) : null}
   );
 }

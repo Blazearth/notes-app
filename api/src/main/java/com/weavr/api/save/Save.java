@@ -214,6 +214,10 @@ public class Save {
         this.thumbnailUrl = thumbnailUrl;
     }
 
+    public void setSpaceId(UUID spaceId) {
+        this.spaceId = spaceId;
+    }
+
     public boolean isFavorite() {
         return favorite;
     }

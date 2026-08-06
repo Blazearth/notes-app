@@ -9,6 +9,7 @@ import com.weavr.api.save.dto.CreateSaveRequest;
 import com.weavr.api.save.dto.SaveResponse;
 import com.weavr.api.save.dto.UpdateFlagsRequest;
 import com.weavr.api.save.dto.UpdateLifecycleRequest;
+import com.weavr.api.save.dto.UpdateSpaceRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -94,5 +95,16 @@ class SaveController {
                           @RequestBody UpdateFlagsRequest request) {
         return SaveResponse.from(
                 saveService.setFlags(userId, id, request.favorite(), request.archived()));
+    }
+
+    /**
+     * Moves a save into a Space or back to the user's private feed.
+     * {@code spaceId: null} removes it from its current Space.
+     */
+    @PatchMapping("/{id}/space")
+    SaveResponse setSpace(@CurrentUser UUID userId, @PathVariable UUID id,
+                          @RequestBody UpdateSpaceRequest request) {
+        return SaveResponse.from(
+                saveService.setSpace(userId, id, request.spaceId()));
     }
 }

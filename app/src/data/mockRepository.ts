@@ -170,6 +170,13 @@ export const mockRepository: Repository = {
     return delay(copy(save));
   },
 
+  setSaveSpace(id: string, spaceId: string | null): Promise<SaveResponse> {
+    const save = requireSave(id);
+    save.spaceId = spaceId ?? undefined;
+    save.updatedAt = now();
+    return delay(copy(save));
+  },
+
   searchSaves(query: string, limit = 25): Promise<SearchHit[]> {
     const q = query.trim().toLowerCase();
     if (!q) return delay([]);
