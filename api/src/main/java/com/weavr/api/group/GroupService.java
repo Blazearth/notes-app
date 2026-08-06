@@ -3,10 +3,12 @@ package com.weavr.api.group;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import com.weavr.api.save.Save;
@@ -163,7 +165,10 @@ public class GroupService {
         String facetField = FACETS.get(type);
 
         Map<String, List<SaveFacts>> byFacet = new LinkedHashMap<>();
-        List<UUID> loose = new ArrayList<>();
+        // LinkedHashSet: insertion-ordered and deduplicates saves that appear
+        // under multiple facet values (e.g. a movie with genre ["thriller","drama"]
+        // would otherwise be added to loose twice when neither genre hits MIN_GROUP_SIZE).
+        Set<UUID> loose = new LinkedHashSet<>();
 
         for (SaveFacts save : typeSaves) {
             Collection<String> values = facetField == null
@@ -202,7 +207,7 @@ public class GroupService {
             }
         });
 
-        return GroupNode.of(type, displayName(type), null, subgroups, loose);
+        return GroupNode.of(type, displayName(type), null, subgroups, List.copyOf(loose));
     }
 
     /** Pulls a facet as a list, tolerating both a string and an array of them. */
