@@ -131,6 +131,8 @@ export interface Space {
   memberCount: number;
   saveCount: number;
   createdAt: string;
+  /** Most recent `space_activity` row — `space_created`, `member_joined`, `save_added`, etc. Falls back to `createdAt` when nothing has happened since. */
+  lastActivityAt: string;
 }
 
 export interface SpaceMember {

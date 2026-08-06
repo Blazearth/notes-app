@@ -340,6 +340,7 @@ export const MOCK_SPACES: Space[] = [
     memberCount: 4,
     saveCount: 12,
     createdAt: daysAgo(21),
+    lastActivityAt: hoursAgo(4),
   },
   {
     id: 'sp-book',
@@ -350,6 +351,7 @@ export const MOCK_SPACES: Space[] = [
     memberCount: 6,
     saveCount: 9,
     createdAt: daysAgo(40),
+    lastActivityAt: daysAgo(9),
   },
 ];
 

@@ -61,6 +61,28 @@ function Routes() {
         />
         <Stack.Screen name="save/[id]" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="space/[id]" options={{ animation: 'slide_from_right' }} />
+        {/* Create/Join Spaces — same `transparentModal` + `animation: 'none'`
+            shape as `capture`, and for the same reason: `Sheet` drives its own
+            entrance from one shared value, so a stack animation on top would
+            fade the backdrop in twice on two curves that don't match, and a
+            non-transparent presentation would paint over the Spaces list this
+            is meant to sit above. */}
+        <Stack.Screen
+          name="space/create"
+          options={{
+            presentation: 'transparentModal',
+            animation: 'none',
+            contentStyle: { backgroundColor: 'transparent' },
+          }}
+        />
+        <Stack.Screen
+          name="space/join"
+          options={{
+            presentation: 'transparentModal',
+            animation: 'none',
+            contentStyle: { backgroundColor: 'transparent' },
+          }}
+        />
         {/* Groups nest, so this route pushes onto itself. The slide is what
             makes going a level deeper legible as travel rather than as the
             screen's contents being swapped underneath you. */}

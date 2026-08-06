@@ -13,6 +13,7 @@ import type {
   SpaceMember,
 } from '@/api/types';
 import { AppText } from '@/components/AppText';
+import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
 import { Reveal } from '@/components/Reveal';
@@ -22,6 +23,7 @@ import { SectionLabel } from '@/components/SectionLabel';
 import { Segmented } from '@/components/Segmented';
 import { Touchable } from '@/components/Touchable';
 import { relativeTime } from '@/saves/format';
+import { spaceIdentity } from '@/spaces/spaceMeta';
 import { useTheme } from '@/theme/ThemeProvider';
 
 type TabValue = 'saves' | 'people' | 'activity';
@@ -258,11 +260,27 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       </Reveal>
 
       <Reveal index={1} style={{ marginBottom: spacing.lg }}>
-        <AppText variant="title">{space.name}</AppText>
-        <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
-          {space.saveCount} {space.saveCount === 1 ? 'save' : 'saves'} · {space.memberCount}{' '}
-          {space.memberCount === 1 ? 'member' : 'members'} · you are {space.myRole}
-        </AppText>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+          <View
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: radius.md,
+              backgroundColor: `${spaceIdentity(space).color}26`,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Glyph name={spaceIdentity(space).glyph} size={18} weight={2} color={spaceIdentity(space).color} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <AppText variant="title">{space.name}</AppText>
+            <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
+              {space.saveCount} {space.saveCount === 1 ? 'save' : 'saves'} · {space.memberCount}{' '}
+              {space.memberCount === 1 ? 'member' : 'members'} · you are {space.myRole}
+            </AppText>
+          </View>
+        </View>
       </Reveal>
 
       {duplicates.length > 0 ? (
@@ -391,7 +409,10 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
                     justifyContent: 'space-between',
                   }}
                 >
-                  <AppText variant="bodySmall">{member.displayName ?? 'A Weavr user'}</AppText>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
+                    <Avatar id={member.userId} name={member.displayName} size={30} />
+                    <AppText variant="bodySmall">{member.displayName ?? 'A Weavr user'}</AppText>
+                  </View>
                   <AppText variant="caption" tone="muted">
                     {member.role}
                   </AppText>

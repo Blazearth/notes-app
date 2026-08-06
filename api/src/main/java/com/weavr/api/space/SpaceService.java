@@ -58,7 +58,7 @@ public class SpaceService {
     }
 
     public record Space(UUID id, String name, String type, UUID ownerId, SpaceRole myRole,
-                        int memberCount, int saveCount, Instant createdAt) {
+                        int memberCount, int saveCount, Instant createdAt, Instant lastActivityAt) {
     }
 
     public record Member(UUID userId, String displayName, SpaceRole role, Instant joinedAt) {
@@ -131,7 +131,9 @@ public class SpaceService {
         return jdbc.sql("""
                         select s.id, s.name, s.type, s.owner_id, m.role, s.created_at,
                                (select count(*) from space_members mm where mm.space_id = s.id) as member_count,
-                               (select count(*) from saves sv where sv.space_id = s.id) as save_count
+                               (select count(*) from saves sv where sv.space_id = s.id) as save_count,
+                               coalesce((select max(sa.created_at) from space_activity sa where sa.space_id = s.id),
+                                        s.created_at) as last_activity_at
                         from spaces s
                         join space_members m on m.space_id = s.id
                         where m.user_id = ?
@@ -146,7 +148,8 @@ public class SpaceService {
                         SpaceRole.fromDb(rs.getString("role")),
                         rs.getInt("member_count"),
                         rs.getInt("save_count"),
-                        rs.getTimestamp("created_at").toInstant()))
+                        rs.getTimestamp("created_at").toInstant(),
+                        rs.getTimestamp("last_activity_at").toInstant()))
                 .list();
     }
 
@@ -156,7 +159,9 @@ public class SpaceService {
         return jdbc.sql("""
                         select s.id, s.name, s.type, s.owner_id, s.created_at,
                                (select count(*) from space_members mm where mm.space_id = s.id) as member_count,
-                               (select count(*) from saves sv where sv.space_id = s.id) as save_count
+                               (select count(*) from saves sv where sv.space_id = s.id) as save_count,
+                               coalesce((select max(sa.created_at) from space_activity sa where sa.space_id = s.id),
+                                        s.created_at) as last_activity_at
                         from spaces s where s.id = ?
                         """)
                 .param(spaceId)
@@ -168,7 +173,8 @@ public class SpaceService {
                         role,
                         rs.getInt("member_count"),
                         rs.getInt("save_count"),
-                        rs.getTimestamp("created_at").toInstant()))
+                        rs.getTimestamp("created_at").toInstant(),
+                        rs.getTimestamp("last_activity_at").toInstant()))
                 .optional()
                 .orElseThrow(() -> new NotFoundException("Space not found"));
     }

@@ -276,6 +276,7 @@ export const mockRepository: Repository = {
       memberCount: 1,
       saveCount: 0,
       createdAt: now(),
+      lastActivityAt: now(),
     };
     spaces.push(space);
     members[space.id] = [{ userId: MOCK_USER_ID, displayName: 'Maya', role: 'owner', joinedAt: now() }];

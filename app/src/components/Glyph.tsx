@@ -27,6 +27,17 @@ export type GlyphName =
   | 'upload'
   | 'textNote'
   | 'download'
+  // Spaces redesign — not from the original mockup, ported Feather-style.
+  | 'members'
+  | 'clock'
+  | 'compass'
+  | 'book'
+  | 'briefcase'
+  | 'home'
+  | 'gamepad'
+  | 'film'
+  | 'qrCode'
+  | 'close'
   // Decorative primitives — not drawn as icons in the mockup
   | 'circle'
   | 'ring'
@@ -208,6 +219,111 @@ export function Glyph({ name, size = 18, color, weight = 2, style }: GlyphProps)
           <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
             <Path d="M12 3v12M7 10l5 5 5-5" />
             <Path d="M5 21h14" />
+          </StrokeIcon>
+        );
+
+      // Member counts, People tab.
+      case 'members':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+            <Circle cx="9" cy="7" r="4" />
+            <Path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+            <Path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </StrokeIcon>
+        );
+
+      // "Last activity" timestamps.
+      case 'clock':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Circle cx="12" cy="12" r="10" />
+            <Path d="M12 6v6l4 2" />
+          </StrokeIcon>
+        );
+
+      // Travel space template.
+      case 'compass':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Circle cx="12" cy="12" r="10" />
+            <Path d="m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" />
+          </StrokeIcon>
+        );
+
+      // Study space template.
+      case 'book':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+            <Path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+          </StrokeIcon>
+        );
+
+      // Work space template.
+      case 'briefcase':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Rect x="2" y="7" width="20" height="14" rx="2" />
+            <Path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+          </StrokeIcon>
+        );
+
+      // Family space template.
+      case 'home':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+            <Path d="M9 22V12h6v10" />
+          </StrokeIcon>
+        );
+
+      // Gaming space template.
+      case 'gamepad':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258A4 4 0 0 0 17.32 5Z" />
+            <Line x1="6" y1="11" x2="10" y2="11" />
+            <Line x1="8" y1="9" x2="8" y2="13" />
+            <Line x1="15" y1="12" x2="15.01" y2="12" />
+            <Line x1="18" y1="10" x2="18.01" y2="10" />
+          </StrokeIcon>
+        );
+
+      // Movies space template.
+      case 'film':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Rect x="2" y="2" width="20" height="20" rx="2.18" />
+            <Line x1="7" y1="2" x2="7" y2="22" />
+            <Line x1="17" y1="2" x2="17" y2="22" />
+            <Line x1="2" y1="12" x2="22" y2="12" />
+            <Line x1="2" y1="7" x2="7" y2="7" />
+            <Line x1="2" y1="17" x2="7" y2="17" />
+            <Line x1="17" y1="17" x2="22" y2="17" />
+            <Line x1="17" y1="7" x2="22" y2="7" />
+          </StrokeIcon>
+        );
+
+      // Join Space — Scan QR code (unimplemented, no camera capture surface exists yet).
+      case 'qrCode':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Rect x="3" y="3" width="7" height="7" rx="1" />
+            <Rect x="14" y="3" width="7" height="7" rx="1" />
+            <Rect x="3" y="14" width="7" height="7" rx="1" />
+            <Rect x="14" y="14" width="3" height="3" rx="0.5" />
+            <Rect x="18" y="14" width="3" height="3" rx="0.5" />
+            <Rect x="14" y="18" width="3" height="3" rx="0.5" />
+            <Rect x="18" y="18" width="3" height="3" rx="0.5" />
+          </StrokeIcon>
+        );
+
+      case 'close':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Line x1="18" y1="6" x2="6" y2="18" />
+            <Line x1="6" y1="6" x2="18" y2="18" />
           </StrokeIcon>
         );
     }
