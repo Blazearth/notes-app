@@ -111,6 +111,17 @@ class ProcessSaveHandler implements JobHandler {
         ExtractionCascade.Extraction extraction =
                 cascade.extractFromUrl(save.getSourceUrl(), saveId);
 
+        // Persist thumbnail URL if the pipeline found one — used by the client
+        // to show a real image instead of the placeholder hatch pattern.
+        String thumbnailUrl = extraction.metadata() != null
+                ? extraction.metadata().thumbnailUrl() : null;
+        if (thumbnailUrl != null && !thumbnailUrl.isBlank()) {
+            jdbc.sql("update saves set thumbnail_url = ? where id = ?")
+                    .param(thumbnailUrl)
+                    .param(saveId)
+                    .update();
+        }
+
         // Safe to run twice — the stage write is an upsert, and the stale-claim
         // reaper can re-deliver this job at any point.
         Map<String, Object> payload = new HashMap<>(ExtractionCascade.stagePayload(extraction));

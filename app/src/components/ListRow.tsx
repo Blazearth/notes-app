@@ -4,19 +4,18 @@ import { View } from 'react-native';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppText } from './AppText';
 import { Card } from './Card';
-import { HatchThumb } from './HatchThumb';
+import { SaveThumb } from './SaveThumb';
 
 export interface ListRowProps {
   title: string;
   subtitle?: string;
-  /** Colour pip overlaid on the thumbnail, keyed off the knowledge type. */
   tint?: string;
   trailing?: React.ReactNode;
   onPress?: () => void;
+  thumbnailUrl?: string | null;
 }
 
-/** The "Recently captured" / "Recently organized" row from the mockups. */
-export function ListRow({ title, subtitle, tint, trailing, onPress }: ListRowProps) {
+export function ListRow({ title, subtitle, tint, trailing, onPress, thumbnailUrl }: ListRowProps) {
   const { spacing, radius, layout } = useTheme();
 
   return (
@@ -30,22 +29,13 @@ export function ListRow({ title, subtitle, tint, trailing, onPress }: ListRowPro
           paddingHorizontal: layout.rowPadding,
         }}
       >
-        <View>
-          <HatchThumb width={40} height={40} radius={radius.sm} period={12} />
-          {tint ? (
-            <View
-              style={{
-                position: 'absolute',
-                right: -2,
-                bottom: -2,
-                width: 10,
-                height: 10,
-                borderRadius: 5,
-                backgroundColor: tint,
-              }}
-            />
-          ) : null}
-        </View>
+        <SaveThumb
+          thumbnailUrl={thumbnailUrl}
+          width={40}
+          height={40}
+          radius={radius.sm}
+          tint={tint}
+        />
         <View style={{ flex: 1 }}>
           <AppText variant="cardTitle">{title}</AppText>
           {subtitle ? (

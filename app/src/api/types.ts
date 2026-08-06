@@ -46,6 +46,7 @@ export interface SaveResponse {
   structuredData?: Record<string, unknown>;
   lifecycleStatus?: LifecycleStatus;
   modelUsed?: string;
+  thumbnailUrl?: string;
   errorCode?: string;
   errorMessage?: string;
   createdAt: string;

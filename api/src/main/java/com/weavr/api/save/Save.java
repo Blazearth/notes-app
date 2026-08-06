@@ -88,6 +88,9 @@ public class Save {
     @Column(name = "error_message")
     private String errorMessage;
 
+    @Column(name = "thumbnail_url")
+    private String thumbnailUrl;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -195,6 +198,14 @@ public class Save {
 
     public String getErrorMessage() {
         return errorMessage;
+    }
+
+    public String getThumbnailUrl() {
+        return thumbnailUrl;
+    }
+
+    public void setThumbnailUrl(String thumbnailUrl) {
+        this.thumbnailUrl = thumbnailUrl;
     }
 
     public Instant getCreatedAt() {

@@ -8,8 +8,8 @@ import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppText } from './AppText';
 import { Card } from './Card';
-import { HatchThumb } from './HatchThumb';
 import { ListRow } from './ListRow';
+import { SaveThumb } from './SaveThumb';
 
 function Tag({ label }: { label: string }) {
   const { palette, radius, spacing } = useTheme();
@@ -35,24 +35,9 @@ export interface SaveCardProps {
   save: SaveResponse;
   trailing?: React.ReactNode;
   onPress?: () => void;
-  /**
-   * Replaces the derived meta line with a caller-supplied one — Home uses it
-   * for "YouTube • Workout", where source and category say more at a glance
-   * than the knowledge type does.
-   *
-   * An override rather than a flag so the decision stays with the screen: the
-   * Library wants the type, Home wants the provenance, and neither is more
-   * correct in general.
-   */
   subtitleOverride?: string;
 }
 
-/**
- * A save's row in the feed — recipe, movie and place get the bespoke layout
- * from `buildCardModel`; everything else (still processing, `unusable`, or a
- * knowledge type without a layout yet) falls back to the flat `ListRow`, so
- * this is the only branch point a screen needs to know about.
- */
 export function SaveCard({ save, trailing, onPress, subtitleOverride }: SaveCardProps) {
   const { spacing, radius } = useTheme();
   const model = buildCardModel(save);
@@ -63,6 +48,7 @@ export function SaveCard({ save, trailing, onPress, subtitleOverride }: SaveCard
         title={saveTitle(save)}
         subtitle={subtitleOverride ?? saveSubtitle(save)}
         tint={save.knowledgeType ? TYPE_COLORS[save.knowledgeType] : undefined}
+        thumbnailUrl={save.thumbnailUrl}
         trailing={trailing}
         onPress={onPress}
       />
@@ -72,20 +58,13 @@ export function SaveCard({ save, trailing, onPress, subtitleOverride }: SaveCard
   return (
     <Card onPress={onPress} radius={radius.md} padding={0} style={{ overflow: 'hidden' }}>
       <View style={{ flexDirection: 'row', gap: spacing.md, padding: spacing.smd }}>
-        <View>
-          <HatchThumb width={40} height={40} radius={radius.sm} period={12} />
-          <View
-            style={{
-              position: 'absolute',
-              right: -2,
-              bottom: -2,
-              width: 10,
-              height: 10,
-              borderRadius: 5,
-              backgroundColor: TYPE_COLORS[model.kind] ?? TYPE_COLORS.other,
-            }}
-          />
-        </View>
+        <SaveThumb
+          thumbnailUrl={save.thumbnailUrl}
+          width={40}
+          height={40}
+          radius={radius.sm}
+          tint={TYPE_COLORS[model.kind] ?? TYPE_COLORS.other}
+        />
         <View style={{ flex: 1 }}>
           <View
             style={{
