@@ -39,7 +39,11 @@ export function CreateSpaceSheet() {
       try {
         const space = await repo.createSpace(trimmed, selected ?? undefined);
         dismiss();
-        router.push({ pathname: '/space/[id]', params: { id: space.id } });
+        // Wait for the sheet dismiss animation to complete before navigating,
+        // otherwise the simultaneous animation + navigation freezes the screen.
+        setTimeout(() => {
+          router.push({ pathname: '/space/[id]', params: { id: space.id } });
+        }, 350);
       } catch (e) {
         setError(e instanceof ApiError ? e.message : 'Could not create that Space.');
         setBusy(false);
