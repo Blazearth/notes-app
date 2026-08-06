@@ -46,7 +46,7 @@ export function Card({
     style,
   ];
 
-  if (!onPress) return <View style={base}>{children}</View>;
+  if (!onPress && !onLongPress) return <View style={base}>{children}</View>;
 
   return (
     <Touchable onPress={onPress} onLongPress={onLongPress} weight="card" haptic={haptic} style={base}>
