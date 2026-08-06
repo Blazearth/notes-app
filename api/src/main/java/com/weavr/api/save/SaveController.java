@@ -7,6 +7,7 @@ import java.util.UUID;
 import com.weavr.api.auth.CurrentUser;
 import com.weavr.api.save.dto.CreateSaveRequest;
 import com.weavr.api.save.dto.SaveResponse;
+import com.weavr.api.save.dto.UpdateFlagsRequest;
 import com.weavr.api.save.dto.UpdateLifecycleRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -82,5 +83,16 @@ class SaveController {
                               @Valid @RequestBody UpdateLifecycleRequest request) {
         return SaveResponse.from(
                 saveService.setLifecycle(userId, id, request.lifecycleStatus()));
+    }
+
+    /**
+     * Backs the Library's swipe-to-favorite and swipe-to-archive actions.
+     * Either field may be omitted to leave it as-is.
+     */
+    @PatchMapping("/{id}/flags")
+    SaveResponse setFlags(@CurrentUser UUID userId, @PathVariable UUID id,
+                          @RequestBody UpdateFlagsRequest request) {
+        return SaveResponse.from(
+                saveService.setFlags(userId, id, request.favorite(), request.archived()));
     }
 }

@@ -1,49 +1,48 @@
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import type { SaveResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Chip } from '@/components/Chip';
-import { Glyph } from '@/components/Glyph';
+import { Glyph, type GlyphName } from '@/components/Glyph';
 import { Reveal } from '@/components/Reveal';
 import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
-import { STATUS_LABELS } from '@/saves/format';
+import { repo } from '@/data';
+import { saveTitle, STATUS_LABELS } from '@/saves/format';
+import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { useSaves } from '@/saves/SavesProvider';
-import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
 
 const ALL = 'All';
+const FAVORITES = 'Favorites';
+const ARCHIVED = 'Archived';
 
-/**
- * Plural display names for the knowledge types the registry ships today.
- *
- * Unknown types fall back to the raw name rather than being hidden: the server
- * registry is a data change by design, so a type this map has never heard of
- * must still appear in the Library.
- */
-const TYPE_LABELS: Record<string, string> = {
-  recipe: 'Recipes',
-  movie: 'Watchlist',
-  place: 'Places',
-  other: 'Notes',
-};
+type SortKey = 'recent' | 'alphabetical';
 
-function labelFor(type: string): string {
-  return TYPE_LABELS[type] ?? type.charAt(0).toUpperCase() + type.slice(1);
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: 'recent', label: 'Recently added' },
+  { key: 'alphabetical', label: 'A–Z' },
+];
+
+function labelFor(filter: string): string {
+  if (filter === ALL || filter === FAVORITES || filter === ARCHIVED) return filter;
+  return saveTypeMeta(filter).label;
 }
 
 function HeaderAction({
   glyph,
   label,
+  active,
   onPress,
 }: {
-  glyph: 'search' | 'filter';
+  glyph: GlyphName;
   label: string;
+  active?: boolean;
   onPress?: () => void;
 }) {
   const { palette, radius, icon } = useTheme();
@@ -53,51 +52,65 @@ function HeaderAction({
       accessibilityLabel={label}
       weight="tile"
       onPress={onPress}
-      // No haptic without a destination — a buzz would promise an action the
-      // control does not perform.
       haptic={onPress ? 'selection' : null}
       style={{
         width: 36,
         height: 36,
         borderRadius: radius.sm,
-        backgroundColor: palette.surface,
+        backgroundColor: active ? palette.text : palette.surface,
         borderWidth: 1,
-        borderColor: palette.border,
+        borderColor: active ? 'transparent' : palette.border,
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <Glyph name={glyph} size={icon.sm} />
+      <Glyph name={glyph} size={icon.sm} color={active ? palette.background : undefined} />
     </Touchable>
   );
 }
 
-/** A real count of one knowledge type, replacing the sample "AI groups" grid. */
-function TypeTile({ type, count }: { type: string; count: number }) {
+/** A knowledge type, as an icon tile in the horizontally-scrolling "By type" row. */
+function TypeTile({ type, count, onPress }: { type: string; count: number; onPress: () => void }) {
   const { palette, radius, spacing } = useTheme();
+  const meta = saveTypeMeta(type);
   return (
-    <Card
-      radius={radius.md}
-      padding={spacing.md + 2}
-      style={{ flexGrow: 1, flexBasis: '47%' }}
+    <Touchable
+      accessibilityRole="button"
+      accessibilityLabel={`${meta.label}, ${count} ${count === 1 ? 'save' : 'saves'}`}
+      onPress={onPress}
+      haptic="selection"
+      weight="card"
+      style={{
+        width: 96,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.border,
+        backgroundColor: palette.surface,
+        padding: spacing.smd,
+        gap: spacing.sm,
+      }}
     >
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-        <View
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: 4,
-            backgroundColor: TYPE_COLORS[type] ?? TYPE_COLORS.other,
-          }}
-        />
-        <AppText variant="cardTitle" style={{ fontSize: 13 }} numberOfLines={1}>
-          {labelFor(type)}
+      <View
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: radius.sm,
+          backgroundColor: `${meta.color}26`,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Glyph name={meta.glyph} size={16} weight={2} color={meta.color} />
+      </View>
+      <View>
+        <AppText variant="cardTitle" style={{ fontSize: 12 }} numberOfLines={1}>
+          {meta.label}
+        </AppText>
+        <AppText variant="caption" tone="muted" style={{ fontSize: 11, marginTop: 1 }}>
+          {count} {count === 1 ? 'save' : 'saves'}
         </AppText>
       </View>
-      <AppText variant="caption" tone="muted" style={{ marginTop: spacing.xs }}>
-        {count} {count === 1 ? 'save' : 'saves'}
-      </AppText>
-    </Card>
+    </Touchable>
   );
 }
 
@@ -110,27 +123,121 @@ function TypeTile({ type, count }: { type: string; count: number }) {
  */
 export function LibraryScreen() {
   const { palette, layout, spacing } = useTheme();
-  const { saves, status, error, refresh, refreshing } = useSaves();
+  const { saves, status, error, refresh, refreshing, patch } = useSaves();
   const router = useRouter();
   const [filter, setFilter] = useState<string>(ALL);
+  const [sortBy, setSortBy] = useState<SortKey>('recent');
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Archived saves sit out of the ordinary views entirely — an archive is
+  // only useful if it actually gets things out of the way. The `Archived`
+  // filter is the one place they're still reachable.
+  const activeSaves = useMemo(() => saves.filter((s) => !s.archived), [saves]);
 
   // Counts drive both the tiles and the filter chips, so a type with nothing in
   // it never appears as an empty option the user can select into a dead end.
   const counts = useMemo(() => {
     const tally = new Map<string, number>();
-    for (const save of saves) {
+    for (const save of activeSaves) {
       if (save.status !== 'ready' || !save.knowledgeType) continue;
       tally.set(save.knowledgeType, (tally.get(save.knowledgeType) ?? 0) + 1);
     }
     return [...tally.entries()].sort((a, b) => b[1] - a[1]);
-  }, [saves]);
+  }, [activeSaves]);
 
-  const visible: SaveResponse[] = useMemo(
-    () => (filter === ALL ? saves : saves.filter((s) => s.knowledgeType === filter)),
-    [saves, filter],
+  const favoriteCount = useMemo(() => activeSaves.filter((s) => s.favorite).length, [activeSaves]);
+  const archivedCount = useMemo(() => saves.filter((s) => s.archived).length, [saves]);
+
+  const filters = [
+    ALL,
+    ...counts.map(([type]) => type),
+    ...(favoriteCount > 0 ? [FAVORITES] : []),
+    ...(archivedCount > 0 ? [ARCHIVED] : []),
+  ];
+
+  const filtered: SaveResponse[] = useMemo(() => {
+    if (filter === ALL) return activeSaves;
+    if (filter === FAVORITES) return activeSaves.filter((s) => s.favorite);
+    if (filter === ARCHIVED) return saves.filter((s) => s.archived);
+    return activeSaves.filter((s) => s.knowledgeType === filter);
+  }, [activeSaves, saves, filter]);
+
+  const visible = useMemo(() => {
+    if (sortBy === 'alphabetical') {
+      return [...filtered].sort((a, b) => saveTitle(a).localeCompare(saveTitle(b)));
+    }
+    return filtered; // already newest-first from the server
+  }, [filtered, sortBy]);
+
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const exitSelection = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const handleLongPress = useCallback(
+    (id: string) => {
+      setSelectionMode(true);
+      setSelectedIds(new Set([id]));
+    },
+    [],
   );
 
-  const filters = [ALL, ...counts.map(([type]) => type)];
+  const handleCardPress = useCallback(
+    (save: SaveResponse) => {
+      if (selectionMode) {
+        toggleSelected(save.id);
+        return;
+      }
+      router.push({ pathname: '/save/[id]', params: { id: save.id } });
+    },
+    [selectionMode, toggleSelected, router],
+  );
+
+  /** Optimistic flip, reconciled with the server's echo; reverted on failure. */
+  const setFlag = useCallback(
+    async (save: SaveResponse, changes: { favorite?: boolean; archived?: boolean }) => {
+      patch(save.id, changes);
+      try {
+        const updated = await repo.setSaveFlags(save.id, changes);
+        patch(save.id, updated);
+      } catch {
+        patch(save.id, { favorite: save.favorite, archived: save.archived });
+      }
+    },
+    [patch],
+  );
+
+  const bulkApply = useCallback(
+    async (changes: { favorite?: boolean; archived?: boolean }) => {
+      const ids = [...selectedIds];
+      exitSelection();
+      for (const id of ids) patch(id, changes);
+      await Promise.all(
+        ids.map((id) =>
+          repo
+            .setSaveFlags(id, changes)
+            .then((updated) => patch(id, updated))
+            .catch(() => {
+              // Best-effort: a failed bulk item just keeps its optimistic
+              // value rather than rolling the whole batch back, since a
+              // partial success is still progress the user asked for.
+            }),
+        ),
+      );
+    },
+    [selectedIds, exitSelection, patch],
+  );
 
   return (
     <Screen
@@ -153,14 +260,70 @@ export function LibraryScreen() {
           marginBottom: spacing.lg,
         }}
       >
-        <AppText variant="display">Library</AppText>
-        <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-          <HeaderAction glyph="search" label="Search saves" onPress={() => router.push('/search')} />
-          {/* Sorting has no server support yet — deliberately inert rather than
-              removed, so the affordance stays where it will land. */}
-          <HeaderAction glyph="filter" label="Filter and sort" />
-        </View>
+        {selectionMode ? (
+          <>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+              <Touchable accessibilityRole="button" onPress={exitSelection} haptic="light">
+                <Glyph name="close" size={20} />
+              </Touchable>
+              <AppText variant="display" style={{ fontSize: 22 }}>
+                {selectedIds.size} selected
+              </AppText>
+            </View>
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <HeaderAction
+                glyph="heart"
+                label="Favorite selected"
+                onPress={() => void bulkApply({ favorite: true })}
+              />
+              <HeaderAction
+                glyph="archive"
+                label="Archive selected"
+                onPress={() => void bulkApply({ archived: true })}
+              />
+            </View>
+          </>
+        ) : (
+          <>
+            <View>
+              <AppText variant="display">Library</AppText>
+              {status === 'ready' && saves.length > 0 ? (
+                <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
+                  {saves.length} saved {saves.length === 1 ? 'item' : 'items'}
+                </AppText>
+              ) : null}
+            </View>
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <HeaderAction glyph="search" label="Search saves" onPress={() => router.push('/search')} />
+              <HeaderAction
+                glyph="filter"
+                label="Sort"
+                active={sortMenuOpen}
+                onPress={() => setSortMenuOpen((v) => !v)}
+              />
+            </View>
+          </>
+        )}
       </Reveal>
+
+      {sortMenuOpen && !selectionMode ? (
+        <Reveal
+          index={1}
+          style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg }}
+        >
+          {SORT_OPTIONS.map((opt) => (
+            <Chip
+              key={opt.key}
+              label={opt.label}
+              selected={sortBy === opt.key}
+              onPress={() => {
+                setSortBy(opt.key);
+                setSortMenuOpen(false);
+              }}
+            />
+          ))}
+        </Reveal>
+      ) : null}
 
       {status === 'loading' ? (
         <View style={{ paddingVertical: spacing.xxl * 2, alignItems: 'center' }}>
@@ -202,7 +365,7 @@ export function LibraryScreen() {
       {status === 'ready' && saves.length > 0 ? (
         <>
           {filters.length > 1 ? (
-            <Reveal index={1}>
+            <Reveal index={2}>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -215,8 +378,13 @@ export function LibraryScreen() {
                 {filters.map((option) => (
                   <Chip
                     key={option}
-                    label={option === ALL ? ALL : labelFor(option)}
+                    label={labelFor(option)}
                     selected={option === filter}
+                    tint={
+                      option !== ALL && option !== FAVORITES && option !== ARCHIVED
+                        ? saveTypeMeta(option).color
+                        : undefined
+                    }
                     onPress={() => setFilter(option)}
                   />
                 ))}
@@ -225,24 +393,22 @@ export function LibraryScreen() {
           ) : null}
 
           {counts.length > 0 && filter === ALL ? (
-            <Reveal index={2}>
+            <Reveal index={3}>
               <SectionLabel>By type</SectionLabel>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  flexWrap: 'wrap',
-                  gap: spacing.smd,
-                  marginBottom: spacing.xxl - 2,
-                }}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginHorizontal: -layout.screenGutter, marginBottom: spacing.xxl - 2 }}
+                contentContainerStyle={{ paddingHorizontal: layout.screenGutter, gap: spacing.sm }}
               >
                 {counts.map(([type, count]) => (
-                  <TypeTile key={type} type={type} count={count} />
+                  <TypeTile key={type} type={type} count={count} onPress={() => setFilter(type)} />
                 ))}
-              </View>
+              </ScrollView>
             </Reveal>
           ) : null}
 
-          <Reveal index={3}>
+          <Reveal index={4}>
             <SectionLabel>{filter === ALL ? 'Everything' : labelFor(filter)}</SectionLabel>
           </Reveal>
           <View style={{ gap: spacing.smd }}>
@@ -254,9 +420,12 @@ export function LibraryScreen() {
                 <Reveal key={`${filter}-${save.id}`} index={i}>
                   <SaveCard
                     save={save}
-                    onPress={() =>
-                      router.push({ pathname: '/save/[id]', params: { id: save.id } })
-                    }
+                    selectionMode={selectionMode}
+                    selected={selectedIds.has(save.id)}
+                    onPress={() => handleCardPress(save)}
+                    onLongPress={() => handleLongPress(save.id)}
+                    onFavorite={() => void setFlag(save, { favorite: !save.favorite })}
+                    onArchive={() => void setFlag(save, { archived: !save.archived })}
                     trailing={
                       save.status === 'ready' ? undefined : (
                         <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>
@@ -274,7 +443,11 @@ export function LibraryScreen() {
                     Nothing here yet
                   </AppText>
                   <AppText variant="caption" tone="muted">
-                    Saves land in {labelFor(filter)} once the pipeline classifies them.
+                    {filter === FAVORITES
+                      ? 'Swipe right on a save, or long-press to select several, to favorite it.'
+                      : filter === ARCHIVED
+                        ? 'Swipe left on a save to archive it.'
+                        : `Saves land in ${labelFor(filter)} once the pipeline classifies them.`}
                   </AppText>
                 </Card>
               </Reveal>

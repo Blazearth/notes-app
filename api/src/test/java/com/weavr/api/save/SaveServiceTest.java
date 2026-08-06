@@ -182,4 +182,42 @@ class SaveServiceTest {
         assertThatThrownBy(() -> service.create(userId, urlRequest(), null))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
+
+    @Test
+    void settingFavoriteLeavesArchivedUntouched() {
+        UUID userId = UUID.randomUUID();
+        UUID saveId = UUID.randomUUID();
+        Save save = Save.accepted(userId, SourceType.URL, "https://example.com/reel", null, null, null);
+        save.setArchived(true);
+        when(saves.findByIdAndUserId(saveId, userId)).thenReturn(Optional.of(save));
+
+        Save result = service.setFlags(userId, saveId, true, null);
+
+        assertThat(result.isFavorite()).isTrue();
+        assertThat(result.isArchived()).isTrue();
+    }
+
+    @Test
+    void settingArchivedLeavesFavoriteUntouched() {
+        UUID userId = UUID.randomUUID();
+        UUID saveId = UUID.randomUUID();
+        Save save = Save.accepted(userId, SourceType.URL, "https://example.com/reel", null, null, null);
+        save.setFavorite(true);
+        when(saves.findByIdAndUserId(saveId, userId)).thenReturn(Optional.of(save));
+
+        Save result = service.setFlags(userId, saveId, null, true);
+
+        assertThat(result.isFavorite()).isTrue();
+        assertThat(result.isArchived()).isTrue();
+    }
+
+    @Test
+    void settingFlagsOnAnUnknownSaveThrowsNotFound() {
+        UUID userId = UUID.randomUUID();
+        UUID saveId = UUID.randomUUID();
+        when(saves.findByIdAndUserId(saveId, userId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.setFlags(userId, saveId, true, null))
+                .isInstanceOf(NotFoundException.class);
+    }
 }

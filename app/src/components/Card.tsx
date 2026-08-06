@@ -12,6 +12,7 @@ export interface CardProps {
   padding?: number;
   radius?: number;
   onPress?: () => void;
+  onLongPress?: () => void;
   haptic?: HapticTone | null;
   style?: StyleProp<ViewStyle>;
 }
@@ -22,6 +23,7 @@ export function Card({
   padding,
   radius,
   onPress,
+  onLongPress,
   haptic = 'light',
   style,
 }: CardProps) {
@@ -47,7 +49,7 @@ export function Card({
   if (!onPress) return <View style={base}>{children}</View>;
 
   return (
-    <Touchable onPress={onPress} weight="card" haptic={haptic} style={base}>
+    <Touchable onPress={onPress} onLongPress={onLongPress} weight="card" haptic={haptic} style={base}>
       {children}
     </Touchable>
   );

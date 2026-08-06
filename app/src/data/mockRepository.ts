@@ -111,6 +111,8 @@ export const mockRepository: Repository = {
       // `processing`, like the real thing: a save is never ready on creation,
       // and a mock that returns `ready` would hide the entire status UI.
       status: 'processing',
+      favorite: false,
+      archived: false,
       createdAt: now(),
       updatedAt: now(),
     };
@@ -156,6 +158,14 @@ export const mockRepository: Repository = {
   setSaveLifecycle(id: string, lifecycleStatus: LifecycleStatus): Promise<SaveResponse> {
     const save = requireSave(id);
     save.lifecycleStatus = lifecycleStatus;
+    save.updatedAt = now();
+    return delay(copy(save));
+  },
+
+  setSaveFlags(id: string, flags: { favorite?: boolean; archived?: boolean }): Promise<SaveResponse> {
+    const save = requireSave(id);
+    if (flags.favorite !== undefined) save.favorite = flags.favorite;
+    if (flags.archived !== undefined) save.archived = flags.archived;
     save.updatedAt = now();
     return delay(copy(save));
   },

@@ -91,6 +91,12 @@ public class Save {
     @Column(name = "thumbnail_url")
     private String thumbnailUrl;
 
+    @Column(name = "favorite", nullable = false)
+    private boolean favorite = false;
+
+    @Column(name = "archived", nullable = false)
+    private boolean archived = false;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -206,6 +212,25 @@ public class Save {
 
     public void setThumbnailUrl(String thumbnailUrl) {
         this.thumbnailUrl = thumbnailUrl;
+    }
+
+    public boolean isFavorite() {
+        return favorite;
+    }
+
+    /** Stamps {@code updatedAt} for the same reason {@link #setLifecycleStatus} does. */
+    public void setFavorite(boolean favorite) {
+        this.favorite = favorite;
+        this.updatedAt = Instant.now();
+    }
+
+    public boolean isArchived() {
+        return archived;
+    }
+
+    public void setArchived(boolean archived) {
+        this.archived = archived;
+        this.updatedAt = Instant.now();
     }
 
     public Instant getCreatedAt() {

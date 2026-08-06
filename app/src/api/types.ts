@@ -47,6 +47,8 @@ export interface SaveResponse {
   lifecycleStatus?: LifecycleStatus;
   modelUsed?: string;
   thumbnailUrl?: string;
+  favorite: boolean;
+  archived: boolean;
   errorCode?: string;
   errorMessage?: string;
   createdAt: string;

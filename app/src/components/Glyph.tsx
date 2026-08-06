@@ -38,6 +38,14 @@ export type GlyphName =
   | 'film'
   | 'qrCode'
   | 'close'
+  // Library redesign — knowledge-type icons and swipe actions, Feather-style.
+  | 'utensils'
+  | 'mapPin'
+  | 'tag'
+  | 'activity'
+  | 'heart'
+  | 'archive'
+  | 'check'
   // Decorative primitives — not drawn as icons in the mockup
   | 'circle'
   | 'ring'
@@ -324,6 +332,68 @@ export function Glyph({ name, size = 18, color, weight = 2, style }: GlyphProps)
           <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
             <Line x1="18" y1="6" x2="6" y2="18" />
             <Line x1="6" y1="6" x2="18" y2="18" />
+          </StrokeIcon>
+        );
+
+      // Recipe type tile / card.
+      case 'utensils':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2" />
+            <Path d="M7 2v20" />
+            <Path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />
+          </StrokeIcon>
+        );
+
+      // Place type tile / card.
+      case 'mapPin':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0Z" />
+            <Circle cx="12" cy="10" r="3" />
+          </StrokeIcon>
+        );
+
+      // Product type tile / card.
+      case 'tag':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
+            <Line x1="7" y1="7" x2="7.01" y2="7" />
+          </StrokeIcon>
+        );
+
+      // Workout type tile / card.
+      case 'activity':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+          </StrokeIcon>
+        );
+
+      // Favorite — Library swipe action and filter chip.
+      case 'heart':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z" />
+          </StrokeIcon>
+        );
+
+      // Archive — Library swipe action and filter chip.
+      case 'archive':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Rect x="2" y="3" width="20" height="5" rx="1" />
+            <Path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+            <Line x1="10" y1="12" x2="14" y2="12" />
+          </StrokeIcon>
+        );
+
+      // Multi-select checkbox tick.
+      case 'check':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M20 6 9 17l-5-5" />
           </StrokeIcon>
         );
     }

@@ -39,6 +39,8 @@ export interface Repository {
   listSavesByLifecycle(statuses: LifecycleStatus[], size?: number): Promise<SaveResponse[]>;
   getSave(id: string): Promise<SaveResponse>;
   setSaveLifecycle(id: string, lifecycleStatus: LifecycleStatus): Promise<SaveResponse>;
+  /** Swipe-to-favorite / swipe-to-archive. Either field may be omitted to leave it as-is. */
+  setSaveFlags(id: string, flags: { favorite?: boolean; archived?: boolean }): Promise<SaveResponse>;
   searchSaves(query: string, limit?: number): Promise<SearchHit[]>;
 
   // Account

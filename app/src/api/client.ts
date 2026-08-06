@@ -209,6 +209,21 @@ export function setSaveLifecycle(
 }
 
 /**
+ * `PATCH /v1/saves/{id}/flags` — the Library's swipe-to-favorite and
+ * swipe-to-archive actions. Either field may be omitted to leave it as-is.
+ */
+export function setSaveFlags(
+  id: string,
+  flags: { favorite?: boolean; archived?: boolean },
+): Promise<SaveResponse> {
+  return request<SaveResponse>(`/v1/saves/${id}/flags`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(flags),
+  });
+}
+
+/**
  * `GET /v1/me` — entitlement and usage together.
  *
  * A limit of `-1` means unlimited (Pro, or caps not yet enforced), which is why

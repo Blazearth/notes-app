@@ -259,6 +259,24 @@ public class SaveService {
         return save;
     }
 
+    /**
+     * Toggles favorite/archived from the Library's swipe actions. Either field
+     * may be {@code null} to leave it untouched, so a single favorite swipe
+     * doesn't have to know or resend the current archived state.
+     */
+    @Transactional
+    public Save setFlags(UUID userId, UUID saveId, Boolean favorite, Boolean archived) {
+        Save save = saves.findByIdAndUserId(saveId, userId)
+                .orElseThrow(() -> new NotFoundException("Save not found"));
+        if (favorite != null) {
+            save.setFavorite(favorite);
+        }
+        if (archived != null) {
+            save.setArchived(archived);
+        }
+        return save;
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
     }

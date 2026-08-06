@@ -16,6 +16,13 @@ interface SavesContextValue {
   refreshing: boolean;
   /** Put a just-created save at the top and start polling until it is ready. */
   prepend: (save: SaveResponse) => void;
+  /**
+   * Merges a partial update into one save by id — the Library's swipe
+   * actions use this for an optimistic flip, then call again with the
+   * server's echoed response. One shared store means a favorite toggled in
+   * the Library is already reflected if the same save is open elsewhere.
+   */
+  patch: (id: string, changes: Partial<SaveResponse>) => void;
 }
 
 const SavesContext = createContext<SavesContextValue | null>(null);
@@ -115,9 +122,13 @@ export function SavesProvider({ children }: { children: React.ReactNode }) {
     }
   }, [startPolling]);
 
+  const patch = useCallback((id: string, changes: Partial<SaveResponse>) => {
+    setSaves((prev) => prev.map((s) => (s.id === id ? { ...s, ...changes } : s)));
+  }, []);
+
   const value = useMemo(
-    () => ({ saves, status, error, refresh, refreshing, prepend }),
-    [saves, status, error, refresh, refreshing, prepend],
+    () => ({ saves, status, error, refresh, refreshing, prepend, patch }),
+    [saves, status, error, refresh, refreshing, prepend, patch],
   );
 
   return <SavesContext.Provider value={value}>{children}</SavesContext.Provider>;

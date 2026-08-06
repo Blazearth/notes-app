@@ -1,6 +1,6 @@
 import type { SaveResponse } from '@/api/types';
 
-export type CardKind = 'recipe' | 'movie' | 'place' | 'other';
+export type CardKind = 'recipe' | 'movie' | 'place' | 'article' | 'product' | 'book' | 'workout' | 'other';
 
 export interface SaveCardModel {
   kind: CardKind;
@@ -86,12 +86,66 @@ export function buildCardModel(save: SaveResponse): SaveCardModel | null {
       };
     }
 
+    case 'article': {
+      const title = clean(d.title);
+      if (!title) return null;
+      const { chips, overflow } = withOverflow(cleanList(d.tags), 3);
+      return {
+        kind: 'article',
+        title,
+        meta: joinMeta([clean(d.category)]),
+        summary: clean(d.summary) ?? undefined,
+        chips,
+        chipsOverflow: overflow,
+      };
+    }
+
+    case 'product': {
+      const title = clean(d.title);
+      if (!title) return null;
+      return {
+        kind: 'product',
+        title,
+        meta: joinMeta([clean(d.category), clean(d.price), clean(d.whereTo)]),
+        summary: clean(d.summary) ?? undefined,
+      };
+    }
+
+    case 'book': {
+      const title = clean(d.title);
+      if (!title) return null;
+      const { chips, overflow } = withOverflow(cleanList(d.genre), 3);
+      return {
+        kind: 'book',
+        title,
+        meta: joinMeta([clean(d.author), clean(d.rating)]),
+        summary: clean(d.summary) ?? undefined,
+        chips,
+        chipsOverflow: overflow,
+      };
+    }
+
+    case 'workout': {
+      const title = clean(d.title);
+      if (!title) return null;
+      const { chips, overflow } = withOverflow(cleanList(d.equipment), 4);
+      return {
+        kind: 'workout',
+        title,
+        meta: joinMeta([clean(d.duration), clean(d.category)]),
+        summary: clean(d.summary) ?? undefined,
+        chips,
+        chipsOverflow: overflow,
+      };
+    }
+
     case 'other': {
       const title = clean(d.title);
       if (!title) return null;
       return {
         kind: 'other',
         title,
+        meta: joinMeta([clean(d.category)]),
         summary: clean(d.summary) ?? undefined,
       };
     }
