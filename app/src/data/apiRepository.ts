@@ -69,4 +69,13 @@ export const apiRepository: Repository = {
   listGroups: client.listGroups,
   getGroup: client.getGroup,
   listGroupSaves: client.listGroupSaves,
+
+  listCollections: client.listCollections,
+  listCollectionEntities: client.listCollectionEntities,
+  setEntityState: client.setEntityState,
+
+  mergeEntities: client.mergeEntities,
+  unmergeEntity: client.unmergeEntity,
+  renameEntity: client.renameEntity,
+  renameCollection: client.renameCollection,
 };

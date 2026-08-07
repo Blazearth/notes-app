@@ -75,6 +75,11 @@ class TmdbEnricher implements Enricher {
 
         Map<String, Object> added = new LinkedHashMap<>();
         int id = match.path("id").asInt();
+        // K4: the canonical id collections merge on (Entities.key prefers
+        // "tmdb:<id>" over the string key) — this is what resolves "Shingeki
+        // no Kyojin" vs. "Attack on Titan" once TMDB has matched both to the
+        // same title, which no normalization rule over the strings could do.
+        added.put("tmdbId", String.valueOf(id));
         String date = match.path(isTv ? "first_air_date" : "release_date").asString("");
         if (date.length() >= 4) {
             added.put("year", date.substring(0, 4));

@@ -93,12 +93,18 @@ const SubgroupRow = React.memo(function SubgroupRow({
  * has to be built. The only thing that changes with depth is the id in the URL.
  */
 export function GroupDetailScreen({ id }: { id: string }) {
-  const { palette, spacing } = useTheme();
+  const { palette, spacing, radius } = useTheme();
   const router = useRouter();
 
   const [group, setGroup] = useState<KnowledgeGroup | null>(null);
   const [saves, setSaves] = useState<SaveResponse[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // K5: the only group this applies to is workout — the local-compute
+  // alternative to AI synthesis (docs/knowledge-collections.md, K5) needs at
+  // least two sources selected, so this is multi-select scoped to one type
+  // rather than a general group feature.
+  const [comparing, setComparing] = useState(false);
+  const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setError(null);
@@ -116,6 +122,22 @@ export function GroupDetailScreen({ id }: { id: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const isWorkoutGroup = id === 'workout' || id.startsWith('workout~');
+
+  const toggleCompareSelection = useCallback((saveId: string) => {
+    setCompareIds((current) => {
+      const next = new Set(current);
+      if (next.has(saveId)) next.delete(saveId);
+      else next.add(saveId);
+      return next;
+    });
+  }, []);
+
+  const cancelComparing = useCallback(() => {
+    setComparing(false);
+    setCompareIds(new Set());
+  }, []);
 
   if (error) {
     return (
@@ -148,30 +170,58 @@ export function GroupDetailScreen({ id }: { id: string }) {
   }
 
   const hasSubgroups = group.subgroups.length > 0;
+  const readyWorkoutCount = saves.filter((s) => s.status === 'ready').length;
 
   return (
-    <Screen>
+    <>
+      <Screen>
       <Reveal index={0}>
-        <Touchable
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          onPress={() => router.back()}
-          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.md }}
-        >
-          <Glyph name="chevron" size={14} />
-          <AppText variant="caption" tone="muted">
-            Back
-          </AppText>
-        </Touchable>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md }}>
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            onPress={() => router.back()}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
+          >
+            <Glyph name="chevron" size={14} />
+            <AppText variant="caption" tone="muted">
+              Back
+            </AppText>
+          </Touchable>
+          {isWorkoutGroup && !hasSubgroups && readyWorkoutCount >= 2 ? (
+            comparing ? (
+              <Touchable accessibilityRole="button" onPress={cancelComparing} haptic="light">
+                <AppText variant="caption" tone="accent">
+                  Cancel
+                </AppText>
+              </Touchable>
+            ) : (
+              <Touchable
+                accessibilityRole="button"
+                accessibilityLabel="Compare workouts"
+                onPress={() => setComparing(true)}
+                haptic="light"
+                style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
+              >
+                <Glyph name="activity" size={14} color={palette.accent} />
+                <AppText variant="caption" tone="accent">
+                  Compare
+                </AppText>
+              </Touchable>
+            )
+          ) : null}
+        </View>
 
         <AppText variant="title" style={{ marginBottom: spacing.xs }}>
           {group.name}
         </AppText>
         <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.xxl - 2 }}>
-          {group.description ??
-            (hasSubgroups
-              ? `${group.subgroups.length} subgroups · ${group.itemCount} items`
-              : `${group.itemCount} items`)}
+          {comparing
+            ? `${compareIds.size} selected — pick at least 2 workouts to compare`
+            : (group.description ??
+              (hasSubgroups
+                ? `${group.subgroups.length} subgroups · ${group.itemCount} items`
+                : `${group.itemCount} items`))}
         </AppText>
       </Reveal>
 
@@ -198,20 +248,37 @@ export function GroupDetailScreen({ id }: { id: string }) {
         <SectionLabel>{hasSubgroups ? 'Also in this group' : 'Items'}</SectionLabel>
         {saves.length > 0 ? (
           <View style={{ gap: spacing.smd }}>
-            {saves.map((save) => (
-              <SaveCard
-                key={save.id}
-                save={save}
-                onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
-                trailing={
-                  save.status === 'ready' ? undefined : (
-                    <AppText variant="caption" tone="faint">
-                      {STATUS_LABELS[save.status]}
-                    </AppText>
-                  )
-                }
-              />
-            ))}
+            {saves.map((save) => {
+              const selectable = comparing && save.status === 'ready';
+              return (
+                <SaveCard
+                  key={save.id}
+                  save={save}
+                  onPress={
+                    selectable
+                      ? () => toggleCompareSelection(save.id)
+                      : () => router.push({ pathname: '/save/[id]', params: { id: save.id } })
+                  }
+                  onLongPress={
+                    isWorkoutGroup && !comparing && save.status === 'ready'
+                      ? () => {
+                          setComparing(true);
+                          toggleCompareSelection(save.id);
+                        }
+                      : undefined
+                  }
+                  selectionMode={comparing && save.status === 'ready'}
+                  selected={compareIds.has(save.id)}
+                  trailing={
+                    save.status === 'ready' ? undefined : (
+                      <AppText variant="caption" tone="faint">
+                        {STATUS_LABELS[save.status]}
+                      </AppText>
+                    )
+                  }
+                />
+              );
+            })}
           </View>
         ) : (
           <Card>
@@ -224,5 +291,33 @@ export function GroupDetailScreen({ id }: { id: string }) {
         )}
       </Reveal>
     </Screen>
+    {comparing ? (
+      <View
+        style={{
+          position: 'absolute',
+          left: spacing.lg,
+          right: spacing.lg,
+          bottom: spacing.xl,
+        }}
+      >
+        <Card
+          radius={radius.lg}
+          onPress={compareIds.size >= 2 ? () => router.push({ pathname: '/compare-workouts', params: { ids: [...compareIds].join(',') } }) : undefined}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: spacing.sm,
+            backgroundColor: compareIds.size >= 2 ? palette.accent : palette.surfaceVariant,
+          }}
+        >
+          <Glyph name="activity" size={16} weight={2} color={compareIds.size >= 2 ? palette.background : palette.textFaint} />
+          <AppText variant="label" style={{ color: compareIds.size >= 2 ? palette.background : palette.textFaint }}>
+            {compareIds.size >= 2 ? `Compare ${compareIds.size} workouts` : 'Select at least 2'}
+          </AppText>
+        </Card>
+      </View>
+    ) : null}
+    </>
   );
 }

@@ -17,7 +17,7 @@ import { Touchable } from '@/components/Touchable';
 import { Discussion } from '@/components/Discussion';
 import { LifecycleStrip } from '@/components/LifecycleStrip';
 import { buildCardModel } from '@/saves/cardModel';
-import { buildDetailModel, type DetailField, type DetailObject } from '@/saves/detailModel';
+import { buildDetailModel, type DetailField, type DetailObject, type EntityStates } from '@/saves/detailModel';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { baseServings, scaleQuantity } from '@/saves/scaling';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
@@ -106,6 +106,7 @@ function Steps({ items }: { items: string[] }) {
 
 type ItemStates = Record<string, Record<string, unknown>> | undefined;
 type SetItemState = (itemPath: string, state: Record<string, unknown>) => void;
+type SetEntityState = (entityKey: string, state: Record<string, unknown>) => void;
 
 /** done/total across a checklist or a course's sections — Phase 4 §4.2. */
 function ProgressBar({ done, total }: { done: number; total: number }) {
@@ -368,17 +369,32 @@ function MapsButton({ url }: { url: string }) {
 function ObjectCards({
   objects,
   itemStates,
+  entityStates,
   onSetItemState,
+  onSetEntityState,
 }: {
   objects: NonNullable<DetailField['objects']>;
   itemStates: ItemStates;
+  entityStates: EntityStates;
   onSetItemState: SetItemState;
+  onSetEntityState: SetEntityState;
 }) {
   const { palette, radius, spacing } = useTheme();
   return (
     <View style={{ gap: spacing.smd }}>
       {objects.map((object: DetailObject, i) => {
-        const state = object.statePath ? itemStates?.[object.statePath] : undefined;
+        // K2 dual-read: entity state wins over item state when an object
+        // carries an entityKey (recommendation_list items only) — mirrors
+        // `detailModel.resolveObjectState`.
+        const state = object.entityKey
+          ? (entityStates?.[object.entityKey] ?? (object.statePath ? itemStates?.[object.statePath] : undefined))
+          : object.statePath
+            ? itemStates?.[object.statePath]
+            : undefined;
+        const applyChange = (next: Record<string, unknown>) => {
+          if (object.entityKey) onSetEntityState(object.entityKey, next);
+          else if (object.statePath) onSetItemState(object.statePath, next);
+        };
         return (
           <View
             key={`${object.title ?? 'item'}-${i}`}
@@ -412,16 +428,14 @@ function ObjectCards({
                 {row.items ? <Chips items={row.items} /> : <AppText variant="bodySmall">{row.text}</AppText>}
               </View>
             ))}
-            {object.control === 'check' && object.statePath ? (
+            {object.control === 'check' && (object.statePath || object.entityKey) ? (
               <CheckControl
                 done={state?.done === true}
-                onToggle={() =>
-                  onSetItemState(object.statePath as string, { ...state, done: state?.done !== true })
-                }
+                onToggle={() => applyChange({ ...state, done: state?.done !== true })}
               />
             ) : null}
-            {object.control === 'watch' && object.statePath ? (
-              <WatchControl state={state} onChange={(s) => onSetItemState(object.statePath as string, s)} />
+            {object.control === 'watch' && (object.statePath || object.entityKey) ? (
+              <WatchControl state={state} onChange={applyChange} />
             ) : null}
             {object.restLabel ? <RestTimer label={object.restLabel} /> : null}
             {object.mapsUrl ? <MapsButton url={object.mapsUrl} /> : null}
@@ -435,11 +449,15 @@ function ObjectCards({
 function Field({
   field,
   itemStates,
+  entityStates,
   onSetItemState,
+  onSetEntityState,
 }: {
   field: DetailField;
   itemStates: ItemStates;
+  entityStates: EntityStates;
   onSetItemState: SetItemState;
+  onSetEntityState: SetEntityState;
 }) {
   const { spacing } = useTheme();
   return (
@@ -447,7 +465,13 @@ function Field({
       <SectionLabel>{field.label}</SectionLabel>
       {field.progress ? <ProgressBar done={field.progress.done} total={field.progress.total} /> : null}
       {field.style === 'objects' && field.objects ? (
-        <ObjectCards objects={field.objects} itemStates={itemStates} onSetItemState={onSetItemState} />
+        <ObjectCards
+          objects={field.objects}
+          itemStates={itemStates}
+          entityStates={entityStates}
+          onSetItemState={onSetItemState}
+          onSetEntityState={onSetEntityState}
+        />
       ) : field.style === 'steps' && field.items ? (
         <Steps items={field.items} />
       ) : field.items ? (
@@ -760,6 +784,11 @@ export function SaveDetailScreen({ id }: { id: string }) {
   const [loading, setLoading] = useState(!cached);
   const [showSpaceSheet, setShowSpaceSheet] = useState(false);
   const [cookModeOpen, setCookModeOpen] = useState(false);
+  // K2: this save's items' K2 entity state, keyed by Entities.key's output —
+  // fetched separately because it lives on the collection endpoint's merged
+  // entity payload, not on SaveResponse. Only recommendation_list has any
+  // entity-keyed control today.
+  const [entityStates, setEntityStates] = useState<EntityStates>(undefined);
 
   const load = useCallback(async () => {
     setError(null);
@@ -775,6 +804,34 @@ export function SaveDetailScreen({ id }: { id: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // K2: once the save's own type is known, fetch every entity of that type
+  // to pick up this save's own items' entity state — the same "state joined
+  // into K1's entity payload" reasoning `GET /v1/collections/{type}` already
+  // follows, reused here rather than inventing a second read path.
+  const knowledgeType = save?.knowledgeType;
+  useEffect(() => {
+    if (knowledgeType !== 'recommendation_list') return;
+    let cancelled = false;
+    repo
+      .listCollectionEntities('recommendation_list')
+      .then((entities) => {
+        if (cancelled) return;
+        const map: Record<string, Record<string, unknown>> = {};
+        for (const entity of entities) {
+          if (entity.state) map[entity.entityKey] = entity.state;
+        }
+        setEntityStates(map);
+      })
+      .catch(() => {
+        // Silent, same as RelatedRail: a missing watch-state overlay is not
+        // worth an error card on an otherwise-successful save view — the
+        // controls just fall back to item state (or unset) until it loads.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [knowledgeType]);
 
   /**
    * The one handler behind every knowledge type's object behavior. Optimistic
@@ -804,7 +861,33 @@ export function SaveDetailScreen({ id }: { id: string }) {
     [id, patch, load],
   );
 
-  const model = save ? buildDetailModel(save) : null;
+  /**
+   * K2's counterpart to `setItemState` — watched/rating for a
+   * `recommendation_list` item, keyed by entity rather than by this save's
+   * item path, so it survives the same title appearing in a later save.
+   * Same optimistic shape: flip local state, PATCH, adopt the echo, reload
+   * the entity list on failure rather than guessing what to revert to.
+   */
+  const setEntityState = useCallback((entityKey: string, state: Record<string, unknown>) => {
+    setEntityStates((current) => ({ ...(current ?? {}), [entityKey]: state }));
+    repo.setEntityState(entityKey, state).then(
+      (echoed) => setEntityStates((current) => ({ ...(current ?? {}), [entityKey]: echoed })),
+      () => {
+        repo
+          .listCollectionEntities('recommendation_list')
+          .then((entities) => {
+            const map: Record<string, Record<string, unknown>> = {};
+            for (const entity of entities) {
+              if (entity.state) map[entity.entityKey] = entity.state;
+            }
+            setEntityStates(map);
+          })
+          .catch(() => {});
+      },
+    );
+  }, []);
+
+  const model = save ? buildDetailModel(save, entityStates) : null;
   const isRecipe = save?.knowledgeType === 'recipe';
   // Ingredients render through `RecipeIngredients` for recipes (it needs the
   // raw structured shape to scale by servings) rather than the model's
@@ -991,7 +1074,13 @@ export function SaveDetailScreen({ id }: { id: string }) {
           {model ? (
             displayFields.map((field, i) => (
               <Reveal key={field.label} index={3 + i}>
-                <Field field={field} itemStates={save.itemStates} onSetItemState={setItemState} />
+                <Field
+                  field={field}
+                  itemStates={save.itemStates}
+                  entityStates={entityStates}
+                  onSetItemState={setItemState}
+                  onSetEntityState={setEntityState}
+                />
               </Reveal>
             ))
           ) : (

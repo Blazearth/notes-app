@@ -90,7 +90,10 @@ class TmdbEnricherTest {
                 .containsEntry("rating", "8.1/10")
                 .containsEntry("genre", List.of("drama", "history", "thriller"))
                 .containsEntry("posterUrl", "https://image.tmdb.org/t/p/w500/abc.jpg")
-                .containsEntry("tmdbUrl", "https://www.themoviedb.org/movie/872585");
+                .containsEntry("tmdbUrl", "https://www.themoviedb.org/movie/872585")
+                // K4: the canonical id collections merge on — Entities.key
+                // prefers "tmdb:<id>" over the string key once this lands.
+                .containsEntry("tmdbId", "872585");
         server.verify();
     }
 
@@ -153,6 +156,7 @@ class TmdbEnricherTest {
         assertThat(found.get())
                 .containsEntry("year", "2022")
                 .containsEntry("tmdbUrl", "https://www.themoviedb.org/tv/136315")
+                .containsEntry("tmdbId", "136315")
                 .as("a series has creators, not one director — better empty than an episode director")
                 .doesNotContainKey("director");
     }

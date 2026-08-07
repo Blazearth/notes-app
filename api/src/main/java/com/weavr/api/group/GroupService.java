@@ -11,6 +11,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
+import com.weavr.api.common.KnowledgeFacets;
 import com.weavr.api.save.Save;
 import com.weavr.api.save.SaveRepository;
 import com.weavr.api.save.SaveStatus;
@@ -33,8 +34,8 @@ import org.springframework.transaction.annotation.Transactional;
  *       was already produced by the single classify call each save gets. This is
  *       genuinely AI-derived organisation with no AI request of its own, which
  *       is the only kind this app can afford per-user.</li>
- *   <li>Adding a facet level is a change to {@link #FACETS} and nothing
- *       else.</li>
+ *   <li>Adding a facet level is a change to {@link KnowledgeFacets#FACETS} and
+ *       nothing else.</li>
  * </ul>
  *
  * <p>The tradeoff is a full read of the user's finished saves per request. That
@@ -44,55 +45,6 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class GroupService {
-
-    /**
-     * Which extracted field subdivides each knowledge type.
-     *
-     * <p>Chosen because the value is a <em>closed-ish vocabulary the model
-     * already emits</em> — cuisines and genres repeat across saves, so they
-     * cluster. `category` is now the primary facet for article/product/other/workout
-     * since it uses a controlled vocabulary (10-15 values), preventing the
-     * tag-per-save explosion that free-text `tags` caused.
-     */
-    private static final Map<String, String> FACETS = Map.ofEntries(
-            Map.entry("recipe", "cuisine"),
-            Map.entry("restaurant", "cuisine"),
-            Map.entry("movie", "genre"),
-            Map.entry("book", "genre"),
-            Map.entry("place", "cuisine"),
-            Map.entry("article", "category"),
-            Map.entry("product", "category"),
-            Map.entry("workout", "category"),
-            Map.entry("other", "category"),
-            Map.entry("recommendation_list", "medium"),
-            Map.entry("checklist", "category"),
-            Map.entry("itinerary", "destination"),
-            Map.entry("course", "subject"),
-            Map.entry("github_repo", "language"));
-
-    /**
-     * Product-facing names for the types the registry emits.
-     *
-     * <p>Anything absent falls back to a title-cased version of the raw type,
-     * because {@code knowledge_type} is free text from the model — a type this
-     * map has never heard of must still get a sensible folder rather than
-     * disappearing from the library.
-     */
-    private static final Map<String, String> DISPLAY_NAMES = Map.ofEntries(
-            Map.entry("recipe", "Recipes"),
-            Map.entry("movie", "Watchlist"),
-            Map.entry("place", "Places"),
-            Map.entry("restaurant", "Restaurants"),
-            Map.entry("product", "Shopping"),
-            Map.entry("article", "Reading"),
-            Map.entry("workout", "Workouts"),
-            Map.entry("book", "Books"),
-            Map.entry("other", "Other"),
-            Map.entry("recommendation_list", "Recommendations"),
-            Map.entry("checklist", "Checklists"),
-            Map.entry("itinerary", "Itineraries"),
-            Map.entry("course", "Courses"),
-            Map.entry("github_repo", "Repos"));
 
     /** Separates the type segment from the facet segment in an id. */
     private static final String ID_SEPARATOR = "~";
@@ -177,7 +129,7 @@ public class GroupService {
     // ------------------------------------------------------------------ internals
 
     private static GroupNode buildTypeGroup(String type, List<SaveFacts> typeSaves, int minGroupSize) {
-        String facetField = FACETS.get(type);
+        String facetField = KnowledgeFacets.FACETS.get(type);
 
         Map<String, List<SaveFacts>> byFacet = new LinkedHashMap<>();
         // LinkedHashSet: insertion-ordered and deduplicates saves that appear
@@ -211,7 +163,7 @@ public class GroupService {
             if (facetSaves.size() >= minGroupSize) {
                 subgroups.add(GroupNode.of(
                         type + ID_SEPARATOR + slug(value),
-                        titleCase(value),
+                        KnowledgeFacets.titleCase(value),
                         null,
                         List.of(),
                         facetSaves.stream().map(SaveFacts::id).toList()));
@@ -222,7 +174,7 @@ public class GroupService {
             }
         });
 
-        return GroupNode.of(type, displayName(type), null, subgroups, List.copyOf(loose));
+        return GroupNode.of(type, KnowledgeFacets.displayName(type), null, subgroups, List.copyOf(loose));
     }
 
     /** Pulls a facet as a list, tolerating both a string and an array of them. */
@@ -273,19 +225,9 @@ public class GroupService {
         return type.trim().toLowerCase(Locale.ROOT);
     }
 
-    private static String displayName(String type) {
-        return DISPLAY_NAMES.getOrDefault(type, titleCase(type));
-    }
-
     /** URL-safe and stable: the same facet value always yields the same id. */
     private static String slug(String value) {
         return value.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-")
                 .replaceAll("(^-|-$)", "");
-    }
-
-    private static String titleCase(String value) {
-        String trimmed = value.trim();
-        if (trimmed.isEmpty()) return trimmed;
-        return Character.toUpperCase(trimmed.charAt(0)) + trimmed.substring(1);
     }
 }

@@ -16,6 +16,8 @@
 
 import type {
   ActivityEntry,
+  CollectionEntityResponse,
+  CollectionNodeResponse,
   CreateSaveRequest,
   DigestResponse,
   DuplicateSuggestion,
@@ -119,6 +121,33 @@ export interface Repository {
    * subtree, which is what a search or a count over the group needs.
    */
   listGroupSaves(id: string, deep?: boolean): Promise<SaveResponse[]>;
+
+  /**
+   * The Library's collections spine (K1-K3) — type -> facet, distinct
+   * entity/source/done counts, no entity payload. Only the three
+   * item-bearing list types (`recommendation_list`, `itinerary`,
+   * `checklist`) produce a node.
+   */
+  listCollections(): Promise<CollectionNodeResponse[]>;
+  /** The merged entity list for one type, each with its own K2 state joined in. */
+  listCollectionEntities(type: string, facet?: string): Promise<CollectionEntityResponse[]>;
+  /**
+   * Watched/rating/done for a merged entity, keyed by `entityKey` rather
+   * than a save's `itemPath` — survives the same entity appearing in a
+   * later save. Always a full replace, never a merge.
+   */
+  setEntityState(entityKey: string, state: Record<string, unknown>): Promise<Record<string, unknown>>;
+
+  /**
+   * K4's curation over the derived collection view — manual merge (the
+   * alias fix when no canonical id resolves it automatically), rename.
+   * Applied server-side as a post-processing step over the pure merge core,
+   * so a merge/rename shows up the next time collections are re-fetched.
+   */
+  mergeEntities(fromKey: string, intoKey: string): Promise<void>;
+  unmergeEntity(fromKey: string): Promise<void>;
+  renameEntity(entityKey: string, name: string): Promise<void>;
+  renameCollection(collectionId: string, name: string): Promise<void>;
 }
 
 /**

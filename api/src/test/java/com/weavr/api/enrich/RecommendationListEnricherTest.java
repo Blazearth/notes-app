@@ -47,6 +47,7 @@ class RecommendationListEnricherTest {
     void addsAPosterToAScreenKindItemThatMatches() {
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://api.themoviedb.org/3/search/multi")))
                 .andRespond(withSuccess(multiResponse(Map.of(
+                        "id", 72785,
                         "media_type", "movie",
                         "title", "Dune",
                         "release_date", "2021-10-21",
@@ -59,7 +60,35 @@ class RecommendationListEnricherTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> items = (List<Map<String, Object>>) found.get().get("items");
         assertThat(items).hasSize(1);
-        assertThat(items.get(0)).containsEntry("posterUrl", "https://image.tmdb.org/t/p/w500/dune.jpg");
+        assertThat(items.get(0))
+                .containsEntry("posterUrl", "https://image.tmdb.org/t/p/w500/dune.jpg")
+                // K4: the canonical id Entities.key prefers over the string key.
+                .containsEntry("tmdbId", "72785");
+    }
+
+    /**
+     * K4: the canonical id resolves aliases regardless of whether TMDB also
+     * had a poster for this match — a poster-less match still identifies the
+     * entity, so it must not be dropped the way an empty addition used to be.
+     */
+    @Test
+    void stillRecordsTheCanonicalIdWhenThereIsNoPoster() {
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://api.themoviedb.org/3/search/multi")))
+                .andRespond(withSuccess(multiResponse(new java.util.LinkedHashMap<>(Map.of(
+                        "id", 72785,
+                        "media_type", "movie",
+                        "title", "Dune",
+                        "release_date", "2021-10-21"))), MediaType.APPLICATION_JSON));
+
+        Optional<Map<String, Object>> found = enricher.enrich(Map.of(
+                "items", List.of(Map.of("name", "Dune", "kind", "film", "year", "2021", "reason", "epic"))));
+
+        assertThat(found).isPresent();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) found.get().get("items");
+        assertThat(items.get(0))
+                .containsEntry("tmdbId", "72785")
+                .doesNotContainKey("posterUrl");
     }
 
     /** Books, games and other non-screen kinds must never spend a TMDB request. */

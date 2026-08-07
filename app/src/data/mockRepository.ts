@@ -15,6 +15,8 @@
 
 import type {
   ActivityEntry,
+  CollectionEntityResponse,
+  CollectionNodeResponse,
   CreateSaveRequest,
   DigestResponse,
   DuplicateSuggestion,
@@ -31,6 +33,13 @@ import type {
   SpaceRole,
 } from '@/api/types';
 import { ApiError } from '@/api/client';
+import {
+  buildTree,
+  mergeType,
+  withDoneCount,
+  type CollectionOverrides,
+  type CollectionSaveFacts,
+} from '@/collections/merge';
 import { MOCK_LATENCY_MS } from './config';
 import {
   MOCK_ACTIVITY,
@@ -86,6 +95,54 @@ const comments: Record<string, SaveComment[]> = copy(MOCK_COMMENTS);
 const shoppingList: ShoppingListResponse = copy(MOCK_SHOPPING_LIST);
 const votes: Record<string, number> = {};
 const spaceSaves: Record<string, string[]> = { 'sp-japan': ['sv-02', 'sv-06'], 'sp-book': ['sv-10'] };
+/** K2 entity state, keyed by `Entities.key`'s output — mirrors `entity_states`. */
+const entityStates: Record<string, Record<string, unknown>> = {};
+
+/** K4c curation — mirrors `collection_overrides`. Chained merges are resolved to their final target on write, same as `CollectionOverrideService.resolveChains`. */
+const mergeRedirects: Record<string, string> = {};
+const entityNameOverrides: Record<string, string> = {};
+const collectionNameOverrides: Record<string, string> = {};
+
+/** Chases a chain of merges to its final target — mirrors `CollectionOverrideService.resolveChains`' cycle guard. */
+function resolveChain(key: string): string {
+  let current = key;
+  const seen = new Set<string>();
+  while (mergeRedirects[current] && !seen.has(current) && seen.size <= 32) {
+    seen.add(current);
+    current = mergeRedirects[current];
+  }
+  return current;
+}
+
+/** Every raw redirect resolved to its final target, computed fresh on every read — mirrors `CollectionOverrideService.loadFor`. */
+function currentOverrides(): CollectionOverrides {
+  const resolved: Record<string, string> = {};
+  Object.keys(mergeRedirects).forEach((key) => {
+    resolved[key] = resolveChain(key);
+  });
+  return { mergeRedirects: resolved, entityNames: { ...entityNameOverrides }, collectionNames: { ...collectionNameOverrides } };
+}
+
+/** `saves` reshaped into what `@/collections/merge`'s pure functions need — mirrors `CollectionService.loadReady`. */
+function readySaveFacts(): CollectionSaveFacts[] {
+  return saves
+    .filter((s) => s.status === 'ready')
+    .map((s) => ({
+      id: s.id,
+      knowledgeType: s.knowledgeType,
+      structuredData: s.structuredData ?? {},
+      createdAt: s.createdAt,
+    }));
+}
+
+/** Which entity keys the caller has marked `done: true` — mirrors `CollectionService.doneEntityKeys`. */
+function doneEntityKeys(): Set<string> {
+  const done = new Set<string>();
+  for (const [key, state] of Object.entries(entityStates)) {
+    if (state.done === true) done.add(key);
+  }
+  return done;
+}
 
 function requireSave(id: string): SaveResponse {
   const found = saves.find((s) => s.id === id);
@@ -467,6 +524,63 @@ export const mockRepository: Repository = {
       .map((saveId) => saves.find((s) => s.id === saveId))
       .filter((s): s is SaveResponse => s != null);
     return delay(copy(found));
+  },
+
+  // ----------------------------------------------------------- collections
+
+  /**
+   * Derived from `MOCK_SAVES` the same way the server derives it from
+   * `saves` — `@/collections/merge` is the pure port of `CollectionService`,
+   * so this exercises the real merge path (overlapping entities included)
+   * rather than a hand-authored, un-mergeable fixture tree like
+   * `MOCK_GROUPS`.
+   */
+  listCollections(): Promise<CollectionNodeResponse[]> {
+    const tree = buildTree(readySaveFacts(), undefined, currentOverrides());
+    const done = doneEntityKeys();
+    return delay(copy(tree.map((node) => withDoneCount(node, done))));
+  },
+
+  listCollectionEntities(type: string, facet?: string): Promise<CollectionEntityResponse[]> {
+    const merged = mergeType(readySaveFacts(), type, facet ?? null, currentOverrides());
+    const withState = merged.map((entity) =>
+      entityStates[entity.entityKey] ? { ...entity, state: entityStates[entity.entityKey] } : entity,
+    );
+    return delay(copy(withState));
+  },
+
+  setEntityState(entityKey: string, state: Record<string, unknown>): Promise<Record<string, unknown>> {
+    // Full replace, never a merge — the same rule setSaveItemState follows.
+    entityStates[entityKey] = state;
+    return delay(copy(state));
+  },
+
+  // ----------------------------------------------------- collection overrides (K4c)
+
+  mergeEntities(fromKey: string, intoKey: string): Promise<void> {
+    if (fromKey === intoKey) {
+      throw new ApiError('validation', 'Cannot merge an entity into itself.', 400);
+    }
+    // Stored raw; chains are resolved at read time by `currentOverrides`, the
+    // same split `CollectionOverrideService` makes between the upsert and
+    // `loadFor`'s chain-chasing.
+    mergeRedirects[fromKey] = intoKey;
+    return delay(undefined);
+  },
+
+  unmergeEntity(fromKey: string): Promise<void> {
+    delete mergeRedirects[fromKey];
+    return delay(undefined);
+  },
+
+  renameEntity(entityKey: string, name: string): Promise<void> {
+    entityNameOverrides[entityKey] = name;
+    return delay(undefined);
+  },
+
+  renameCollection(collectionId: string, name: string): Promise<void> {
+    collectionNameOverrides[collectionId] = name;
+    return delay(undefined);
   },
 };
 

@@ -142,12 +142,15 @@ class RecommendationListEnricher implements Enricher {
             if (year != null && date.length() >= 4 && !year.equals(date.substring(0, 4))) {
                 continue;
             }
-            String poster = candidate.path("poster_path").asString(null);
-            if (poster == null || poster.isBlank()) {
-                return Map.of();
-            }
             Map<String, Object> addition = new LinkedHashMap<>();
-            addition.put("posterUrl", IMAGE_BASE + poster);
+            // K4: the canonical id collections merge on — see TmdbEnricher's
+            // matching comment. Written even when there is no poster, since
+            // the id resolves aliases regardless of image availability.
+            addition.put("tmdbId", String.valueOf(candidate.path("id").asInt()));
+            String poster = candidate.path("poster_path").asString(null);
+            if (poster != null && !poster.isBlank()) {
+                addition.put("posterUrl", IMAGE_BASE + poster);
+            }
             return addition;
         }
         return Map.of();
