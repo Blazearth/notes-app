@@ -349,3 +349,5 @@ ships instead.
 3. Where does entity state live for Space-shared collections — is a shared
    watchlist's "watched by 2 of 3 members" worth surfacing? (Per-user state
    supports it read-side with no schema change; UI question only.)
+   *Now answered in depth by [knowledge-spaces.md](knowledge-spaces.md),
+   which builds the Space-scoped counterpart of this whole layer on K1/K2.*
