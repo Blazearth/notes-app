@@ -276,35 +276,142 @@ section's own instruction above.
   and `GET /v1/collections` showed the matching tree. Full backend suite
   green (365/365). Throwaway user and both seeded saves deleted afterward.
 
-### K2 — entity state
+### K2 — entity state — done, 2026-08-07
 
-`V13__entity_states.sql`, `EntityStateService` (JdbcClient, `ShoppingListService`
-style), the PATCH endpoint, state joined into K1's entity payload. App-side:
-the optimistic-update path reuses the `setItemState` pattern (flip local,
-PATCH, adopt echo, reload on failure); dual-read wiring for
-`recommendation_list` items; the watched/rating controls move from
-save-item-keyed to entity-keyed writes.
+`V13__entity_states.sql` (`user_id, entity_key` composite PK, same
+`set_updated_at` trigger + RLS-own-policy shape as V12), `EntityStateService`
+(`JdbcClient`, `ShoppingListService`/`SaveItemStateService` style — a batched
+`statesFor(userId, Collection<String>)` read plus a full-replace upsert, no
+access check beyond auth since an entity key references no row by FK),
+`PATCH /v1/entity-state` on a dedicated `EntityStateController` (not a method
+on `CollectionController` — that controller's own `@RequestMapping` would have
+forced the path under `/v1/collections/entity-state`, not the spec's
+top-level `/v1/entity-state`). `CollectionEntity` gained a `state` field and
+`CollectionNode` a `doneCount` field (0 from the pure builder, filled in by a
+second pass — `CollectionNode.withDoneCount` — once `CollectionService`'s
+instance methods have loaded state; the pure `mergeType`/`buildTree` stay
+database-free, unchanged).
 
-### K3 — the Library becomes collections-first
+App-side: `@/collections/entities.ts` and `@/collections/merge.ts` are hand-
+kept TypeScript ports of `Entities.key` and `CollectionService`'s merge core.
+Two different reasons drove them, not one — `merge.ts` lets `mockRepository`
+derive real `GET /v1/collections`-shaped data from `MOCK_SAVES` (the same way
+the server derives it from `saves`) instead of a hand-authored, un-mergeable
+fixture tree like `MOCK_GROUPS`; `entities.ts` alone is what `detailModel.ts`
+needs for its dual read. `SaveDetailScreen`'s `recommendationItemsField` now
+computes each item's `entityKey` and threads it onto `DetailObject`;
+`resolveObjectState` reads `entityState ?? itemState` (entity wins) and the
+watch/rating control's `onChange` now PATCHes `/v1/entity-state` instead of
+`/v1/saves/{id}/item-state` — the exact "watched/rating controls move from
+save-item-keyed to entity-keyed writes" the phase was scoped to.
+Checklist/course/workout completion is untouched, still item-path-only, per
+the doc's stored-state section above. `mockData.ts` gained two overlapping
+`recommendation_list` saves (`sv-11`/`sv-12`, sharing "Blue Box") so the merge
+path — not just a happy singleton — is exercised in mock mode too.
 
-The user-visible half, scoped to what K1/K2 serve:
+**Verified two ways, both real, neither mocked-only:**
 
-- Library's top level for entity-bearing types renders **collections**
-  ("Anime Watchlist — 27 anime · 12 watched · 8 remaining"), not save rows.
-  Other types keep today's presentation — do not force the metaphor onto
-  workout/course, per shape 3.
-- A collection screen: entities sectioned by state (Planning / Watching /
-  Completed for `screen` entities — derived from `state.status`/`done`, never
-  stored as sections), each entity showing poster, merged meta, source count.
-- An entity detail sheet: every source's reason *attributed to its source*,
-  and a Sources rail of the original saves — tap-through to the save detail,
-  which is where "open the original Reel" already works. The save detail
-  screen is unchanged; it is now the provenance view.
-- Verification bar, per repo convention: model logic executed standalone
-  under node (old-shape fixtures included — a pre-K1 `recommendation_list`
-  save must render), headless Chrome with `USE_MOCK_DATA` for the screens,
-  mock fixtures extended with overlapping entities so the merge path is
-  exercised, not just the happy singleton.
+- **Standalone under node** (this repo's standing technique): the TS `merge.ts`
+  port, run directly against the same normalize spec `EntitiesTest.java`
+  pins (all 7 real K0 titles → distinct keys) and against the `sv-11`/`sv-12`
+  fixture — 3 distinct entities from 4 occurrences, Blue Box's year resolving
+  to the one non-`[unclear]` source, genre unioned, both reasons kept
+  unblended per source, `entityCount` equal to the merged list's length (the
+  K1 exit criterion, now checked in two languages), `withDoneCount` counting
+  exactly the one entity marked done.
+- **Live against Supabase**, the same throwaway-user methodology K1 used: a
+  fresh admin-API user (never `/auth/v1/signup`), two saves seeded directly
+  into `saves` sharing a "Blue Box" item. `GET /v1/collections` returned
+  `entityCount: 2, doneCount: 0, sourceCount: 2` before any state was set;
+  `PATCH /v1/entity-state {entityKey: "screen:blue box", state: {done: true,
+  rating: 5}}` returned `200` with the written state; a second `GET
+  /v1/collections` showed `doneCount: 1`, and `GET
+  /v1/collections/recommendation_list` showed the same entity carrying
+  `state: {done: true, rating: 5}` — the whole write-then-join round trip,
+  against the real database, not a mock. Flyway's own log confirmed `V13`
+  applied cleanly (`Migrating schema "public" to version "13 - entity
+  states"` → `Successfully applied 1 migration`). Throwaway user, both saves,
+  and the one `entity_states` row were all deleted afterward; a follow-up
+  query confirmed zero rows left under that user id in `saves`,
+  `entity_states`, and `profiles`.
+
+Backend suite green (373/373 — 8 new: `EntityStateServiceTest` mirrors
+`SaveItemStateServiceTest`'s mocked-`JdbcClient` style since there is still no
+local Postgres to run the real upsert against in-suite; `CollectionServiceTest`
+gained three pure tests pinning `state` staying `null` from the merge core,
+`doneCount` staying 0 from the pure builder, and `withDoneCount`'s
+distinct-entity counting).
+
+### K3 — the Library becomes collections-first — done, 2026-08-07
+
+The user-visible half, scoped to exactly what K1/K2 serve:
+
+- **Library's top level for entity-bearing types renders collections, not
+  save rows.** `LibraryScreen` fetches `GET /v1/collections` alongside its
+  existing `useSaves()` feed and renders one `CollectionCard` per top-level
+  node ("Recommendations — 3 titles · 1 watched · 2 sources") in a new
+  Collections section. Any `knowledgeType` that produced a node is then
+  excluded from the "By type" tiles, the filter chips, and the flat
+  "Everything" list — those saves are represented by the collection card now,
+  not as individual rows — **except** a type that produced *no* node (every
+  item's name was `[unclear]`) still falls through to the ordinary flat
+  presentation, so a save is never simply dropped from the Library. Other
+  types (workout/course/etc., shapes 2 and 3) are entirely unaffected, per
+  shape 3's own instruction not to force the metaphor onto them.
+- **A collection screen** (`/collection/[type]`, `CollectionDetailScreen`,
+  `slide_from_right` like `group/[id]`): entities sectioned into "Remaining"
+  and a done-noun section ("Watched" for recommendation_list, "Done" for
+  checklist), derived from `state.done` at render time, never stored as a
+  section. The doc's original three-way Planning/Watching/Completed split
+  for `screen` entities was scoped down to a two-way Remaining/Done split
+  during implementation: nothing anywhere writes a `state.status` field
+  (`WatchControl` only ever writes `done`/`rating`), so a three-way section
+  would have had no way to populate its middle bucket — building UI for a
+  field nothing produces is exactly the kind of invented affordance this
+  repo's conventions warn against. Revisit if a future phase adds a `status`
+  write.
+- **An entity detail sheet**: every source's own `reason` attributed to its
+  own source (never blended — confirmed rendering as two separate cards in
+  the live headless-Chrome run below), each with an "Open source" link to
+  `/save/[id]` — the save detail screen is unchanged, and is now explicitly
+  the provenance view. Implemented as a plain React Native `Modal` driven by
+  local component state rather than the shared `Sheet` chrome: `Sheet`'s
+  `dismiss` calls `router.back()`, which assumes the sheet is its own pushed
+  route — this one opens from an entity already held in the collection
+  screen's own fetched list, so a route (and the entity-key path-encoding
+  it would need, since keys contain `:` and spaces) buys nothing.
+  `PATCH /v1/entity-state` from this sheet needs no dual-read fallback the
+  way the save detail screen's does — the collection screen is a brand-new
+  surface with no legacy `save_item_states` to migrate away from, so it
+  reads and writes entity state directly.
+- **Mark-done/rate is generic across all three wired types** — `toggleDone`/
+  `rate` in `CollectionDetailScreen` call `repo.setEntityState` regardless of
+  `type`, since `PATCH /v1/entity-state` has no type-specific validation
+  server-side. The 1–5 star row is gated to `recommendation_list` only
+  (`collectionTypeMeta(type).ratable`), so a checklist task doesn't get a
+  meaningless rating control.
+
+**Verified live, driven not just screenshotted**, per `docs/testing.md`'s CDP
+recipe, against `USE_MOCK_DATA = true` (flipped locally, never committed —
+the pre-commit hook forces it back regardless) and the `sv-11`/`sv-12` mock
+fixtures: Home → tap Library → the Collections section shows "Recommendations
+— 3 titles · 2 sources" with the two saves already gone from "By type" and
+"Everything" → tap through to the collection screen, all three entities under
+"Remaining", Blue Box correctly showing "2 sources" → tap Blue Box, the sheet
+shows both reasons in separate cards, each with its own "Open source" →
+tap "Mark watched" → the collection screen's own header updates live to "1
+watched", Blue Box moves to a new "Watched" section with a check icon → tap
+"Open source" on one of Blue Box's sources → lands on that save's own detail
+screen, where the *same* Blue Box item (a different `items[]` entry, from a
+different save, never itself touched) already shows "Watched" — the K2
+dual-read working end-to-end, not just unit-tested. Six screenshots, not one.
+
+Verification bar, all met: model logic executed standalone under node
+(above), headless Chrome for the screens (above), mock fixtures extended with
+overlapping entities so the merge path was exercised rather than the happy
+singleton (above), and — beyond what the phase originally asked for — a real
+live-Supabase round trip for K2's write path, matching K1's own bar rather
+than settling for K2 being "mocked but not proven."
 
 ### K4 — identity upgrades (each independent)
 

@@ -19,6 +19,13 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *
  * @param entityCount the whole subtree's distinct entities, not
  *                     {@code entityKeys.size()} — see {@link #of}
+ * @param doneCount   the whole subtree's distinct entities whose K2 state has
+ *                     {@code done: true} — 0 from the pure {@link #of}
+ *                     factory, which has no database; {@code CollectionService
+ *                     .listCollections} fills it in with a second pass once
+ *                     state is loaded. See {@code docs/knowledge-collections.md}
+ *                     ("API surface")'s {@code {name, entityCount, doneCount,
+ *                     sourceCount}} shape.
  * @param sourceCount the whole subtree's distinct saves feeding it
  * @param entityKeys  entity keys held directly at this level
  * @param saveIds     save ids held directly at this level
@@ -29,6 +36,7 @@ public record CollectionNode(
         String name,
         String description,
         int entityCount,
+        int doneCount,
         int sourceCount,
         List<CollectionNode> subgroups,
         List<String> entityKeys,
@@ -41,6 +49,11 @@ public record CollectionNode(
      * disagree on {@code medium}), and summing children over-counts it. A
      * collection is asked how many things are in it, not how many places it
      * was filed.
+     *
+     * <p>{@code doneCount} starts at 0 here — this factory is called from the
+     * pure, database-free merge core, which has no state to count. {@link
+     * CollectionService#listCollections} rebuilds the tree with the real
+     * count once it has loaded state, via {@link #withDoneCount}.
      */
     public static CollectionNode of(String id, String name, String description,
                                      List<CollectionNode> subgroups,
@@ -48,8 +61,30 @@ public record CollectionNode(
         Set<String> distinctEntities = new LinkedHashSet<>(entityKeys);
         Set<UUID> distinctSaves = new LinkedHashSet<>(saveIds);
         subgroups.forEach(child -> collectInto(child, distinctEntities, distinctSaves));
-        return new CollectionNode(id, name, description, distinctEntities.size(), distinctSaves.size(),
+        return new CollectionNode(id, name, description, distinctEntities.size(), 0, distinctSaves.size(),
                 subgroups, entityKeys, saveIds);
+    }
+
+    /** Every distinct entity key anywhere in this subtree — used to compute {@code doneCount} against loaded state. */
+    public Set<String> allEntityKeys() {
+        Set<String> out = new LinkedHashSet<>();
+        collectInto(this, out, new LinkedHashSet<>());
+        return out;
+    }
+
+    /**
+     * Rebuilds this subtree with {@code doneCount} filled in from a set of
+     * entity keys already known to be done — the same distinct-not-summed
+     * rule {@link #of} applies to {@code entityCount}, applied to a second
+     * property computed from data {@link #of} never had.
+     */
+    public CollectionNode withDoneCount(Set<String> doneEntityKeys) {
+        List<CollectionNode> rebuiltSubgroups = subgroups.stream()
+                .map(child -> child.withDoneCount(doneEntityKeys))
+                .toList();
+        int done = (int) allEntityKeys().stream().filter(doneEntityKeys::contains).count();
+        return new CollectionNode(id, name, description, entityCount, done, sourceCount,
+                rebuiltSubgroups, entityKeys, saveIds);
     }
 
     private static void collectInto(CollectionNode node, Set<String> entities, Set<UUID> saves) {

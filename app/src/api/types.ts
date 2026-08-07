@@ -270,3 +270,53 @@ export interface KnowledgeGroupResponse {
   subgroups: KnowledgeGroupResponse[];
   saveIds: string[];
 }
+
+/**
+ * `CollectionController.CollectionNode` — a node in the collection tree,
+ * `KnowledgeGroupResponse`'s counterpart one level further merged: a leaf
+ * holds distinct entity keys instead of save ids.
+ *
+ * Recursive on purpose, same reasoning as groups. Derived server-side per
+ * request from each save's `knowledgeType` and its extracted items, so it
+ * costs no Gemini request and cannot disagree with the saves inside it.
+ */
+export interface CollectionNodeResponse {
+  id: string;
+  name: string;
+  description?: string;
+  /** The whole subtree, not `entityKeys.length`. */
+  entityCount: number;
+  /** The whole subtree's entities with K2 state `done: true` — 0 until any entity in it is marked done. */
+  doneCount: number;
+  /** The whole subtree's distinct saves feeding it. */
+  sourceCount: number;
+  subgroups: CollectionNodeResponse[];
+  entityKeys: string[];
+  saveIds: string[];
+}
+
+/** `CollectionEntity.Source` — one source's own, un-merged copy of an item. */
+export interface CollectionSource {
+  saveId: string;
+  savedAt: string;
+  item: Record<string, unknown>;
+}
+
+/**
+ * `CollectionController.CollectionEntity` — a merged entity: a thing the
+ * user is collecting, appearing in one or more sources. See
+ * `docs/knowledge-collections.md` ("What merging produces per entity").
+ */
+export interface CollectionEntityResponse {
+  entityKey: string;
+  name: string;
+  kind: string;
+  /** Every other item field, rolled up: a list unions across sources, a scalar takes the first non-`[unclear]` value. */
+  fields: Record<string, unknown>;
+  /** Each source's own, un-merged copy of the item — `reason` from one save is never blended with another's. */
+  sources: CollectionSource[];
+  /** Distinct saves this entity appears in — "recommended in 3 saves," literally. */
+  sourceCount: number;
+  /** The caller's own K2 entity state (`done`, `rating`, …) — absent when never touched. */
+  state?: Record<string, unknown>;
+}

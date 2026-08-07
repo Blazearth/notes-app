@@ -364,6 +364,84 @@ export const MOCK_SAVES: SaveResponse[] = [
     createdAt: daysAgo(11),
     updatedAt: daysAgo(9),
   },
+  {
+    id: 'sv-11',
+    sourceType: 'url',
+    sourceUrl: 'https://www.tiktok.com/@anime/video/romance-top-5',
+    status: 'ready',
+    favorite: false,
+    archived: false,
+    knowledgeType: 'recommendation_list',
+    confidence: 0.94,
+    lifecycleStatus: 'saved',
+    // K2/K3 fixture: shares "Blue Box" with sv-12 below, so the mock
+    // collections merge path (@/collections/merge) has a real overlapping
+    // entity to exercise — not just the happy singleton. Mirrors the two
+    // real dev-database saves K0 measured (docs/knowledge-collections.md).
+    structuredData: {
+      title: 'Top 5 Romance Anime This Season',
+      medium: 'anime',
+      summary: 'Five picks if you want the slow-burn kind, not the confession-in-episode-one kind.',
+      orderMatters: 'no',
+      items: [
+        {
+          name: 'Blue Box',
+          kind: 'anime',
+          year: '2024',
+          genre: ['romance', 'sports'],
+          reason: 'Best enemies-to-lovers arc this year',
+          platform: 'Crunchyroll',
+        },
+        {
+          name: 'Call of the Night',
+          kind: 'anime',
+          year: '2022',
+          genre: ['romance', 'comedy'],
+          reason: 'Slower pace, more atmosphere than plot',
+          platform: 'HIDIVE',
+        },
+      ],
+    },
+    createdAt: daysAgo(1),
+    updatedAt: daysAgo(1),
+  },
+  {
+    id: 'sv-12',
+    sourceType: 'url',
+    sourceUrl: 'https://www.instagram.com/reel/anime-watchlist-2026',
+    status: 'ready',
+    favorite: false,
+    archived: false,
+    knowledgeType: 'recommendation_list',
+    confidence: 0.9,
+    lifecycleStatus: 'saved',
+    structuredData: {
+      title: 'Underrated Romance Anime Nobody Talks About',
+      medium: 'anime',
+      summary: 'Deep cuts from a Reel with 40k likes and zero mainstream coverage.',
+      orderMatters: 'no',
+      items: [
+        {
+          name: 'Blue Box',
+          kind: 'anime',
+          year: '[unclear]',
+          genre: ['romance'],
+          reason: 'Underrated gem, criminally low ratings',
+          platform: '[unclear]',
+        },
+        {
+          name: 'The Fragrant Flower Blooms With Dignity',
+          kind: 'anime',
+          year: '2025',
+          genre: ['romance'],
+          reason: 'Two-episode short, but it lands',
+          platform: 'Crunchyroll',
+        },
+      ],
+    },
+    createdAt: hoursAgo(6),
+    updatedAt: hoursAgo(6),
+  },
 ];
 
 /** Where each save came from, for the "YouTube • Workout" line on Home. */
@@ -378,6 +456,8 @@ export const MOCK_SOURCE_LABELS: Record<string, string> = {
   'sv-08': 'Web',
   'sv-09': 'Note',
   'sv-10': 'Goodreads',
+  'sv-11': 'TikTok',
+  'sv-12': 'Instagram',
 };
 
 /** The category shown beside the source. Deliberately the *group* name. */
@@ -392,6 +472,8 @@ export const MOCK_CATEGORIES: Record<string, string> = {
   'sv-08': 'Reading',
   'sv-09': 'Shopping',
   'sv-10': 'Reading',
+  'sv-11': 'Watchlist',
+  'sv-12': 'Watchlist',
 };
 
 export const MOCK_SPACES: Space[] = [

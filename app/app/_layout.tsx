@@ -87,6 +87,11 @@ function Routes() {
             makes going a level deeper legible as travel rather than as the
             screen's contents being swapped underneath you. */}
         <Stack.Screen name="group/[id]" options={{ animation: 'slide_from_right' }} />
+        {/* K3: the Library's collections-first top level for entity-bearing
+            types. Not nested like group/[id] — a collection's entities are
+            leaves (their detail is the in-screen sheet, not another route),
+            so there is nothing to push onto itself. */}
+        <Stack.Screen name="collection/[type]" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="shopping-list" options={{ animation: 'slide_from_right' }} />
         {/* Search reads as a layer over the feed rather than a place you
             travel to, so it fades in where the others slide. */}

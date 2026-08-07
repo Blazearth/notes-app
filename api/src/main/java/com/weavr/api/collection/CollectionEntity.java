@@ -30,6 +30,12 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *                     with {@code reason} from Reel B
  * @param sourceCount  distinct saves this entity appears in — "recommended in
  *                     3 saves", literally, not a synthetic confidence score
+ * @param state        the caller's own K2 entity state ({@code done},
+ *                     {@code rating}, …), joined in at read time by
+ *                     {@code CollectionService.entities} — {@code null} (and
+ *                     so absent on the wire) when the caller has never
+ *                     touched this entity. Never produced by the pure merge
+ *                     functions themselves, which have no database.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CollectionEntity(
@@ -38,7 +44,8 @@ public record CollectionEntity(
         String kind,
         Map<String, Object> fields,
         List<Source> sources,
-        int sourceCount) {
+        int sourceCount,
+        Map<String, Object> state) {
 
     public record Source(UUID saveId, Instant savedAt, Map<String, Object> item) {}
 }

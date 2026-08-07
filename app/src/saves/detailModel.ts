@@ -1,4 +1,5 @@
 import type { SaveResponse } from '@/api/types';
+import { entityKey as computeEntityKey } from '@/collections/entities';
 
 /** One row inside a {@link DetailObject} — a labelled value or chip list. */
 export interface DetailObjectRow {
@@ -25,6 +26,17 @@ export interface DetailObject {
   statePath?: string;
   /** Which Phase 4 control this card shows, if any — see `docs/next-phases.md` §4.2. */
   control?: 'check' | 'watch';
+  /**
+   * K2: for a `recommendation_list` item, `Entities.key(kind, name)` —
+   * present alongside `statePath` so the control can dual-read (`entity
+   * state ?? item state`, entity wins) and, once touched, write to
+   * `PATCH /v1/entity-state` instead of `PATCH /v1/saves/{id}/item-state`.
+   * Watched-ness is a property of the entity, not of this one save's
+   * mention of it. Absent for every other type — checklist/course/workout
+   * completion stays save-item-keyed per `docs/knowledge-collections.md`
+   * ("Stored state").
+   */
+  entityKey?: string;
   /** A workout exercise's raw `rest` text ("90s", "2 min") — renders a rest-timer button. */
   restLabel?: string;
   /** Pure URL construction from name + area/address — an "Open in Maps" button, no state. */
@@ -116,6 +128,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type ItemStates = Record<string, Record<string, unknown>> | undefined;
+/** K2 entity state, keyed by `Entities.key`'s output — see `DetailObject.entityKey`. */
+export type EntityStates = Record<string, Record<string, unknown>> | undefined;
 
 /** Google Maps' web deep link — works from any platform without a native module. */
 function mapsUrl(query: string): string {
@@ -134,11 +148,33 @@ function mapsUrl(query: string): string {
 function checkProgress(
   objects: DetailObject[],
   itemStates: ItemStates,
+  entityStates?: EntityStates,
 ): { done: number; total: number } | undefined {
-  const trackable = objects.filter((o) => (o.control === 'check' || o.control === 'watch') && o.statePath);
+  const trackable = objects.filter(
+    (o) => (o.control === 'check' || o.control === 'watch') && (o.statePath || o.entityKey),
+  );
   if (!trackable.length) return undefined;
-  const done = trackable.filter((o) => itemStates?.[o.statePath as string]?.done === true).length;
+  const done = trackable.filter((o) => resolveObjectState(o, itemStates, entityStates)?.done === true).length;
   return { done, total: trackable.length };
+}
+
+/**
+ * K2 dual-read: entity state wins over item state when both exist for the
+ * same object — `docs/knowledge-collections.md` ("Stored state")'s
+ * migration rule. An object with no `entityKey` (every type but
+ * `recommendation_list`) falls straight through to item state, unchanged
+ * from Phase 4.
+ */
+function resolveObjectState(
+  object: DetailObject,
+  itemStates: ItemStates,
+  entityStates: EntityStates,
+): Record<string, unknown> | undefined {
+  if (object.entityKey) {
+    const fromEntity = entityStates?.[object.entityKey];
+    if (fromEntity) return fromEntity;
+  }
+  return object.statePath ? itemStates?.[object.statePath] : undefined;
 }
 
 /**
@@ -268,7 +304,11 @@ function exercisesField(value: unknown, itemStates: ItemStates): DetailField | n
  * watched-count progress bar on top, the same derivation `checkProgress`
  * already does for checklist ticks and course sections.
  */
-function recommendationItemsField(value: unknown, itemStates: ItemStates): DetailField | null {
+function recommendationItemsField(
+  value: unknown,
+  itemStates: ItemStates,
+  entityStates: EntityStates,
+): DetailField | null {
   if (!Array.isArray(value)) return null;
   const objects: DetailObject[] = [];
   value.forEach((raw, i) => {
@@ -288,12 +328,15 @@ function recommendationItemsField(value: unknown, itemStates: ItemStates): Detai
       meta: join([clean(raw.kind), clean(raw.year)]),
       rows,
       statePath: `items[${i}]`,
+      // K2: entity-keyed too, so watched/rating survives this same title
+      // appearing in a later save — see `DetailObject.entityKey`.
+      entityKey: computeEntityKey(clean(raw.kind), name),
       control: 'watch',
       imageUrl: clean(raw.posterUrl) ?? undefined,
     });
   });
   return objects.length
-    ? { label: 'Items', objects, style: 'objects', progress: checkProgress(objects, itemStates) }
+    ? { label: 'Items', objects, style: 'objects', progress: checkProgress(objects, itemStates, entityStates) }
     : null;
 }
 
@@ -472,7 +515,7 @@ function leftovers(data: Record<string, unknown>, knowledgeType: string): Detail
  * processing or that failed is a legitimate thing to open, and it must explain
  * itself instead of looking broken.
  */
-export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
+export function buildDetailModel(save: SaveResponse, entityStates?: EntityStates): SaveDetailModel | null {
   if (save.status !== 'ready' || !save.knowledgeType || !save.structuredData) return null;
   const d = save.structuredData;
   const type = save.knowledgeType;
@@ -603,7 +646,7 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
         lede: clean(d.summary) ?? undefined,
         fields: [
           ...compact([
-            recommendationItemsField(d.items, save.itemStates),
+            recommendationItemsField(d.items, save.itemStates, entityStates),
             suggestedOrder.length
               ? { label: 'Suggested order (estimated)', items: suggestedOrder, style: 'chips' as const }
               : null,

@@ -2,6 +2,8 @@ import { supabase } from '@/auth/supabase';
 import { API_BASE_URL } from './config';
 import type {
   ActivityEntry,
+  CollectionEntityResponse,
+  CollectionNodeResponse,
   CreateSaveRequest,
   DigestResponse,
   DuplicateSuggestion,
@@ -537,4 +539,51 @@ export function listGroupSaves(id: string, deep = false): Promise<SaveResponse[]
   return request<SaveResponse[]>(
     `/v1/groups/${encodeURIComponent(id)}/saves?deep=${deep ? 'true' : 'false'}`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Collections (K1-K3)
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /v1/collections` - the Library's collections spine: type -> facet, with
+ * distinct entity/source/done counts, no entity payload. Derived per request
+ * from each save's `knowledgeType` and its items, same reasoning as
+ * `listGroups`. Only the three item-bearing list types (`recommendation_list`,
+ * `itinerary`, `checklist`) produce a node - everything else keeps today's
+ * save-centric Library presentation.
+ */
+export function listCollections(): Promise<CollectionNodeResponse[]> {
+  return request<CollectionNodeResponse[]>('/v1/collections');
+}
+
+/**
+ * `GET /v1/collections/{type}` - the merged entity list for one type, each
+ * with every source's own un-merged item, a rolled-up view, and the caller's
+ * own K2 state joined in. `facet` narrows to one of the tree's subgroup
+ * values (matched loosely, the same slugging `CollectionNodeResponse` ids
+ * use) - omitted, it returns every entity of the type.
+ */
+export function listCollectionEntities(type: string, facet?: string): Promise<CollectionEntityResponse[]> {
+  const params = facet ? `?facet=${encodeURIComponent(facet)}` : '';
+  return request<CollectionEntityResponse[]>(`/v1/collections/${encodeURIComponent(type)}${params}`);
+}
+
+/**
+ * `PATCH /v1/entity-state` - watched/rating/done for a merged entity, keyed
+ * by `entityKey` rather than a save's `itemPath`, so it survives the same
+ * entity appearing in a later save. Always a full replace, never a merge -
+ * the same replace-don't-accumulate rule as `setSaveItemState`. No access
+ * check server-side beyond auth: an entity key names no row this user
+ * doesn't already have their own view of.
+ */
+export function setEntityState(
+  entityKey: string,
+  state: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>('/v1/entity-state', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entityKey, state }),
+  });
 }

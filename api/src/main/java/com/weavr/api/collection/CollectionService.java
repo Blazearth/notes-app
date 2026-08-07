@@ -8,6 +8,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import com.weavr.api.common.KnowledgeFacets;
@@ -76,25 +77,61 @@ public class CollectionService {
             LinkedHashSet<String> looseEntityKeys) {}
 
     private final SaveRepository saves;
+    private final EntityStateService entityStates;
 
-    CollectionService(SaveRepository saves) {
+    CollectionService(SaveRepository saves, EntityStateService entityStates) {
         this.saves = saves;
+        this.entityStates = entityStates;
     }
 
+    /**
+     * K2: the pure tree, then a second pass filling in each node's
+     * {@code doneCount} from the caller's own entity state — one batched
+     * query for every entity key in the tree, not one per node.
+     */
     @Transactional(readOnly = true)
     public List<CollectionNode> listCollections(UUID userId) {
-        return buildTree(loadReady(userId));
+        List<CollectionNode> tree = buildTree(loadReady(userId));
+        Set<String> allKeys = new LinkedHashSet<>();
+        tree.forEach(node -> allKeys.addAll(node.allEntityKeys()));
+        Set<String> doneKeys = doneEntityKeys(userId, allKeys);
+        return tree.stream().map(node -> node.withDoneCount(doneKeys)).toList();
     }
 
     /**
      * The merged entity list for one type, optionally filtered to a facet
-     * value. Viewer-scoped like every other read here — {@link #loadReady}
-     * only ever sees the caller's own saves, so there is no cross-user id to
-     * leak the way {@code relatedTo} guards against for a Space-shared save.
+     * value, each entity's K2 {@code state} joined in. Viewer-scoped like
+     * every other read here — {@link #loadReady} only ever sees the caller's
+     * own saves, so there is no cross-user id to leak the way {@code
+     * relatedTo} guards against for a Space-shared save.
      */
     @Transactional(readOnly = true)
     public List<CollectionEntity> entities(UUID userId, String type, String facet) {
-        return mergeType(loadReady(userId), type, facet);
+        List<CollectionEntity> merged = mergeType(loadReady(userId), type, facet);
+        if (merged.isEmpty()) {
+            return merged;
+        }
+        Map<String, Map<String, Object>> states =
+                entityStates.statesFor(userId, merged.stream().map(CollectionEntity::entityKey).toList());
+        return merged.stream()
+                .map(entity -> states.containsKey(entity.entityKey())
+                        ? new CollectionEntity(entity.entityKey(), entity.name(), entity.kind(), entity.fields(),
+                                entity.sources(), entity.sourceCount(), states.get(entity.entityKey()))
+                        : entity)
+                .toList();
+    }
+
+    /** Which of the given entity keys the caller has marked {@code done: true}. */
+    private Set<String> doneEntityKeys(UUID userId, Set<String> entityKeys) {
+        if (entityKeys.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> done = new LinkedHashSet<>();
+        entityStates.statesFor(userId, entityKeys)
+                .forEach((key, state) -> {
+                    if (Boolean.TRUE.equals(state.get("done"))) done.add(key);
+                });
+        return done;
     }
 
     private List<SaveFacts> loadReady(UUID userId) {
@@ -240,7 +277,10 @@ public class CollectionService {
         String kind = resolveKind(occurrences, shape.kindField(), shape.fixedKind());
         Map<String, Object> fields = rollupFields(occurrences, shape.nameField(), shape.kindField());
         List<CollectionEntity.Source> sources = resolveSources(occurrences);
-        return new CollectionEntity(entityKey, name, kind, fields, sources, sources.size());
+        // state is null here — the pure merge core has no database. Joined in
+        // by CollectionService.entities(), the only caller with access to
+        // EntityStateService.
+        return new CollectionEntity(entityKey, name, kind, fields, sources, sources.size(), null);
     }
 
     /** The most common surface form across sources; ties go to the earliest save. */

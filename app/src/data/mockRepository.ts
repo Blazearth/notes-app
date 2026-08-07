@@ -15,6 +15,8 @@
 
 import type {
   ActivityEntry,
+  CollectionEntityResponse,
+  CollectionNodeResponse,
   CreateSaveRequest,
   DigestResponse,
   DuplicateSuggestion,
@@ -31,6 +33,7 @@ import type {
   SpaceRole,
 } from '@/api/types';
 import { ApiError } from '@/api/client';
+import { buildTree, mergeType, withDoneCount, type CollectionSaveFacts } from '@/collections/merge';
 import { MOCK_LATENCY_MS } from './config';
 import {
   MOCK_ACTIVITY,
@@ -86,6 +89,29 @@ const comments: Record<string, SaveComment[]> = copy(MOCK_COMMENTS);
 const shoppingList: ShoppingListResponse = copy(MOCK_SHOPPING_LIST);
 const votes: Record<string, number> = {};
 const spaceSaves: Record<string, string[]> = { 'sp-japan': ['sv-02', 'sv-06'], 'sp-book': ['sv-10'] };
+/** K2 entity state, keyed by `Entities.key`'s output — mirrors `entity_states`. */
+const entityStates: Record<string, Record<string, unknown>> = {};
+
+/** `saves` reshaped into what `@/collections/merge`'s pure functions need — mirrors `CollectionService.loadReady`. */
+function readySaveFacts(): CollectionSaveFacts[] {
+  return saves
+    .filter((s) => s.status === 'ready')
+    .map((s) => ({
+      id: s.id,
+      knowledgeType: s.knowledgeType,
+      structuredData: s.structuredData ?? {},
+      createdAt: s.createdAt,
+    }));
+}
+
+/** Which entity keys the caller has marked `done: true` — mirrors `CollectionService.doneEntityKeys`. */
+function doneEntityKeys(): Set<string> {
+  const done = new Set<string>();
+  for (const [key, state] of Object.entries(entityStates)) {
+    if (state.done === true) done.add(key);
+  }
+  return done;
+}
 
 function requireSave(id: string): SaveResponse {
   const found = saves.find((s) => s.id === id);
@@ -467,6 +493,35 @@ export const mockRepository: Repository = {
       .map((saveId) => saves.find((s) => s.id === saveId))
       .filter((s): s is SaveResponse => s != null);
     return delay(copy(found));
+  },
+
+  // ----------------------------------------------------------- collections
+
+  /**
+   * Derived from `MOCK_SAVES` the same way the server derives it from
+   * `saves` — `@/collections/merge` is the pure port of `CollectionService`,
+   * so this exercises the real merge path (overlapping entities included)
+   * rather than a hand-authored, un-mergeable fixture tree like
+   * `MOCK_GROUPS`.
+   */
+  listCollections(): Promise<CollectionNodeResponse[]> {
+    const tree = buildTree(readySaveFacts());
+    const done = doneEntityKeys();
+    return delay(copy(tree.map((node) => withDoneCount(node, done))));
+  },
+
+  listCollectionEntities(type: string, facet?: string): Promise<CollectionEntityResponse[]> {
+    const merged = mergeType(readySaveFacts(), type, facet ?? null);
+    const withState = merged.map((entity) =>
+      entityStates[entity.entityKey] ? { ...entity, state: entityStates[entity.entityKey] } : entity,
+    );
+    return delay(copy(withState));
+  },
+
+  setEntityState(entityKey: string, state: Record<string, unknown>): Promise<Record<string, unknown>> {
+    // Full replace, never a merge — the same rule setSaveItemState follows.
+    entityStates[entityKey] = state;
+    return delay(copy(state));
   },
 };
 

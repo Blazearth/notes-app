@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import com.weavr.api.collection.CollectionService.SaveFacts;
@@ -242,6 +243,50 @@ class CollectionServiceTest {
     @Test
     void emptyLibraryProducesNoCollections() {
         assertThat(CollectionService.buildTree(List.of())).isEmpty();
+    }
+
+    /**
+     * K2: the pure merge core has no database, so a freshly merged entity's
+     * {@code state} is always {@code null} here — {@code CollectionService
+     * .entities()} is the only place K2 state ever gets joined in, and that
+     * needs a mocked {@code EntityStateService} to exercise, not a fixture.
+     */
+    @Test
+    void mergedEntitiesCarryNoStateUntilCollectionServiceJoinsItIn() {
+        List<CollectionEntity> entities = CollectionService.mergeType(
+                List.of(recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime")))),
+                "recommendation_list", null);
+
+        assertThat(entities.getFirst().state()).isNull();
+    }
+
+    /**
+     * K2: {@code doneCount} is 0 from the pure builder for the same reason
+     * {@code state} is null above — {@code CollectionNode.withDoneCount} is
+     * the second pass that fills it in once state is loaded.
+     */
+    @Test
+    void doneCountIsZeroFromThePureBuilder() {
+        CollectionNode recs = tree(
+                recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))))
+                .getFirst();
+
+        assertThat(recs.doneCount()).isZero();
+    }
+
+    /** withDoneCount counts distinct entities across the whole subtree, the same rule entityCount already follows. */
+    @Test
+    void withDoneCountCountsDistinctEntitiesAcrossTheSubtree() {
+        CollectionNode recs = tree(
+                recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))),
+                recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))),
+                recommendationSave("anime", recommendationItem("Call of the Night", Map.of("kind", "anime"))))
+                .getFirst();
+
+        CollectionNode withDone = recs.withDoneCount(Set.of(Entities.key("anime", "Blue Box")));
+
+        assertThat(withDone.doneCount()).isEqualTo(1);
+        assertThat(withDone.entityCount()).isEqualTo(2);
     }
 
     @Test

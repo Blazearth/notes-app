@@ -1,11 +1,12 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
-import type { SaveResponse } from '@/api/types';
+import type { CollectionNodeResponse, SaveResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Chip } from '@/components/Chip';
+import { CollectionCard } from '@/components/CollectionCard';
 import { Glyph, type GlyphName } from '@/components/Glyph';
 import { Reveal } from '@/components/Reveal';
 import { SaveCard } from '@/components/SaveCard';
@@ -131,10 +132,41 @@ export function LibraryScreen() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // K3: the Library's top level for entity-bearing types (recommendation_list,
+  // itinerary, checklist) renders collections, not save rows — see
+  // docs/knowledge-collections.md. Fetched independently of `useSaves()`
+  // because it is a different derived view of the same saves, not a list of
+  // saves itself.
+  const [collections, setCollections] = useState<CollectionNodeResponse[]>([]);
+  const loadCollections = useCallback(() => {
+    repo
+      .listCollections()
+      .then(setCollections)
+      .catch(() => setCollections([]));
+  }, []);
+  useEffect(() => {
+    loadCollections();
+  }, [loadCollections]);
+  const onRefresh = useCallback(() => {
+    void refresh();
+    loadCollections();
+  }, [refresh, loadCollections]);
+
+  // A type only leaves the ordinary flat list once it actually produced a
+  // collection — a recommendation_list save with no usable items (all
+  // `[unclear]` names) still needs somewhere to live, so it falls through to
+  // the flat presentation like any other type.
+  const entityBearingTypes = useMemo(() => new Set(collections.map((c) => c.id)), [collections]);
+
   // Archived saves sit out of the ordinary views entirely — an archive is
   // only useful if it actually gets things out of the way. The `Archived`
-  // filter is the one place they're still reachable.
-  const activeSaves = useMemo(() => saves.filter((s) => !s.archived), [saves]);
+  // filter is the one place they're still reachable. Entity-bearing types
+  // are excluded here too: their saves are represented by the Collections
+  // section above, not as individual rows.
+  const activeSaves = useMemo(
+    () => saves.filter((s) => !s.archived && !(s.knowledgeType && entityBearingTypes.has(s.knowledgeType))),
+    [saves, entityBearingTypes],
+  );
 
   // Counts drive both the tiles and the filter chips, so a type with nothing in
   // it never appears as an empty option the user can select into a dead end.
@@ -244,7 +276,7 @@ export function LibraryScreen() {
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
-          onRefresh={() => void refresh()}
+          onRefresh={onRefresh}
           tintColor={palette.accent}
           colors={[palette.accent]}
           progressBackgroundColor={palette.surface}
@@ -392,8 +424,24 @@ export function LibraryScreen() {
             </Reveal>
           ) : null}
 
-          {counts.length > 0 && filter === ALL ? (
+          {collections.length > 0 && filter === ALL ? (
             <Reveal index={3}>
+              <SectionLabel>Collections</SectionLabel>
+              <View style={{ gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
+                {collections.map((node) => (
+                  <CollectionCard
+                    key={node.id}
+                    node={node}
+                    type={node.id}
+                    onPress={() => router.push({ pathname: '/collection/[type]', params: { type: node.id } })}
+                  />
+                ))}
+              </View>
+            </Reveal>
+          ) : null}
+
+          {counts.length > 0 && filter === ALL ? (
+            <Reveal index={4}>
               <SectionLabel>By type</SectionLabel>
               <ScrollView
                 horizontal
@@ -408,7 +456,7 @@ export function LibraryScreen() {
             </Reveal>
           ) : null}
 
-          <Reveal index={4}>
+          <Reveal index={5}>
             <SectionLabel>{filter === ALL ? 'Everything' : labelFor(filter)}</SectionLabel>
           </Reveal>
           <View style={{ gap: spacing.smd }}>
