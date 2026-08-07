@@ -352,3 +352,13 @@ share a label with a guessed one.
 The dependency that matters: **4.1 before any behavior**, and
 **3.1/3.2 before 4.2** so the mechanism lands against real types instead of
 hypothetical ones. Everything else can interleave with normal feature work.
+
+---
+
+## What comes after
+
+All phases above landed 2026-08-07. The next roadmap is
+[knowledge-collections.md](knowledge-collections.md) — merging per-source
+objects into per-topic collections (three romance-anime Reels → one
+watchlist), built as a derived layer over saves inside the same ground rules
+this doc established.
