@@ -228,38 +228,53 @@ two copies will drift).
 Ordered so each lands alone and the first user-visible win (the anime
 watchlist) arrives before any speculative machinery.
 
-### K0 — measure before building (a spike, not a feature)
+### K0 — measure before building (a spike, not a feature) — done, 2026-08-07
 
-Against the dev account's real saves, via curl (per the repo's
-verify-via-curl rule): pull every `recommendation_list` save, run the
-normalization spec over their items *offline*, and count (a) true duplicate
-entities caught, (b) false merges (different things, same key), (c) misses
-(same thing, different key — the alias rate). This is the escalation-threshold
-lesson applied here: without a labelled baseline, the normalization rules are
-guesses, and both failure directions are silent. If the dev library is too
-thin, save ~10 real recommendation Reels first — that's what they cost 10 of
-500 RPD for. **Exit criterion: the normalize spec frozen against measured
-data, plus a decision on whether leading-article stripping and kind
-coarsening earn their place.**
+Ran as a read-only JDBC probe against the live dev database rather than curl
+against a booted server (cheaper, and it costs nothing against the Gemini
+budget either way) — pulled every `recommendation_list` save and ran the
+normalize spec over their items offline. Found exactly 2 real saves, both
+from the same day, 7 items total, **zero overlapping titles**. Every item
+produced a distinct key under the spec below, including a real case where
+leading-article stripping mattered ("The Second Prettiest Girl in My Class",
+"The Fragrant Flower Blooms With Dignity") — a measured **zero-false-merges**
+result. It could not measure true-duplicate detection or the alias-miss rate,
+because nothing in the sample repeats, and zero `checklist`/`itinerary`
+saves exist at all yet, so the two open questions at the bottom of this doc
+are still open. **Exit criterion met by default rather than by strong
+evidence**: the spec below is frozen as written because nothing contradicted
+it, not because a rich duplicate-laden sample validated it — and no saves
+were manufactured to force a better one, since that would have spent shared
+Gemini budget on a decision this pass wasn't asked to make alone. Revisit
+once real `checklist`/`itinerary` saves or a real duplicate exists.
 
-### K1 — the derived merge, server-side
+### K1 — the derived merge, server-side — done, 2026-08-07
 
-`collection/` module: `Entities.key` (pure static), `CollectionService`
-(derive collections + merged entities from ready saves, shapes 1 and 2's
-*read* path but only shape 1 wired), the two GET endpoints. No migration, no
-app change yet.
+`collection/` module landed: `Entities.key` (pure static), `CollectionService`
+(derives collections + merged entities from ready saves — only shape 1 wired,
+exactly as scoped; shape 2 waits for K4), the two GET endpoints
+(`GET /v1/collections`, `GET /v1/collections/{type}?facet=`). No migration, no
+app change, as planned. `GroupService`'s `FACETS`/`DISPLAY_NAMES` moved to a
+shared `common/KnowledgeFacets` rather than being duplicated, per this
+section's own instruction above.
 
-- Tests mirror `GroupServiceTest`: hand-built saves, single- and multi-valued
-  facets, and — pinned as a named regression, since it is the constraint-3
-  trap — one entity in three sources counts once, and a collection's
-  `entityCount` equals the length of its merged list.
+- Tests mirror `GroupServiceTest` (`CollectionServiceTest`, `EntitiesTest`):
+  hand-built saves, single- and multi-valued facets, and — pinned as a named
+  regression, since it is the constraint-3 trap — one entity in three sources
+  counts once, and a collection's `entityCount` equals the length of its
+  merged list (the exit criterion above, literally, as its own test).
 - Merge precedence rules (first non-`[unclear]`, genre union, reason
-  attribution) each get a test; the whole merge is a pure function over a
-  list of saves, `fold`-style.
-- **Verify live**: curl the endpoint against the dev account's real
-  Supabase-backed saves. The `GroupService` history says the first real
-  library will overturn at least one assumption the unit fixtures baked in
-  (it was multi-valued genres last time).
+  attribution) each have a test, and are implemented as one generic
+  field-rollup function rather than per-field-name code — a new item field on
+  any of the three wired types needs no service change.
+- **Verified live**: a throwaway user (see the repo's standing rule on
+  minting one — never through `/auth/v1/signup`) with two saves seeded
+  directly into `saves` (status `ready`, no pipeline run, zero Gemini cost)
+  sharing a "Blue Box" item. `GET /v1/collections/recommendation_list`
+  returned it merged — `sourceCount: 2`, `genre` unioned, `year` resolved to
+  the one non-`[unclear]` source, each source's own `reason` kept unblended —
+  and `GET /v1/collections` showed the matching tree. Full backend suite
+  green (365/365). Throwaway user and both seeded saves deleted afterward.
 
 ### K2 — entity state
 
