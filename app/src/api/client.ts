@@ -236,6 +236,27 @@ export function setSaveFlags(
 }
 
 /**
+ * `PATCH /v1/saves/{id}/item-state` — the one mechanism behind every
+ * knowledge type's interactivity: exercise ticks, checklist items, watch
+ * status + rating, "continue where I left off". Always a full replace of
+ * that item's state, never a merge — the same replace-don't-accumulate rule
+ * as the shopping list. `itemPath` addresses a position inside
+ * `structuredData` (`"exercises[2]"`, `"items[0]"`), or `""` for state about
+ * the save as a whole.
+ */
+export function setSaveItemState(
+  id: string,
+  itemPath: string,
+  state: Record<string, unknown>,
+): Promise<SaveResponse> {
+  return request<SaveResponse>(`/v1/saves/${id}/item-state`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ itemPath, state }),
+  });
+}
+
+/**
  * `GET /v1/me` — entitlement and usage together.
  *
  * A limit of `-1` means unlimited (Pro, or caps not yet enforced), which is why

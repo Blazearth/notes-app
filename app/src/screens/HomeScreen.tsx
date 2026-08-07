@@ -74,9 +74,33 @@ const LIFECYCLE_PROGRESS: Record<string, { fraction: number; label: string }> = 
   completed: { fraction: 1, label: 'Done' },
 };
 
+/**
+ * A course's real per-section completion, when there is any — finer-grained
+ * than the coarse four-step `lifecycleStatus` bar every other type falls
+ * back to. `docs/next-phases.md` §4.2: "feeds the existing Continue rail
+ * with real data." Falls back to the ordinary lifecycle bar until at least
+ * one section has been ticked, so a course just saved reads as "Planned"
+ * rather than "0/6 sections" — the same story every other type tells.
+ */
+function progressForSave(save: SaveResponse): { fraction: number; label: string } {
+  if (save.knowledgeType === 'course' && Array.isArray(save.structuredData?.sections)) {
+    const total = save.structuredData.sections.length;
+    const done = save.structuredData.sections.filter(
+      (_, i) => save.itemStates?.[`sections[${i}]`]?.done === true,
+    ).length;
+    if (total > 0 && done > 0) {
+      return {
+        fraction: done / total,
+        label: done === total ? 'Done' : `${done}/${total} sections`,
+      };
+    }
+  }
+  return LIFECYCLE_PROGRESS[save.lifecycleStatus ?? 'saved'] ?? { fraction: 0, label: 'Saved' };
+}
+
 function ContinueCard({ save, onPress }: { save: SaveResponse; onPress: () => void }) {
   const { palette, radius, spacing } = useTheme();
-  const progress = LIFECYCLE_PROGRESS[save.lifecycleStatus ?? 'saved'];
+  const progress = progressForSave(save);
 
   return (
     <Card padding={0} radius={radius.lg} style={{ width: 156, overflow: 'hidden' }}>

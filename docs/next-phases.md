@@ -162,6 +162,15 @@ can trail the type itself.
 
 ## Phase 4 — object behaviors (client + Postgres, zero AI)
 
+**Landed 2026-08-07** — see [CLAUDE.md](../CLAUDE.md) for the full verification
+record (backend 329/329, standalone `buildDetailModel`/`buildCardModel`
+execution, headless-Chrome click-through with `USE_MOCK_DATA`). Everything
+below shipped as specified: the one mechanism, all six per-type behaviors,
+in the order §4.3 lays out. Nothing here needed a design change from the plan
+— the sketch's table/endpoint shape, the "identity is the array index"
+precondition, and the replace-don't-accumulate write rule all held exactly as
+written.
+
 The extracted object is read-only pipeline output. Behaviors are user-mutable
 state layered on top — the shopping list's ticked-item pattern, generalized.
 

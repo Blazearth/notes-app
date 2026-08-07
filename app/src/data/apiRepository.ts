@@ -20,6 +20,7 @@ export const apiRepository: Repository = {
   setSaveLifecycle: client.setSaveLifecycle,
   setSaveFlags: client.setSaveFlags,
   setSaveSpace: client.setSaveSpace,
+  setSaveItemState: client.setSaveItemState,
   searchSaves: client.searchSaves,
 
   getMe: client.getMe,

@@ -15,6 +15,20 @@ export interface DetailObject {
   title?: string;
   meta?: string;
   rows: DetailObjectRow[];
+  /**
+   * Position inside `structuredData` this object represents — `"exercises[2]"`,
+   * `"items[0]"`. Present only when the array index is stable (the whole
+   * mechanism's precondition — see `SaveItemStateService`'s doc comment) and
+   * the type has a Phase 4 behavior defined for it. Absent for generic
+   * `objectListField` leftovers, which have no bespoke control to attach.
+   */
+  statePath?: string;
+  /** Which Phase 4 control this card shows, if any — see `docs/next-phases.md` §4.2. */
+  control?: 'check' | 'watch';
+  /** A workout exercise's raw `rest` text ("90s", "2 min") — renders a rest-timer button. */
+  restLabel?: string;
+  /** Pure URL construction from name + area/address — an "Open in Maps" button, no state. */
+  mapsUrl?: string;
 }
 
 /** A field rendered as its own block: one value, a list of them, or objects. */
@@ -26,6 +40,12 @@ export interface DetailField {
   objects?: DetailObject[];
   /** Steps render numbered; ingredients and tags render as chips. */
   style: 'text' | 'chips' | 'steps' | 'objects';
+  /**
+   * done/total across this field's `control: 'check'` objects — a progress
+   * bar for checklist items and course sections. Derived from the caller's
+   * item states at render time, never stored itself.
+   */
+  progress?: { done: number; total: number };
 }
 
 export interface SaveDetailModel {
@@ -35,6 +55,8 @@ export interface SaveDetailModel {
   /** The one paragraph worth reading first, when the type has one. */
   lede?: string;
   fields: DetailField[];
+  /** A single-place save's "Open in Maps" target — `place` only; `itinerary`'s are per-item. */
+  mapsUrl?: string;
 }
 
 const UNCLEAR = '[unclear]';
@@ -86,6 +108,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+type ItemStates = Record<string, Record<string, unknown>> | undefined;
+
+/** Google Maps' web deep link — works from any platform without a native module. */
+function mapsUrl(query: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+/**
+ * done/total across a set of `control: 'check'` objects — the checklist
+ * progress bar and course "continue where I left off", both derived here
+ * rather than stored (`docs/next-phases.md` §4.2: "count of done/total —
+ * derived in the client, never stored").
+ */
+function checkProgress(
+  objects: DetailObject[],
+  itemStates: ItemStates,
+): { done: number; total: number } | undefined {
+  const checkable = objects.filter((o) => o.control === 'check' && o.statePath);
+  if (!checkable.length) return undefined;
+  const done = checkable.filter((o) => itemStates?.[o.statePath as string]?.done === true).length;
+  return { done, total: checkable.length };
+}
+
 /**
  * Ingredients exist in two shapes forever: saves classified before 2026-08-07
  * hold flat strings ("250g mascarpone"), newer ones hold
@@ -112,15 +157,16 @@ function ingredientChips(value: unknown): DetailField | null {
 /**
  * The bespoke exercises layout: name as the card title, the prescription
  * (sets × reps · rest · tempo) as one compact meta line, cues and
- * alternatives as chip rows.
+ * alternatives as chip rows. Each exercise carries a `statePath` for
+ * "mark complete" and a `restLabel` for the rest timer — Phase 4 §4.2.
  */
-function exercisesField(value: unknown): DetailField | null {
+function exercisesField(value: unknown, itemStates: ItemStates): DetailField | null {
   if (!Array.isArray(value)) return null;
   const objects: DetailObject[] = [];
-  for (const raw of value) {
-    if (!isRecord(raw)) continue;
+  value.forEach((raw, i) => {
+    if (!isRecord(raw)) return;
     const name = clean(raw.name);
-    if (!name) continue;
+    if (!name) return;
     const sets = clean(raw.sets);
     const reps = clean(raw.reps);
     const rows: DetailObjectRow[] = [];
@@ -136,9 +182,14 @@ function exercisesField(value: unknown): DetailField | null {
         clean(raw.tempo) ? `tempo ${clean(raw.tempo)}` : null,
       ]),
       rows,
+      statePath: `exercises[${i}]`,
+      control: 'check',
+      restLabel: clean(raw.rest) ?? undefined,
     });
-  }
-  return objects.length ? { label: 'Exercises', objects, style: 'objects' } : null;
+  });
+  return objects.length
+    ? { label: 'Exercises', objects, style: 'objects', progress: checkProgress(objects, itemStates) }
+    : null;
 }
 
 /**
@@ -147,14 +198,17 @@ function exercisesField(value: unknown): DetailField | null {
  * design doc, the reason a creator recommends something is the field a
  * watchlist entry is worthless without, so it must not get buried among
  * generic leftovers rows the way `objectListField` would render it.
+ *
+ * Each item carries a `statePath` and `control: 'watch'` for the
+ * watched/rating control — Phase 4 §4.2, the flagship behavior.
  */
 function recommendationItemsField(value: unknown): DetailField | null {
   if (!Array.isArray(value)) return null;
   const objects: DetailObject[] = [];
-  for (const raw of value) {
-    if (!isRecord(raw)) continue;
+  value.forEach((raw, i) => {
+    if (!isRecord(raw)) return;
     const name = clean(raw.name);
-    if (!name) continue;
+    if (!name) return;
     const rank = clean(raw.rank);
     const rows: DetailObjectRow[] = [];
     const reason = clean(raw.reason);
@@ -167,9 +221,101 @@ function recommendationItemsField(value: unknown): DetailField | null {
       title: rank ? `${rank}. ${name}` : name,
       meta: join([clean(raw.kind), clean(raw.year)]),
       rows,
+      statePath: `items[${i}]`,
+      control: 'watch',
+    });
+  });
+  return objects.length ? { label: 'Items', objects, style: 'objects' } : null;
+}
+
+/**
+ * The bespoke checklist layout: item text as the title, `detail` and
+ * `optional` as supporting rows, each with a `control: 'check'` tick and a
+ * progress bar computed from how many are done — Phase 4 §4.2, "the
+ * smallest full loop" for proving the item-state mechanism.
+ */
+function checklistItemsField(value: unknown, itemStates: ItemStates): DetailField | null {
+  if (!Array.isArray(value)) return null;
+  const objects: DetailObject[] = [];
+  value.forEach((raw, i) => {
+    if (!isRecord(raw)) return;
+    const text = clean(raw.text);
+    if (!text) return;
+    const rows: DetailObjectRow[] = [];
+    const detail = clean(raw.detail);
+    if (detail) rows.push({ label: 'Detail', text: detail });
+    objects.push({
+      title: text,
+      meta: clean(raw.optional)?.toLowerCase() === 'yes' ? 'optional' : undefined,
+      rows,
+      statePath: `items[${i}]`,
+      control: 'check',
+    });
+  });
+  return objects.length
+    ? { label: 'Checklist', objects, style: 'objects', progress: checkProgress(objects, itemStates) }
+    : null;
+}
+
+/**
+ * The bespoke course layout: section name as the title, `covers`/`duration`
+ * as meta/rows, each with a `control: 'check'` tick — "section done" feeds
+ * both this progress bar and the Home Continue rail's finer-grained progress
+ * (`docs/next-phases.md` §4.2).
+ */
+function sectionsField(value: unknown, itemStates: ItemStates): DetailField | null {
+  if (!Array.isArray(value)) return null;
+  const objects: DetailObject[] = [];
+  value.forEach((raw, i) => {
+    if (!isRecord(raw)) return;
+    const name = clean(raw.name);
+    if (!name) return;
+    const rows: DetailObjectRow[] = [];
+    const covers = clean(raw.covers);
+    if (covers) rows.push({ label: 'Covers', text: covers });
+    objects.push({
+      title: name,
+      meta: clean(raw.duration) ?? undefined,
+      rows,
+      statePath: `sections[${i}]`,
+      control: 'check',
+    });
+  });
+  return objects.length
+    ? { label: 'Sections', objects, style: 'objects', progress: checkProgress(objects, itemStates) }
+    : null;
+}
+
+/**
+ * The bespoke itinerary places layout: each place gets its own "Open in
+ * Maps" deep link built from its name plus whichever locality it or the
+ * itinerary as a whole carries — pure URL construction, no state
+ * (`docs/next-phases.md` §4.2).
+ */
+function placesField(value: unknown, destination: string | null): DetailField | null {
+  if (!Array.isArray(value)) return null;
+  const objects: DetailObject[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    const name = clean(raw.name);
+    if (!name) continue;
+    const rows: DetailObjectRow[] = [];
+    const tips = cleanList(raw.tips);
+    if (tips.length) rows.push({ label: 'Tips', items: tips });
+    const cost = clean(raw.cost);
+    if (cost) rows.push({ label: 'Cost', text: cost });
+    const timeNeeded = clean(raw.timeNeeded);
+    if (timeNeeded) rows.push({ label: 'Time needed', text: timeNeeded });
+    const area = clean(raw.area);
+    const query = area ? `${name}, ${area}` : destination ? `${name}, ${destination}` : name;
+    objects.push({
+      title: name,
+      meta: join([clean(raw.kind), area, clean(raw.day) ? `day ${clean(raw.day)}` : null]),
+      rows,
+      mapsUrl: mapsUrl(query),
     });
   }
-  return objects.length ? { label: 'Items', objects, style: 'objects' } : null;
+  return objects.length ? { label: 'Places', objects, style: 'objects' } : null;
 }
 
 /**
@@ -217,6 +363,9 @@ const HANDLED_ELSEWHERE: Record<string, ReadonlySet<string>> = {
   other: new Set(['title', 'summary', 'tags']),
   unusable: new Set(['reason']),
   recommendation_list: new Set(['title', 'medium', 'summary', 'items', 'orderMatters']),
+  checklist: new Set(['title', 'summary', 'context', 'items']),
+  course: new Set(['title', 'subject', 'level', 'summary', 'sections', 'prerequisites', 'resources', 'outcomes']),
+  itinerary: new Set(['title', 'destination', 'durationDays', 'summary', 'bestSeason', 'places', 'generalTips']),
 };
 
 /**
@@ -294,7 +443,7 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
             listField('Muscle groups', d.muscleGroups),
             listField('Equipment', d.equipment),
             listField('Warm-up', d.warmup, 'steps'),
-            exercisesField(d.exercises),
+            exercisesField(d.exercises, save.itemStates),
             listField('Cool-down', d.cooldown, 'steps'),
             textField('Progression', d.progression),
             listField('Watch out', d.warnings),
@@ -326,6 +475,7 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
       // The registry names this `name`, not `title`.
       const title = clean(d.name);
       if (!title) return null;
+      const address = clean(d.address);
       return {
         title,
         meta: join([clean(d.type), clean(d.cuisine), clean(d.priceRange)]),
@@ -337,6 +487,8 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
           ]),
           ...leftovers(d, type),
         ],
+        // Pure URL construction, no state — Phase 4 §4.2.
+        mapsUrl: mapsUrl(address ? `${title}, ${address}` : title),
       };
     }
 
@@ -358,6 +510,54 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
         meta: join([clean(d.medium), clean(d.orderMatters) === 'yes' ? 'watch in order' : null]),
         lede: clean(d.summary) ?? undefined,
         fields: [...compact([recommendationItemsField(d.items)]), ...leftovers(d, type)],
+      };
+    }
+
+    case 'checklist': {
+      const title = clean(d.title);
+      if (!title) return null;
+      return {
+        title,
+        lede: clean(d.summary) ?? clean(d.context) ?? undefined,
+        fields: [...compact([checklistItemsField(d.items, save.itemStates)]), ...leftovers(d, type)],
+      };
+    }
+
+    case 'course': {
+      const title = clean(d.title);
+      if (!title) return null;
+      return {
+        title,
+        meta: join([clean(d.subject), clean(d.level)]),
+        lede: clean(d.summary) ?? undefined,
+        fields: [
+          ...compact([
+            sectionsField(d.sections, save.itemStates),
+            listField('Prerequisites', d.prerequisites),
+            listField('Resources', d.resources),
+            listField('Outcomes', d.outcomes),
+          ]),
+          ...leftovers(d, type),
+        ],
+      };
+    }
+
+    case 'itinerary': {
+      const title = clean(d.title);
+      if (!title) return null;
+      const destination = clean(d.destination);
+      return {
+        title,
+        meta: join([
+          destination,
+          clean(d.durationDays) ? `${clean(d.durationDays)} days` : null,
+          clean(d.bestSeason),
+        ]),
+        lede: clean(d.summary) ?? undefined,
+        fields: [
+          ...compact([placesField(d.places, destination), listField('General tips', d.generalTips)]),
+          ...leftovers(d, type),
+        ],
       };
     }
 

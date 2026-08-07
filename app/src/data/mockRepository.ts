@@ -177,6 +177,18 @@ export const mockRepository: Repository = {
     return delay(copy(save));
   },
 
+  setSaveItemState(
+    id: string,
+    itemPath: string,
+    state: Record<string, unknown>,
+  ): Promise<SaveResponse> {
+    const save = requireSave(id);
+    // Full replace, never a merge — the same rule the real endpoint follows.
+    save.itemStates = { ...(save.itemStates ?? {}), [itemPath]: state };
+    save.updatedAt = now();
+    return delay(copy(save));
+  },
+
   searchSaves(query: string, limit = 25): Promise<SearchHit[]> {
     const q = query.trim().toLowerCase();
     if (!q) return delay([]);

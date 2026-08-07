@@ -51,6 +51,9 @@ export type GlyphName =
   | 'checkSquare'
   | 'graduationCap'
   | 'code'
+  // Phase 4 object behaviors — rating stars, servings stepper.
+  | 'star'
+  | 'minus'
   // Decorative primitives — not drawn as icons in the mockup
   | 'circle'
   | 'ring'
@@ -440,6 +443,22 @@ export function Glyph({ name, size = 18, color, weight = 2, style }: GlyphProps)
           <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
             <Path d="M16 18l6-6-6-6" />
             <Path d="M8 6l-6 6 6 6" />
+          </StrokeIcon>
+        );
+
+      // recommendation_list watch-state rating.
+      case 'star':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14 2 9.27l6.91-1.01L12 2Z" />
+          </StrokeIcon>
+        );
+
+      // Servings stepper's decrement — the vertical-less half of 'plus'.
+      case 'minus':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Line x1="5" y1="12" x2="19" y2="12" />
           </StrokeIcon>
         );
     }

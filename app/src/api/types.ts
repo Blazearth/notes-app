@@ -51,6 +51,13 @@ export interface SaveResponse {
   archived: boolean;
   errorCode?: string;
   errorMessage?: string;
+  /**
+   * The caller's own Phase 4 object-behavior state, keyed by `itemPath`
+   * (`"exercises[2]"`, `""` for whole-save state) — absent rather than `{}`
+   * when nothing has been touched yet. See `SaveItemStateService` server-side
+   * and `docs/next-phases.md` §4.1.
+   */
+  itemStates?: Record<string, Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
 }

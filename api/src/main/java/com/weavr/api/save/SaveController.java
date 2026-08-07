@@ -2,12 +2,14 @@ package com.weavr.api.save;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import com.weavr.api.auth.CurrentUser;
 import com.weavr.api.save.dto.CreateSaveRequest;
 import com.weavr.api.save.dto.SaveResponse;
 import com.weavr.api.save.dto.UpdateFlagsRequest;
+import com.weavr.api.save.dto.UpdateItemStateRequest;
 import com.weavr.api.save.dto.UpdateLifecycleRequest;
 import com.weavr.api.save.dto.UpdateSpaceRequest;
 import jakarta.validation.Valid;
@@ -27,9 +29,11 @@ import org.springframework.web.bind.annotation.RestController;
 class SaveController {
 
     private final SaveService saveService;
+    private final SaveItemStateService itemStates;
 
-    SaveController(SaveService saveService) {
+    SaveController(SaveService saveService, SaveItemStateService itemStates) {
         this.saveService = saveService;
+        this.itemStates = itemStates;
     }
 
     /**
@@ -67,12 +71,18 @@ class SaveController {
         List<Save> saves = lifecycle == null || lifecycle.isEmpty()
                 ? saveService.listForUser(userId, page, size)
                 : saveService.listForUserByLifecycle(userId, lifecycle, page, size);
-        return saves.stream().map(SaveResponse::from).toList();
+        // Batched: one query for the whole page's item states rather than one
+        // per row, so the "continue where I left off" progress a course or
+        // checklist needs doesn't turn a feed page into N+1 queries.
+        Map<UUID, Map<String, Map<String, Object>>> states =
+                itemStates.statesForSaves(userId, saves.stream().map(Save::getId).toList());
+        return saves.stream().map(save -> SaveResponse.from(save, states.get(save.getId()))).toList();
     }
 
     @GetMapping("/{id}")
     SaveResponse get(@CurrentUser UUID userId, @PathVariable UUID id) {
-        return SaveResponse.from(saveService.getForUser(userId, id));
+        Save save = saveService.getForUser(userId, id);
+        return SaveResponse.from(save, itemStates.statesFor(userId, save.getId()));
     }
 
     /**
@@ -106,5 +116,22 @@ class SaveController {
                           @RequestBody UpdateSpaceRequest request) {
         return SaveResponse.from(
                 saveService.setSpace(userId, id, request.spaceId()));
+    }
+
+    /**
+     * The one endpoint behind every knowledge type's object behavior —
+     * exercise ticks, checklist items, watch status + rating, "continue where
+     * I left off" — see {@link SaveItemStateService}. Returns the full save
+     * (echoed, same shape as {@link #get}) rather than just the one item's
+     * state, so the client can apply the response the same way it applies any
+     * other save mutation.
+     */
+    @PatchMapping("/{id}/item-state")
+    SaveResponse setItemState(@CurrentUser UUID userId, @PathVariable UUID id,
+                              @Valid @RequestBody UpdateItemStateRequest request) {
+        Save save = saveService.getForUser(userId, id);
+        Map<String, Map<String, Object>> states =
+                itemStates.setState(userId, id, request.itemPath(), request.state());
+        return SaveResponse.from(save, states);
     }
 }

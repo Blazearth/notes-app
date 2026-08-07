@@ -32,11 +32,27 @@ public record SaveResponse(
         boolean archived,
         String errorCode,
         String errorMessage,
+
+        /**
+         * The caller's own Phase 4 object-behavior state, keyed by
+         * {@code itemPath} ({@code "exercises[2]"}, {@code ""} for
+         * whole-save state) — omitted entirely rather than an empty map when
+         * there is none, so a save nobody has touched costs no extra bytes.
+         * Embedded here so the detail screen needs no second fetch; see
+         * {@link com.weavr.api.save.SaveItemStateService}.
+         */
+        Map<String, Map<String, Object>> itemStates,
+
         Instant createdAt,
         Instant updatedAt
 ) {
 
+    /** For callers that have no item-state lookup available (mostly tests). */
     public static SaveResponse from(Save save) {
+        return from(save, null);
+    }
+
+    public static SaveResponse from(Save save, Map<String, Map<String, Object>> itemStates) {
         return new SaveResponse(
                 save.getId(),
                 save.getSpaceId(),
@@ -53,6 +69,7 @@ public record SaveResponse(
                 save.isArchived(),
                 save.getErrorCode(),
                 save.getErrorMessage(),
+                itemStates == null || itemStates.isEmpty() ? null : itemStates,
                 save.getCreatedAt(),
                 save.getUpdatedAt());
     }

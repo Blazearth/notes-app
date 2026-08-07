@@ -43,6 +43,17 @@ export interface Repository {
   setSaveFlags(id: string, flags: { favorite?: boolean; archived?: boolean }): Promise<SaveResponse>;
   /** Move a save into a Space, or pass null to return it to the private feed. */
   setSaveSpace(id: string, spaceId: string | null): Promise<SaveResponse>;
+  /**
+   * The one mechanism behind every knowledge type's object behavior —
+   * exercise ticks, checklist items, watch status + rating, "continue where
+   * I left off". `state` always replaces whatever was there for that
+   * `itemPath`, never merges.
+   */
+  setSaveItemState(
+    id: string,
+    itemPath: string,
+    state: Record<string, unknown>,
+  ): Promise<SaveResponse>;
   searchSaves(query: string, limit?: number): Promise<SearchHit[]>;
 
   // Account

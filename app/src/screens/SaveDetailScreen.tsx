@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Linking, View } from 'react-native';
+import { useKeepAwake } from 'expo-keep-awake';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Linking, StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
@@ -14,8 +15,9 @@ import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { Discussion } from '@/components/Discussion';
 import { LifecycleStrip } from '@/components/LifecycleStrip';
-import { buildDetailModel, type DetailField } from '@/saves/detailModel';
+import { buildDetailModel, type DetailField, type DetailObject } from '@/saves/detailModel';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
+import { baseServings, scaleQuantity } from '@/saves/scaling';
 import { useSaves } from '@/saves/SavesProvider';
 import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -99,54 +101,252 @@ function Steps({ items }: { items: string[] }) {
   );
 }
 
-/**
- * One entry of a nested object array — an exercise card, a structured item.
- * The same surface treatment as a chip, scaled up to hold a title, a compact
- * meta line, and labelled rows.
- */
-function ObjectCards({ objects }: { objects: NonNullable<DetailField['objects']> }) {
-  const { palette, radius, spacing } = useTheme();
+type ItemStates = Record<string, Record<string, unknown>> | undefined;
+type SetItemState = (itemPath: string, state: Record<string, unknown>) => void;
+
+/** done/total across a checklist or a course's sections — Phase 4 §4.2. */
+function ProgressBar({ done, total }: { done: number; total: number }) {
+  const { palette, spacing } = useTheme();
+  const fraction = total > 0 ? done / total : 0;
   return (
-    <View style={{ gap: spacing.smd }}>
-      {objects.map((object, i) => (
+    <View style={{ marginBottom: spacing.smd }}>
+      <View style={{ height: 4, borderRadius: 2, backgroundColor: palette.border }}>
         <View
-          key={`${object.title ?? 'item'}-${i}`}
           style={{
-            padding: spacing.md,
-            borderRadius: radius.md,
-            backgroundColor: palette.surfaceVariant,
-            borderWidth: 1,
-            borderColor: palette.border,
-            gap: spacing.xs,
+            width: `${Math.round(fraction * 100)}%`,
+            height: '100%',
+            borderRadius: 2,
+            backgroundColor: palette.accent,
           }}
-        >
-          {object.title ? <AppText variant="cardTitle">{object.title}</AppText> : null}
-          {object.meta ? (
-            <AppText variant="bodySmall" tone="muted">
-              {object.meta}
-            </AppText>
-          ) : null}
-          {object.rows.map((row) => (
-            <View key={row.label} style={{ gap: 4 }}>
-              <AppText variant="caption" tone="muted">
-                {row.label}
-              </AppText>
-              {row.items ? <Chips items={row.items} /> : <AppText variant="bodySmall">{row.text}</AppText>}
-            </View>
-          ))}
-        </View>
-      ))}
+        />
+      </View>
+      <AppText variant="caption" tone="muted" style={{ marginTop: 4 }}>
+        {done} of {total} done
+      </AppText>
     </View>
   );
 }
 
-function Field({ field }: { field: DetailField }) {
+/** The checklist-item / course-section / workout-exercise "mark done" tick. */
+function CheckControl({ done, onToggle }: { done: boolean; onToggle: () => void }) {
+  const { palette, spacing } = useTheme();
+  return (
+    <Touchable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: done }}
+      accessibilityLabel={done ? 'Mark as not done' : 'Mark done'}
+      onPress={onToggle}
+      haptic="light"
+      style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.xs }}
+    >
+      <Glyph name={done ? 'checkSquare' : 'square'} size={16} color={done ? palette.accent : palette.textMuted} />
+      <AppText variant="bodySmall" tone={done ? 'accent' : 'muted'}>
+        {done ? 'Done' : 'Mark done'}
+      </AppText>
+    </Touchable>
+  );
+}
+
+/** recommendation_list's watched toggle + 1–5 star rating — the flagship Phase 4 behavior. */
+function WatchControl({
+  state,
+  onChange,
+}: {
+  state: Record<string, unknown> | undefined;
+  onChange: (state: Record<string, unknown>) => void;
+}) {
+  const { palette, spacing } = useTheme();
+  const done = state?.done === true;
+  const rating = typeof state?.rating === 'number' ? state.rating : 0;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd, marginTop: spacing.xs }}>
+      <Touchable
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: done }}
+        accessibilityLabel={done ? 'Mark as not watched' : 'Mark watched'}
+        onPress={() => onChange({ ...state, done: !done })}
+        haptic="light"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+      >
+        <Glyph name={done ? 'checkSquare' : 'square'} size={16} color={done ? palette.accent : palette.textMuted} />
+        <AppText variant="bodySmall" tone={done ? 'accent' : 'muted'}>
+          {done ? 'Watched' : 'Mark watched'}
+        </AppText>
+      </Touchable>
+      <View style={{ flexDirection: 'row', gap: 2 }}>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <Touchable
+            key={n}
+            accessibilityRole="button"
+            accessibilityLabel={`Rate ${n} of 5`}
+            onPress={() => onChange({ ...state, rating: n })}
+            haptic="selection"
+          >
+            <Glyph name="star" size={14} color={n <= rating ? palette.accent : palette.textFaint} />
+          </Touchable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+/**
+ * A workout exercise's rest timer. Parses the extracted `rest` text
+ * leniently ("90s", "2 min"); when it doesn't parse, falls back to a manual
+ * up-counting timer rather than showing nothing — `docs/next-phases.md` §4.2.
+ * Purely local: the countdown itself is not persisted item state.
+ */
+function RestTimer({ label }: { label: string }) {
+  const { palette, spacing } = useTheme();
+  const parsedSeconds = useMemo(() => {
+    const match = label.match(/(\d+(?:\.\d+)?)\s*(s|sec|second|m|min|minute)/i);
+    if (!match) return null;
+    const value = parseFloat(match[1]);
+    return Math.round(match[2].toLowerCase().startsWith('m') ? value * 60 : value);
+  }, [label]);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [manualElapsed, setManualElapsed] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (remaining === null || remaining <= 0) return;
+    const t = setTimeout(() => setRemaining((r) => (r !== null ? r - 1 : r)), 1000);
+    return () => clearTimeout(t);
+  }, [remaining]);
+
+  useEffect(() => {
+    if (manualElapsed === null) return;
+    const t = setTimeout(() => setManualElapsed((e) => (e !== null ? e + 1 : e)), 1000);
+    return () => clearTimeout(t);
+  }, [manualElapsed]);
+
+  const running = remaining !== null || manualElapsed !== null;
+  const start = () => (parsedSeconds !== null ? setRemaining(parsedSeconds) : setManualElapsed(0));
+  const stop = () => {
+    setRemaining(null);
+    setManualElapsed(null);
+  };
+
+  return (
+    <Touchable
+      accessibilityRole="button"
+      accessibilityLabel={running ? 'Stop rest timer' : `Start rest timer, ${label}`}
+      onPress={running ? stop : start}
+      haptic="light"
+      style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.xs }}
+    >
+      <Glyph name="clock" size={14} color={running ? palette.accent : palette.textMuted} />
+      <AppText variant="bodySmall" tone={running ? 'accent' : 'muted'}>
+        {remaining !== null
+          ? `${remaining}s left`
+          : manualElapsed !== null
+            ? `${manualElapsed}s`
+            : `Rest ${label}`}
+      </AppText>
+    </Touchable>
+  );
+}
+
+/** An itinerary place's "Open in Maps" deep link — pure URL, no state. */
+function MapsButton({ url }: { url: string }) {
+  const { palette, spacing } = useTheme();
+  return (
+    <Touchable
+      accessibilityRole="link"
+      accessibilityLabel="Open in Maps"
+      onPress={() => void Linking.openURL(url).catch(() => {})}
+      haptic="light"
+      style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.xs }}
+    >
+      <Glyph name="mapPin" size={14} color={palette.accent} />
+      <AppText variant="bodySmall" tone="accent">
+        Open in Maps
+      </AppText>
+    </Touchable>
+  );
+}
+
+/**
+ * One entry of a nested object array — an exercise card, a structured item.
+ * The same surface treatment as a chip, scaled up to hold a title, a compact
+ * meta line, and labelled rows — plus whichever Phase 4 control the object
+ * carries (`docs/next-phases.md` §4.2).
+ */
+function ObjectCards({
+  objects,
+  itemStates,
+  onSetItemState,
+}: {
+  objects: NonNullable<DetailField['objects']>;
+  itemStates: ItemStates;
+  onSetItemState: SetItemState;
+}) {
+  const { palette, radius, spacing } = useTheme();
+  return (
+    <View style={{ gap: spacing.smd }}>
+      {objects.map((object: DetailObject, i) => {
+        const state = object.statePath ? itemStates?.[object.statePath] : undefined;
+        return (
+          <View
+            key={`${object.title ?? 'item'}-${i}`}
+            style={{
+              padding: spacing.md,
+              borderRadius: radius.md,
+              backgroundColor: palette.surfaceVariant,
+              borderWidth: 1,
+              borderColor: palette.border,
+              gap: spacing.xs,
+            }}
+          >
+            {object.title ? <AppText variant="cardTitle">{object.title}</AppText> : null}
+            {object.meta ? (
+              <AppText variant="bodySmall" tone="muted">
+                {object.meta}
+              </AppText>
+            ) : null}
+            {object.rows.map((row) => (
+              <View key={row.label} style={{ gap: 4 }}>
+                <AppText variant="caption" tone="muted">
+                  {row.label}
+                </AppText>
+                {row.items ? <Chips items={row.items} /> : <AppText variant="bodySmall">{row.text}</AppText>}
+              </View>
+            ))}
+            {object.control === 'check' && object.statePath ? (
+              <CheckControl
+                done={state?.done === true}
+                onToggle={() =>
+                  onSetItemState(object.statePath as string, { ...state, done: state?.done !== true })
+                }
+              />
+            ) : null}
+            {object.control === 'watch' && object.statePath ? (
+              <WatchControl state={state} onChange={(s) => onSetItemState(object.statePath as string, s)} />
+            ) : null}
+            {object.restLabel ? <RestTimer label={object.restLabel} /> : null}
+            {object.mapsUrl ? <MapsButton url={object.mapsUrl} /> : null}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function Field({
+  field,
+  itemStates,
+  onSetItemState,
+}: {
+  field: DetailField;
+  itemStates: ItemStates;
+  onSetItemState: SetItemState;
+}) {
   const { spacing } = useTheme();
   return (
     <View style={{ marginBottom: spacing.xl }}>
       <SectionLabel>{field.label}</SectionLabel>
+      {field.progress ? <ProgressBar done={field.progress.done} total={field.progress.total} /> : null}
       {field.style === 'objects' && field.objects ? (
-        <ObjectCards objects={field.objects} />
+        <ObjectCards objects={field.objects} itemStates={itemStates} onSetItemState={onSetItemState} />
       ) : field.style === 'steps' && field.items ? (
         <Steps items={field.items} />
       ) : field.items ? (
@@ -154,6 +354,143 @@ function Field({ field }: { field: DetailField }) {
       ) : (
         <AppText>{field.text}</AppText>
       )}
+    </View>
+  );
+}
+
+/**
+ * Recipe serving scaling — reads `structuredData` directly rather than going
+ * through `buildDetailModel`'s Ingredients field, because scaling needs the
+ * structured `{name, quantity, note}` shape to recompute from, not the
+ * already-flattened display string. Legacy flat-string saves (pre-2026-08-07)
+ * render unscaled: there is no separate quantity to scale.
+ */
+function RecipeIngredients({ data }: { data: Record<string, unknown> }) {
+  const { spacing } = useTheme();
+  const base = baseServings(data.servings);
+  const [servings, setServings] = useState<number | null>(base);
+  const factor = servings && base ? servings / base : 1;
+
+  const ingredients = Array.isArray(data.ingredients) ? data.ingredients : [];
+  const items = ingredients
+    .map((raw) => {
+      if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        return trimmed && trimmed !== '[unclear]' ? trimmed : null;
+      }
+      if (raw && typeof raw === 'object') {
+        const r = raw as { name?: unknown; quantity?: unknown; note?: unknown };
+        const clean = (v: unknown) => (typeof v === 'string' && v.trim() && v.trim() !== '[unclear]' ? v.trim() : '');
+        const name = clean(r.name);
+        if (!name) return null;
+        const rawQuantity = clean(r.quantity);
+        const quantity = rawQuantity ? scaleQuantity(rawQuantity, factor) : '';
+        const note = clean(r.note);
+        return `${quantity ? `${quantity} ` : ''}${name}${note ? `, ${note}` : ''}`;
+      }
+      return null;
+    })
+    .filter((v): v is string => v !== null);
+
+  if (!items.length) return null;
+
+  const stepper = base ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel="Fewer servings"
+        onPress={() => setServings((s) => Math.max(1, (s ?? base) - 1))}
+        haptic="selection"
+      >
+        <Glyph name="minus" size={14} />
+      </Touchable>
+      <AppText variant="label">{servings ?? base} servings</AppText>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel="More servings"
+        onPress={() => setServings((s) => (s ?? base) + 1)}
+        haptic="selection"
+      >
+        <Glyph name="plus" size={14} />
+      </Touchable>
+    </View>
+  ) : undefined;
+
+  return (
+    <View style={{ marginBottom: spacing.xl }}>
+      <SectionLabel trailing={stepper}>Ingredients</SectionLabel>
+      <Chips items={items} />
+    </View>
+  );
+}
+
+/**
+ * Step-at-a-time cook mode. `useKeepAwake` holds the screen on while mounted
+ * and releases it automatically on unmount — the whole reason for the
+ * dependency, per `docs/next-phases.md` §4.2.
+ */
+function CookMode({ steps, onClose }: { steps: string[]; onClose: () => void }) {
+  useKeepAwake();
+  const { palette, spacing, icon } = useTheme();
+  const [index, setIndex] = useState(0);
+  const isLast = index === steps.length - 1;
+
+  return (
+    <View
+      style={[
+        StyleSheet.absoluteFill,
+        { backgroundColor: palette.background, padding: spacing.xl, justifyContent: 'space-between' },
+      ]}
+    >
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <AppText variant="sectionLabel" tone="muted">
+          Step {index + 1} of {steps.length}
+        </AppText>
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel="Close cook mode"
+          onPress={onClose}
+          haptic="light"
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 16,
+            backgroundColor: palette.surfaceVariant,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Glyph name="close" size={icon.sm} />
+        </Touchable>
+      </View>
+
+      <AppText variant="display" style={{ textAlign: 'center', lineHeight: 34 }}>
+        {steps[index]}
+      </AppText>
+
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel="Previous step"
+          disabled={index === 0}
+          onPress={() => setIndex((i) => Math.max(0, i - 1))}
+          haptic="light"
+        >
+          <AppText variant="label" tone={index === 0 ? 'muted' : 'accent'}>
+            Back
+          </AppText>
+        </Touchable>
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel={isLast ? 'Finish cook mode' : 'Next step'}
+          onPress={() => (isLast ? onClose() : setIndex((i) => Math.min(steps.length - 1, i + 1)))}
+          haptic="medium"
+        >
+          <AppText variant="label" tone="accent">
+            {isLast ? 'Done' : 'Next'}
+          </AppText>
+        </Touchable>
+      </View>
     </View>
   );
 }
@@ -311,7 +648,7 @@ function AddToShoppingList({ saveId }: { saveId: string }) {
 
 export function SaveDetailScreen({ id }: { id: string }) {
   const { palette, radius, spacing, icon } = useTheme();
-  const { saves } = useSaves();
+  const { saves, patch } = useSaves();
 
   // Start from the feed's copy when it has one, so opening a card from Home is
   // instant and the fetch below only fills in anything that changed. Arriving
@@ -321,6 +658,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(!cached);
   const [showSpaceSheet, setShowSpaceSheet] = useState(false);
+  const [cookModeOpen, setCookModeOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -337,7 +675,44 @@ export function SaveDetailScreen({ id }: { id: string }) {
     void load();
   }, [load]);
 
+  /**
+   * The one handler behind every knowledge type's object behavior. Optimistic
+   * because the controls it drives (a tick, a star) are exactly the kind of
+   * thing that should feel instant — `SaveItemStateService`'s "full replace,
+   * never a merge" contract makes the echoed response safe to just adopt
+   * wholesale rather than reconciling it against local state.
+   */
+  const setItemState = useCallback(
+    (itemPath: string, state: Record<string, unknown>) => {
+      setSave((current) =>
+        current ? { ...current, itemStates: { ...(current.itemStates ?? {}), [itemPath]: state } } : current,
+      );
+      repo
+        .setSaveItemState(id, itemPath, state)
+        .then((updated) => {
+          setSave(updated);
+          patch(id, { itemStates: updated.itemStates });
+        })
+        .catch(() => {
+          // The optimistic write may already be stale (a second tap could have
+          // landed since) — reload from the server rather than guessing what
+          // to revert to.
+          void load();
+        });
+    },
+    [id, patch, load],
+  );
+
   const model = save ? buildDetailModel(save) : null;
+  const isRecipe = save?.knowledgeType === 'recipe';
+  // Ingredients render through `RecipeIngredients` for recipes (it needs the
+  // raw structured shape to scale by servings) rather than the model's
+  // already-flattened chip strings.
+  const displayFields = model ? (isRecipe ? model.fields.filter((f) => f.label !== 'Ingredients') : model.fields) : [];
+  const recipeSteps =
+    isRecipe && Array.isArray(save?.structuredData?.steps)
+      ? (save.structuredData.steps as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+      : [];
 
   return (
     <>
@@ -416,6 +791,67 @@ export function SaveDetailScreen({ id }: { id: string }) {
             </Reveal>
           ) : null}
 
+          {/* Cook mode: step-at-a-time with the screen held awake. Only offered
+              when there is something to step through. */}
+          {model && isRecipe && recipeSteps.length > 0 ? (
+            <Reveal index={2}>
+              <Touchable
+                accessibilityRole="button"
+                accessibilityLabel="Start cook mode"
+                onPress={() => setCookModeOpen(true)}
+                haptic="medium"
+                weight="tile"
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: spacing.smd,
+                  paddingVertical: spacing.md,
+                  borderRadius: radius.sm,
+                  borderWidth: 1,
+                  borderColor: palette.border,
+                  backgroundColor: palette.surface,
+                  marginBottom: spacing.smd,
+                }}
+              >
+                <Glyph name="utensils" size={16} weight={2} color={palette.textMuted} />
+                <AppText variant="label" tone="muted">
+                  Start cook mode
+                </AppText>
+              </Touchable>
+            </Reveal>
+          ) : null}
+
+          {/* place's "Open in Maps" — pure URL construction, no state. */}
+          {model?.mapsUrl ? (
+            <Reveal index={2}>
+              <Touchable
+                accessibilityRole="link"
+                accessibilityLabel="Open in Maps"
+                onPress={() => void Linking.openURL(model.mapsUrl as string).catch(() => {})}
+                haptic="medium"
+                weight="tile"
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: spacing.smd,
+                  paddingVertical: spacing.md,
+                  borderRadius: radius.sm,
+                  borderWidth: 1,
+                  borderColor: palette.border,
+                  backgroundColor: palette.surface,
+                  marginBottom: spacing.smd,
+                }}
+              >
+                <Glyph name="mapPin" size={16} weight={2} color={palette.textMuted} />
+                <AppText variant="label" tone="muted">
+                  Open in Maps
+                </AppText>
+              </Touchable>
+            </Reveal>
+          ) : null}
+
           {/* Add to Space */}
           {save.status === 'ready' ? (
             <Reveal index={2}>
@@ -445,10 +881,16 @@ export function SaveDetailScreen({ id }: { id: string }) {
             </Reveal>
           ) : null}
 
+          {model && isRecipe ? (
+            <Reveal index={3}>
+              <RecipeIngredients data={save.structuredData ?? {}} />
+            </Reveal>
+          ) : null}
+
           {model ? (
-            model.fields.map((field, i) => (
+            displayFields.map((field, i) => (
               <Reveal key={field.label} index={3 + i}>
-                <Field field={field} />
+                <Field field={field} itemStates={save.itemStates} onSetItemState={setItemState} />
               </Reveal>
             ))
           ) : (
@@ -460,7 +902,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
           {/* Progress only makes sense once there is something to make
               progress on — a save still being processed has no content yet. */}
           {save.status === 'ready' ? (
-            <Reveal index={3 + (model?.fields.length ?? 1)}>
+            <Reveal index={3 + (displayFields.length ?? 1)}>
               <LifecycleStrip
                 saveId={save.id}
                 value={save.lifecycleStatus ?? 'saved'}
@@ -474,7 +916,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
           <Discussion saveId={save.id} spaceId={save.spaceId} />
 
           {save.sourceUrl ? (
-            <Reveal index={4 + (model?.fields.length ?? 1)}>
+            <Reveal index={4 + (displayFields.length ?? 1)}>
               <SectionLabel>Source</SectionLabel>
               <Touchable
                 accessibilityRole="link"
@@ -508,6 +950,9 @@ export function SaveDetailScreen({ id }: { id: string }) {
     </Screen>
     {save && showSpaceSheet ? (
       <AddToSpaceSheet save={save} onClose={() => setShowSpaceSheet(false)} />
+    ) : null}
+    {cookModeOpen && recipeSteps.length > 0 ? (
+      <CookMode steps={recipeSteps} onClose={() => setCookModeOpen(false)} />
     ) : null}
     </>
   );
