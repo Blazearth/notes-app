@@ -16,7 +16,7 @@ export interface SaveTypeMeta {
   color: string;
 }
 
-/** The 9 types `KnowledgeTypeRegistry` ships today, in its registration order. */
+/** The 14 types `KnowledgeTypeRegistry` ships today, in its registration order. */
 const KNOWLEDGE_TYPES: SaveTypeMeta[] = [
   { type: 'recipe', label: 'Recipes', glyph: 'utensils', color: TYPE_COLORS.recipe },
   { type: 'movie', label: 'Watchlist', glyph: 'film', color: TYPE_COLORS.movie },
@@ -25,6 +25,11 @@ const KNOWLEDGE_TYPES: SaveTypeMeta[] = [
   { type: 'product', label: 'Products', glyph: 'tag', color: TYPE_COLORS.product },
   { type: 'book', label: 'Books', glyph: 'book', color: TYPE_COLORS.book },
   { type: 'workout', label: 'Workouts', glyph: 'activity', color: TYPE_COLORS.workout },
+  { type: 'recommendation_list', label: 'Recommendations', glyph: 'list', color: TYPE_COLORS.recommendation_list },
+  { type: 'checklist', label: 'Checklists', glyph: 'checkSquare', color: TYPE_COLORS.checklist },
+  { type: 'itinerary', label: 'Itineraries', glyph: 'compass', color: TYPE_COLORS.itinerary },
+  { type: 'course', label: 'Courses', glyph: 'graduationCap', color: TYPE_COLORS.course },
+  { type: 'github_repo', label: 'Repos', glyph: 'code', color: TYPE_COLORS.github_repo },
   { type: 'other', label: 'Notes', glyph: 'textNote', color: TYPE_COLORS.other },
   { type: 'unusable', label: 'Unusable', glyph: 'close', color: TYPE_COLORS.unusable },
 ];

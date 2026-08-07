@@ -142,6 +142,37 @@ function exercisesField(value: unknown): DetailField | null {
 }
 
 /**
+ * The bespoke recommendation_list layout: rank + name as the card title,
+ * kind/year as the meta line, `reason` promoted to its own row — per the
+ * design doc, the reason a creator recommends something is the field a
+ * watchlist entry is worthless without, so it must not get buried among
+ * generic leftovers rows the way `objectListField` would render it.
+ */
+function recommendationItemsField(value: unknown): DetailField | null {
+  if (!Array.isArray(value)) return null;
+  const objects: DetailObject[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    const name = clean(raw.name);
+    if (!name) continue;
+    const rank = clean(raw.rank);
+    const rows: DetailObjectRow[] = [];
+    const reason = clean(raw.reason);
+    if (reason) rows.push({ label: 'Why', text: reason });
+    const platform = clean(raw.platform);
+    if (platform) rows.push({ label: 'Where', text: platform });
+    const genre = cleanList(raw.genre);
+    if (genre.length) rows.push({ label: 'Genre', items: genre });
+    objects.push({
+      title: rank ? `${rank}. ${name}` : name,
+      meta: join([clean(raw.kind), clean(raw.year)]),
+      rows,
+    });
+  }
+  return objects.length ? { label: 'Items', objects, style: 'objects' } : null;
+}
+
+/**
  * The generic shape for a nested object array the client has no bespoke
  * layout for — the same promise `leftovers` makes for flat fields, extended
  * one level down: a new objectArray field in the registry renders as
@@ -185,6 +216,7 @@ const HANDLED_ELSEWHERE: Record<string, ReadonlySet<string>> = {
   ]),
   other: new Set(['title', 'summary', 'tags']),
   unusable: new Set(['reason']),
+  recommendation_list: new Set(['title', 'medium', 'summary', 'items', 'orderMatters']),
 };
 
 /**
@@ -315,6 +347,17 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
         title,
         lede: clean(d.summary) ?? undefined,
         fields: [...compact([listField('Tags', d.tags)]), ...leftovers(d, type)],
+      };
+    }
+
+    case 'recommendation_list': {
+      const title = clean(d.title);
+      if (!title) return null;
+      return {
+        title,
+        meta: join([clean(d.medium), clean(d.orderMatters) === 'yes' ? 'watch in order' : null]),
+        lede: clean(d.summary) ?? undefined,
+        fields: [...compact([recommendationItemsField(d.items)]), ...leftovers(d, type)],
       };
     }
 

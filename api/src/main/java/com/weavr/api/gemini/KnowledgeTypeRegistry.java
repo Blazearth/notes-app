@@ -307,6 +307,219 @@ public final class KnowledgeTypeRegistry {
         ));
 
         // -----------------------------------------------------------------
+        // recommendation_list — a curated list of things to work through
+        // -----------------------------------------------------------------
+        register(new KnowledgeType(
+                "recommendation_list",
+                "A curated list of several recommended things — films, shows, books, games, " +
+                "places, or products — to work through, not one item to remember. Use this, " +
+                "not movie/book, when several things are recommended together with commentary.",
+                List.of(
+                        field("title", "string", "The list's own subject, e.g. 'Underrated Romance Anime'"),
+                        field("medium", "string",
+                                "One of: anime, film, tv, book, game, music, podcast, place, product, mixed"),
+                        field("summary", "string", "One sentence on the list's angle"),
+                        objectArray("items", "Every recommended item, in the order presented",
+                                field("name", "string", "The recommended thing itself"),
+                                field("kind", "string", "e.g. 'film', 'series' — lists mix kinds, so this is per-item"),
+                                field("year", "string", "Release year if stated, or '[unclear]'"),
+                                field("genre", "array", "e.g. ['romance', 'drama'], or []"),
+                                field("reason", "string",
+                                        "WHY the creator recommends it — the most valuable field, or '[unclear]'"),
+                                field("platform", "string", "Where to watch/read/play if stated, or '[unclear]'"),
+                                field("rank", "string", "Position if the list is ordered, or '[unclear]'")),
+                        field("orderMatters", "string",
+                                "'yes' if the creator prescribes a viewing/reading order, else 'no'")
+                ),
+                """
+                Input: "3 anime you need before you die: 2. Horimiya — best-paced romance anime \
+                out there, streaming on Crunchyroll. 1. Clannad — save this one for last, it \
+                will wreck you emotionally. Watch in that order, it matters."
+                Output:
+                {
+                  "knowledgeType": "recommendation_list",
+                  "confidence": 0.94,
+                  "title": "Anime You Need Before You Die",
+                  "medium": "anime",
+                  "summary": "A short ranked list of essential anime recommendations meant to be watched in order.",
+                  "items": [
+                    {"name": "Horimiya", "kind": "anime", "year": "[unclear]", "genre": ["romance"], "reason": "best-paced romance anime out there", "platform": "Crunchyroll", "rank": "2"},
+                    {"name": "Clannad", "kind": "anime", "year": "[unclear]", "genre": ["drama", "romance"], "reason": "will wreck you emotionally — save it for last", "platform": "[unclear]", "rank": "1"}
+                  ],
+                  "orderMatters": "yes"
+                }
+                """
+        ));
+
+        // -----------------------------------------------------------------
+        // checklist — steps or tasks to work through
+        // -----------------------------------------------------------------
+        register(new KnowledgeType(
+                "checklist",
+                "Steps or tasks to work through: a tutorial phrased as 'do these N things', " +
+                "a packing list, a setup guide. A list to check off, not narrative content.",
+                List.of(
+                        field("title", "string", "A descriptive title for the checklist"),
+                        field("summary", "string", "One sentence on what this checklist accomplishes"),
+                        field("context", "string", "What this prepares you for, or '[unclear]'"),
+                        field("category", "string",
+                                "One of: Travel, Home, Tech, Cooking, Fitness, Shopping, Learning, Other"),
+                        objectArray("items", "Every item, in the order listed",
+                                field("text", "string", "The item or task itself"),
+                                field("detail", "string", "Qualifier or note, e.g. quantity or timing, or '[unclear]'"),
+                                field("optional", "string", "'yes' if the content marks it optional, else 'no'"))
+                ),
+                """
+                Input: "Packing list for a 4-day ski trip: thermal base layers (2 sets), ski \
+                jacket, goggles — don't forget these, portable phone charger (optional)."
+                Output:
+                {
+                  "knowledgeType": "checklist",
+                  "confidence": 0.93,
+                  "title": "4-Day Ski Trip Packing List",
+                  "summary": "Essential items to pack for a short ski trip, covering layering and weather protection.",
+                  "context": "Packing for a 4-day ski trip",
+                  "category": "Travel",
+                  "items": [
+                    {"text": "Thermal base layers", "detail": "2 sets", "optional": "no"},
+                    {"text": "Ski jacket", "detail": "[unclear]", "optional": "no"},
+                    {"text": "Goggles", "detail": "don't forget these", "optional": "no"},
+                    {"text": "Portable phone charger", "detail": "[unclear]", "optional": "yes"}
+                  ]
+                }
+                """
+        ));
+
+        // -----------------------------------------------------------------
+        // itinerary — travel guide
+        // -----------------------------------------------------------------
+        register(new KnowledgeType(
+                "itinerary",
+                "A travel guide or itinerary — places to visit, in order or grouped by day, for a trip to a destination.",
+                List.of(
+                        field("title", "string", "Itinerary title, e.g. '3 Days in Kyoto'"),
+                        field("destination", "string", "The destination city/region/country"),
+                        field("durationDays", "string", "Number of days, or '[unclear]'"),
+                        field("summary", "string", "One sentence on the trip's focus"),
+                        field("bestSeason", "string", "Best time of year to go if mentioned, or '[unclear]'"),
+                        objectArray("places", "Every place, in the order presented",
+                                field("name", "string", "Place name"),
+                                field("kind", "string", "One of: sight, restaurant, hotel, area"),
+                                field("area", "string", "Neighbourhood or district if stated, or '[unclear]'"),
+                                field("cost", "string", "Cost if mentioned, e.g. 'free', '¥500', or '[unclear]'"),
+                                field("timeNeeded", "string", "Time to allow, e.g. '2 hours', or '[unclear]'"),
+                                field("tips", "array", "Practical tips for this place, or []"),
+                                field("day", "string", "Day number if the content assigns one, else '[unclear]'")),
+                        field("generalTips", "array", "Trip-wide tips not tied to one place, or []")
+                ),
+                """
+                Input: "3 days in Kyoto: Day 1 — Fushimi Inari Shrine, free, go at sunrise \
+                before the crowds, 2-3 hours. Day 2 — Arashiyama Bamboo Grove, free, best \
+                light in early morning, 1 hour. Go in autumn for the foliage."
+                Output:
+                {
+                  "knowledgeType": "itinerary",
+                  "confidence": 0.94,
+                  "title": "3 Days in Kyoto",
+                  "destination": "Kyoto",
+                  "durationDays": "3",
+                  "summary": "A 3-day Kyoto itinerary covering shrines and the Arashiyama district.",
+                  "bestSeason": "Autumn",
+                  "places": [
+                    {"name": "Fushimi Inari Shrine", "kind": "sight", "area": "[unclear]", "cost": "free", "timeNeeded": "2-3 hours", "tips": ["go at sunrise before the crowds"], "day": "1"},
+                    {"name": "Arashiyama Bamboo Grove", "kind": "sight", "area": "Arashiyama", "cost": "free", "timeNeeded": "1 hour", "tips": ["best light in early morning"], "day": "2"}
+                  ],
+                  "generalTips": ["Visit in autumn for the foliage"]
+                }
+                """
+        ));
+
+        // -----------------------------------------------------------------
+        // course — structured learning content
+        // -----------------------------------------------------------------
+        register(new KnowledgeType(
+                "course",
+                "Structured learning content — a course, tutorial series, or study guide with a defined progression.",
+                List.of(
+                        field("title", "string", "Course title"),
+                        field("subject", "string", "The subject taught, e.g. 'Data Science'"),
+                        field("level", "string",
+                                "Only if the content states it, e.g. 'beginner' — never inferred; '[unclear]' otherwise"),
+                        field("summary", "string", "One sentence on what the course covers"),
+                        objectArray("sections", "Every section, in the order taught",
+                                field("name", "string", "Section name"),
+                                field("covers", "string", "What it covers, or '[unclear]'"),
+                                field("duration", "string", "Time for this section if stated, or '[unclear]'")),
+                        field("prerequisites", "array", "Prior knowledge required if stated, or []"),
+                        field("resources", "array", "Tools, books, or platforms named in the content, or []"),
+                        field("outcomes", "array", "What you'll be able to do after, or []")
+                ),
+                """
+                Input: "Free Python for Data Science course, 6 hours total. Section 1: Python \
+                Basics (45 min) — variables, loops, functions. Section 2: Pandas Fundamentals \
+                (90 min) — dataframes, filtering, groupby. No prior programming experience \
+                needed. By the end you'll be able to clean and analyze a real dataset. Uses \
+                the free Kaggle notebooks environment."
+                Output:
+                {
+                  "knowledgeType": "course",
+                  "confidence": 0.95,
+                  "title": "Python for Data Science",
+                  "subject": "Data Science",
+                  "level": "[unclear]",
+                  "summary": "A free 6-hour course covering Python basics through to data analysis with Pandas.",
+                  "sections": [
+                    {"name": "Python Basics", "covers": "variables, loops, functions", "duration": "45 min"},
+                    {"name": "Pandas Fundamentals", "covers": "dataframes, filtering, groupby", "duration": "90 min"}
+                  ],
+                  "prerequisites": [],
+                  "resources": ["Kaggle notebooks"],
+                  "outcomes": ["Clean and analyze a real dataset"]
+                }
+                """
+        ));
+
+        // -----------------------------------------------------------------
+        // github_repo — a repository worth trying or referencing
+        // -----------------------------------------------------------------
+        register(new KnowledgeType(
+                "github_repo",
+                "A GitHub repository — open-source project, tool, or template — worth trying or referencing.",
+                List.of(
+                        field("name", "string", "Repository name"),
+                        field("owner", "string", "Repository owner/org, or '[unclear]'"),
+                        field("summary", "string", "One sentence on what the project does"),
+                        field("language", "string", "Primary language, or '[unclear]'"),
+                        field("purpose", "string", "What problem it solves, or '[unclear]'"),
+                        field("setup", "array", "Install/run steps as stated, or []"),
+                        objectArray("commands", "Notable commands mentioned",
+                                field("command", "string", "The command itself"),
+                                field("does", "string", "What it does")),
+                        field("technologies", "array", "Frameworks/libraries named in the content, or []")
+                ),
+                """
+                Input: "Check out fastapi-users by fastapi-users on GitHub — Python auth for \
+                FastAPI apps, batteries included. pip install fastapi-users, then \
+                'fastapi-users runserver' to start. Built on SQLAlchemy and Pydantic."
+                Output:
+                {
+                  "knowledgeType": "github_repo",
+                  "confidence": 0.92,
+                  "name": "fastapi-users",
+                  "owner": "fastapi-users",
+                  "summary": "A batteries-included authentication library for FastAPI applications.",
+                  "language": "Python",
+                  "purpose": "Add ready-made user authentication to a FastAPI app",
+                  "setup": ["pip install fastapi-users"],
+                  "commands": [
+                    {"command": "fastapi-users runserver", "does": "starts the server"}
+                  ],
+                  "technologies": ["SQLAlchemy", "Pydantic"]
+                }
+                """
+        ));
+
+        // -----------------------------------------------------------------
         // other — anything that doesn't fit a specific type
         // -----------------------------------------------------------------
         register(new KnowledgeType(

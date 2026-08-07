@@ -46,6 +46,11 @@ export type GlyphName =
   | 'heart'
   | 'archive'
   | 'check'
+  // Phase 3 knowledge types — recommendation_list, checklist, course, github_repo.
+  | 'list'
+  | 'checkSquare'
+  | 'graduationCap'
+  | 'code'
   // Decorative primitives — not drawn as icons in the mockup
   | 'circle'
   | 'ring'
@@ -394,6 +399,47 @@ export function Glyph({ name, size = 18, color, weight = 2, style }: GlyphProps)
         return (
           <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
             <Path d="M20 6 9 17l-5-5" />
+          </StrokeIcon>
+        );
+
+      // recommendation_list type tile / card.
+      case 'list':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Line x1="8" y1="6" x2="21" y2="6" />
+            <Line x1="8" y1="12" x2="21" y2="12" />
+            <Line x1="8" y1="18" x2="21" y2="18" />
+            <Line x1="3" y1="6" x2="3.01" y2="6" />
+            <Line x1="3" y1="12" x2="3.01" y2="12" />
+            <Line x1="3" y1="18" x2="3.01" y2="18" />
+          </StrokeIcon>
+        );
+
+      // checklist type tile / card.
+      case 'checkSquare':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M9 11l3 3L22 4" />
+            <Path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+          </StrokeIcon>
+        );
+
+      // course type tile / card.
+      case 'graduationCap':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M22 10 12 5 2 10l10 5 10-5Z" />
+            <Path d="M6 12v5c0 1.5 2.5 3 6 3s6-1.5 6-3v-5" />
+            <Path d="M22 10v6" />
+          </StrokeIcon>
+        );
+
+      // github_repo type tile / card.
+      case 'code':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M16 18l6-6-6-6" />
+            <Path d="M8 6l-6 6 6 6" />
           </StrokeIcon>
         );
     }

@@ -1,6 +1,15 @@
 import type { SaveResponse } from '@/api/types';
 
-export type CardKind = 'recipe' | 'movie' | 'place' | 'article' | 'product' | 'book' | 'workout' | 'other';
+export type CardKind =
+  | 'recipe'
+  | 'movie'
+  | 'place'
+  | 'article'
+  | 'product'
+  | 'book'
+  | 'workout'
+  | 'recommendation_list'
+  | 'other';
 
 export interface SaveCardModel {
   kind: CardKind;
@@ -174,6 +183,26 @@ export function buildCardModel(save: SaveResponse): SaveCardModel | null {
         title,
         meta: joinMeta([clean(d.category)]),
         summary: clean(d.summary) ?? undefined,
+      };
+    }
+
+    // The flagship Phase 3 type — a "top 10" video is a list to work
+    // through, not a single title. Chips are item names, same glance-value
+    // as a recipe's ingredient chips.
+    case 'recommendation_list': {
+      const title = clean(d.title);
+      if (!title) return null;
+      const itemNames = Array.isArray(d.items)
+        ? d.items.map((v) => (isRecord(v) ? clean(v.name) : null)).filter((v): v is string => v !== null)
+        : [];
+      const { chips, overflow } = withOverflow(itemNames, 4);
+      return {
+        kind: 'recommendation_list',
+        title,
+        meta: joinMeta([clean(d.medium), itemNames.length ? `${itemNames.length} items` : null]),
+        summary: clean(d.summary) ?? undefined,
+        chips,
+        chipsOverflow: overflow,
       };
     }
 

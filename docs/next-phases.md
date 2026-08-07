@@ -50,6 +50,18 @@ guessed:
 
 ## Phase 3 — new intent-named types
 
+**Landed 2026-08-07.** All five types below shipped in one batch: `recommendation_list`,
+`checklist`, `itinerary`, `course`, `github_repo`. Per type, registry entry + few-shot,
+`GroupService` facet, and `saveTypeMeta.ts` icon/colour/label all landed; bespoke
+card/detail layouts (optional per the table below) landed only for `recommendation_list`,
+the flagship — the other four render through the generic fallback, which Phase 1–2 had
+already proven handles an unknown type's nested object arrays. The live schema pre-flight
+(`KnowledgeTypeRegistrySchemaLiveTest`, `WEAVR_LIVE_GEMINI=1`) posted the real 14-branch
+`anyOf` against the real API and got a 0.98-confidence `recommendation_list` extraction
+back, `reason` populated on every item — see CLAUDE.md's Phase 3 paragraph for the full
+verification record, including the `Map.of` → `Map.ofEntries` fix `GroupService` needed
+once facet/display-name maps passed 10 entries.
+
 All server-side additions are registry entries (data change). Per type, the
 full checklist is:
 

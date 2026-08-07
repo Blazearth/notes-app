@@ -54,16 +54,21 @@ public class GroupService {
      * since it uses a controlled vocabulary (10-15 values), preventing the
      * tag-per-save explosion that free-text `tags` caused.
      */
-    private static final Map<String, String> FACETS = Map.of(
-            "recipe", "cuisine",
-            "restaurant", "cuisine",
-            "movie", "genre",
-            "book", "genre",
-            "place", "cuisine",
-            "article", "category",
-            "product", "category",
-            "workout", "category",
-            "other", "category");
+    private static final Map<String, String> FACETS = Map.ofEntries(
+            Map.entry("recipe", "cuisine"),
+            Map.entry("restaurant", "cuisine"),
+            Map.entry("movie", "genre"),
+            Map.entry("book", "genre"),
+            Map.entry("place", "cuisine"),
+            Map.entry("article", "category"),
+            Map.entry("product", "category"),
+            Map.entry("workout", "category"),
+            Map.entry("other", "category"),
+            Map.entry("recommendation_list", "medium"),
+            Map.entry("checklist", "category"),
+            Map.entry("itinerary", "destination"),
+            Map.entry("course", "subject"),
+            Map.entry("github_repo", "language"));
 
     /**
      * Product-facing names for the types the registry emits.
@@ -73,16 +78,21 @@ public class GroupService {
      * map has never heard of must still get a sensible folder rather than
      * disappearing from the library.
      */
-    private static final Map<String, String> DISPLAY_NAMES = Map.of(
-            "recipe", "Recipes",
-            "movie", "Watchlist",
-            "place", "Places",
-            "restaurant", "Restaurants",
-            "product", "Shopping",
-            "article", "Reading",
-            "workout", "Workouts",
-            "book", "Books",
-            "other", "Other");
+    private static final Map<String, String> DISPLAY_NAMES = Map.ofEntries(
+            Map.entry("recipe", "Recipes"),
+            Map.entry("movie", "Watchlist"),
+            Map.entry("place", "Places"),
+            Map.entry("restaurant", "Restaurants"),
+            Map.entry("product", "Shopping"),
+            Map.entry("article", "Reading"),
+            Map.entry("workout", "Workouts"),
+            Map.entry("book", "Books"),
+            Map.entry("other", "Other"),
+            Map.entry("recommendation_list", "Recommendations"),
+            Map.entry("checklist", "Checklists"),
+            Map.entry("itinerary", "Itineraries"),
+            Map.entry("course", "Courses"),
+            Map.entry("github_repo", "Repos"));
 
     /** Separates the type segment from the facet segment in an id. */
     private static final String ID_SEPARATOR = "~";
