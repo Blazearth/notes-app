@@ -413,31 +413,201 @@ singleton (above), and — beyond what the phase originally asked for — a real
 live-Supabase round trip for K2's write path, matching K1's own bar rather
 than settling for K2 being "mocked but not proven."
 
-### K4 — identity upgrades (each independent)
+### K4 — identity upgrades (each independent) — done, 2026-08-07
 
-- **Canonical ids from enrichment**: `RecommendationListEnricher` and
-  `TmdbEnricher` store `tmdbId` alongside `posterUrl` on a confident match
-  (additive per-item merge machinery already exists — `mergeItemLists`).
-  `Entities.key` prefers `tmdb:<id>` over the string key, which resolves the
-  alias problem for exactly the entities TMDB knows. Needs a real
-  `WEAVR_TMDB_API_KEY` live-verified first — the whole TMDB path is
-  mock-only today (known gap, `TmdbEnricherTest`).
-- **Shape 2 (save-is-the-entity) joins the key space**: a `movie` save's
-  title resolves to the same entity as a watchlist item. Renders as the
-  review attaching to the watchlist entry.
-- **`V14__collection_overrides.sql`**: manual merge/split + rename, applied
-  over the derived view. Build only what K0/K3 usage shows is needed.
+All three, landed together:
 
-### K5 — synthesis (budgeted or never)
+- **Canonical ids from enrichment.** `TmdbEnricher` and
+  `RecommendationListEnricher` now write `tmdbId` alongside (or, for a
+  poster-less match, instead of) `posterUrl` on a confident match — the
+  latter changed shape slightly to make this possible: a match with no
+  poster used to return `Map.of()` and be silently dropped, which would have
+  thrown away the one thing K4 needed from it. `Entities.key` gained a
+  three-arg overload (`key(kind, name, canonicalId)`) that returns
+  `"tmdb:" + canonicalId` whenever a canonical id is present, overriding the
+  string key entirely — `CollectionService` reads `item.get("tmdbId")` at
+  the exact point it already computes an entity key, for both shape-1 items
+  and shape-2 saves. This is confirmed to resolve the alias case the doc
+  names: "Shingeki no Kyojin" and "Attack on Titan" sharing a `tmdbId`
+  collide into one entity even though no normalization rule over the
+  strings would ever unify them (`EntitiesTest
+  .aCanonicalIdOverridesTheStringKeyEntirely`,
+  `CollectionServiceTest.itemsSharingATmdbIdMergeEvenWithDifferentSurfaceForms`).
+  **Still the stated known gap**: no `WEAVR_TMDB_API_KEY` exists in this
+  environment, so `tmdbId` being written correctly is mock-verified only,
+  the same standing gap `TmdbEnricherTest` already documented — nothing
+  about K4 closes it.
+- **Shape 2 joins the key space, scoped exactly as the doc's own phrase
+  puts it** — "the review attaching to the watchlist entry," not shape 2
+  gaining a top-level collection of its own. `CollectionService.index` now
+  also folds in `shape2Occurrences(ready)`: every ready `movie`/`book`/
+  `place`/`product`/`recipe`/`github_repo` save, reduced to a single
+  synthetic occurrence of itself (its own `structuredData` minus its name
+  field), keyed the same way a shape-1 item is. A shape-2 occurrence is
+  merged in **only** when a shape-1 item already produced that key —
+  `byEntity.get(key)` must already exist — so a `movie` save with no
+  matching watchlist entry contributes nothing and stays an ordinary,
+  individually-presented save exactly as before K4, and `GET
+  /v1/collections/movie` still returns `[]`, unchanged from K1
+  (`CollectionServiceTest.shape2TypesStillProduceNoTopLevelNodeOfTheirOwn`).
+  Because field rollup was already generic over field names (K1), a movie
+  review's `director`/`synopsis` roll up onto the merged entity for free,
+  right alongside the watchlist item's own `reason` — no field-specific
+  code needed, proven by `shape2MovieSaveJoinsAnExistingWatchlistEntityAsAnAdditionalSource`.
+- **`V14__collection_overrides.sql`**, trimmed from the doc's own four-item
+  sketch to three `override_type` values — `entity_merge`, `entity_rename`,
+  `collection_rename` — with the reasoning for the cut stated in the
+  migration itself: merge-undo is a `DELETE` of an `entity_merge` row, not a
+  fourth type, and **pin rides `entity_states`' existing `state` jsonb
+  (`state.pinned`)** instead of a fourth type, reusing K2's already-proven
+  per-(user, entity) mechanism rather than adding a parallel one for a
+  single boolean. `CollectionOverrideService` (`JdbcClient`, the
+  `EntityStateService` shape) loads every override row for a user in one
+  query and resolves merge chains to their final target with a
+  cycle-guarded walk (`resolveChains`, max 32 hops) — covers a user
+  re-merging into something that eventually points back at the start
+  without hanging. `CollectionOverrides` is threaded through the pure merge
+  core as **data, not a service reference** (`buildTree`/`mergeType` gained
+  a fourth parameter, defaulting to `EMPTY_OVERRIDES` for every existing
+  caller), so the core stays exactly as database-free and unit-testable as
+  K1 left it — a manual merge is a redirect applied at the same point an
+  entity key is first computed, an entity/collection rename is a lookup
+  applied where the name is resolved, never a second pass over already-built
+  data. New endpoints: `POST /v1/collection-overrides/merge`,
+  `POST .../unmerge`, `PATCH .../entity-name`, `PATCH .../collection-name`
+  — all body-over-path, the `EntityStateController` precedent, since entity
+  keys and collection ids both carry characters (`:`, spaces, `~`) that
+  would need encoding as a path segment.
 
-The vision's "AI continuously improves the program" / collection summaries.
-Not designed here beyond its constraints, which are the digest's: generated
-only on view, cached per (user, collection, content-hash of source ids),
-plain-text out, and **a new budget line in CLAUDE.md's request-budget section
-before the first call is written** — against the 500 pool, never the 20-RPD
-Flash pool. If the budget line can't be justified, this phase doesn't exist,
-and the compare-side-by-side local-compute alternative for workouts is what
-ships instead.
+**App-side, `@/collections/merge.ts` and `@/collections/entities.ts` grew
+the identical three capabilities**, by hand, the same "two languages, one
+port" discipline K2 established — `entityKey`'s three-arg overload, the
+`SHAPE2_TYPES` join folded into `indexType`, and a `CollectionOverrides`
+type threaded through `mergeType`/`buildTree` the same optional-fourth-
+parameter way. `mockRepository` gained three module-scope override stores
+(`mergeRedirects`, `entityNameOverrides`, `collectionNameOverrides`) and the
+same `resolveChains`-at-read-time split the Java service makes, so mock mode
+exercises the real merge path rather than a hand-authored one. **Pin is the
+one piece with real UI**: `CollectionDetailScreen`'s entity sheet gained a
+bookmark-icon toggle (new `Glyph` — Feather-style, no icon library, matching
+every other icon in the app) writing `state.pinned` through the existing
+`setEntityState` full-replace path, and pinned entities sort first within
+their Remaining/Done section. **Merge and rename have no UI** — the data
+layer, endpoints and repo methods (`mergeEntities`, `unmergeEntity`,
+`renameEntity`, `renameCollection`) are real and tested, but nothing in this
+pass builds a picker to trigger them. This mirrors the doc's own "build only
+what K0/K3 usage shows is needed" instruction taken literally: there is
+still no duplicate-detection signal anywhere in the app (measured-first
+rule, unchanged since K1) to tell a user two entities are worth merging by
+hand, so a trigger UI would be inventing an affordance nothing points at
+yet.
+
+Verified: full backend suite green (**393/393, 6 opt-in skipped** — 20 new:
+`EntitiesTest` (3 cases for the canonical-id overload),
+`CollectionServiceTest` (8: canonical id merge, shape-2 join happy path +
+no-match + no-top-level-node, manual merge across both shape 1 and a
+shape-2 occurrence, entity rename, collection rename),
+`CollectionOverrideServiceTest` (8, mirroring `EntityStateServiceTest`'s
+mocked-`JdbcClient` style — including the chain-resolution and cycle-guard
+logic pinned directly, not just through `CollectionService`), plus one new
+`tmdbId`-without-a-poster case in `RecommendationListEnricherTest` and
+`tmdbId` assertions folded into two already-existing `TmdbEnricherTest`
+cases). App typechecks,
+`expo export --platform web` bundles clean, and the updated `merge.ts`/
+`entities.ts`/`workoutCompare.ts` (K5, below) were executed standalone under
+node (`node --experimental-strip-types`, this repo's now-current variant of
+the standing "run the model under node" technique) against 26 hand-built
+assertions covering canonical-id collision, the shape-2 join's happy path
+and its "no match, no entity" path, manual-merge and rename overrides, and
+`EMPTY_OVERRIDES` being a true no-op — all 26 passed against the real
+shipped TypeScript, not a paraphrase of it. **Not run against a live
+Supabase** — unlike K1/K2's throwaway-user round trips, this pass had no
+opportunity to seed a `tmdbId`-bearing save or drive the new endpoints
+against a real database; that gap is explicit, not assumed away, and stated
+here rather than left implicit like the TMDB key gap it inherits. **Not run
+on a device**, same standing caveat as the rest of the app's UI work.
+
+### K5 — synthesis (budgeted or never) — done, 2026-08-07: the constraint held, so the alternative shipped instead
+
+The vision's "AI continuously improves the program" / collection summaries
+was evaluated against exactly the bar this section set in advance — generated
+only on view, cached, and **a new budget line in CLAUDE.md's request-budget
+section before the first call is written** — and the honest answer is that no
+such line was written. Nothing forced the decision technically; it follows
+the same reasoning `recipe.estimatedNutrition` was cut on in Phase 5 §5.1
+("a wrong estimate has real-world consequences a difficulty guess doesn't")
+and the same one the digest's own "budget explicitly, don't let a feature eat
+shared capacity" rule states — a per-view generative rewrite of someone's
+workout program is exactly the kind of standing draw against the 500-RPD pool
+this doc's own constraint 2 exists to prevent, and unlike a digest it has no
+natural weekly cache key to bound how often it fires. **So this phase, as
+specified, does not exist** — per its own stated rule, stated once more here
+rather than silently: if the budget line can't be justified, it doesn't ship.
+
+**What shipped instead is the doc's own named alternative**, in full:
+side-by-side compare for workouts, entirely local compute, zero AI, the same
+cost class Phase 5 §5.2's `workoutLoadField` already established for a
+single workout's own session-length estimate — extended across several
+rather than reasoning across them.
+
+- **`app/src/saves/workoutCompare.ts`** (`compareWorkouts`) is pure: given a
+  list of saves, it drops anything that isn't a usable `workout` save and
+  reduces each survivor to a row read straight out of `structuredData` — no
+  merge, no rewrite, no field is ever blended across sources the way a
+  `recommendation_list` entity's fields are. A stated `duration`/`difficulty`
+  wins over the §5.1 estimate fields exactly like `detailModel.ts` already
+  prefers the creator's own claim, and a row carries its own
+  `durationIsEstimate`/`difficultyIsEstimate` flag rather than silently
+  reusing an estimate as if it were stated — the same "distinguishable from
+  extracted ones" contract §5.1 already committed to, carried into a second
+  screen instead of invented fresh for it. The only thing computed *across*
+  rows is a plain set intersection — `commonMuscleGroups`/`commonEquipment`,
+  suppressed below two rows — which is aggregation (constraint 4's free
+  half), not synthesis.
+- **`WorkoutCompareScreen`** (`/compare-workouts`, routed
+  `slide_from_right`) renders one column per selected save in a horizontal
+  scroll plus an "In common" card — nothing merged, every source's own
+  numbers stay attributed to its own column, mirroring the same "reasons
+  are never blended" rule the recommendation-list entity sheet already
+  follows for a different kind of source.
+- **The entry point is scoped to exactly the workout group**, not a general
+  group feature: `GroupDetailScreen` gained a "Compare" toggle that only
+  renders when `id` is the `workout` top-level group or one of its facet
+  subgroups, `hasSubgroups` is false (comparison operates on leaf saves, the
+  same reason multi-select stays out of a screen still showing subgroup
+  rows) and at least two `ready` workout saves exist. Selecting reuses
+  `SaveCard`'s existing `selectionMode`/`selected`/`onLongPress` props
+  (already built for Library's favorite/archive bulk actions in an earlier
+  phase) rather than a new selection component — long-press enters compare
+  mode on the pressed card the same way it enters multi-select in the
+  Library, and a bottom action bar reading "Compare N workouts" (disabled
+  under two selections) navigates to `/compare-workouts` with the selected
+  ids joined into one `ids` query param, plain comma-separated rather than
+  Expo Router's array-param handling, since a handful of workout ids never
+  needs more than that.
+- **No backend change at all.** Every field `compareWorkouts` reads is
+  already served by the ordinary `GET /v1/saves`/`GET /v1/groups` calls the
+  screen already makes — the same "interactivity is client + Postgres, not
+  AI" rule Phase 5's own design principle states, applied to a comparison
+  instead of a completion tick.
+
+Verified: `workoutCompare.ts` executed standalone under node against 9
+assertions (drops a non-workout save from the comparison, prefers a stated
+duration/difficulty over the estimate and flags the estimate correctly when
+it's the only value present, computes the muscle-group and equipment
+intersections correctly, and confirms "common" stays empty under two rows)
+— all passed against the real shipped module, same run as K4's verification
+above. App typechecks and `expo export --platform web` bundles clean,
+including the new route and the `GroupDetailScreen` multi-select changes.
+**Not driven through headless Chrome or on a device** — this phase touched
+only the workout group screen's header/selection state and a new screen
+built from already-proven primitives (`SaveCard`, `Card`, `Screen`,
+`Reveal`), so it inherits rather than re-earns Library's own multi-select
+verification the way Phase 5's related-saves rail inherited the Home rail's;
+the swipe-gesture lesson from that Library work doesn't apply here since
+compare-mode selection is plain taps, the one interaction CDP synthetic
+events do reliably trigger, but that run itself was not repeated for this
+screen specifically.
 
 ---
 

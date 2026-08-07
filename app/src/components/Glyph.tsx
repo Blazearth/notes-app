@@ -54,6 +54,8 @@ export type GlyphName =
   // Phase 4 object behaviors — rating stars, servings stepper.
   | 'star'
   | 'minus'
+  // K4 collection overrides — pin an entity to the top of its section.
+  | 'bookmark'
   // Decorative primitives — not drawn as icons in the mockup
   | 'circle'
   | 'ring'
@@ -459,6 +461,14 @@ export function Glyph({ name, size = 18, color, weight = 2, style }: GlyphProps)
         return (
           <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
             <Line x1="5" y1="12" x2="19" y2="12" />
+          </StrokeIcon>
+        );
+
+      // K4: pin an entity to the top of its collection section.
+      case 'bookmark':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M19 21 12 16 5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" />
           </StrokeIcon>
         );
     }

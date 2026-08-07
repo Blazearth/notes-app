@@ -62,6 +62,46 @@ const ITEM_SHAPES: Record<string, ItemShape> = {
   checklist: { itemsField: 'items', nameField: 'text', kindField: null, fixedKind: 'task' },
 };
 
+interface Shape2Def {
+  nameField: string;
+  fixedKind: string;
+}
+
+/**
+ * K4, shape 2: mirrors `CollectionService.SHAPE2_TYPES` — save-is-the-entity
+ * types that join an *existing* shape-1 entity as an additional source, and
+ * never produce a top-level node of their own (see `mergeType`/`buildTree`
+ * below, which still gate on `ITEM_SHAPES` only).
+ */
+const SHAPE2_TYPES: Record<string, Shape2Def> = {
+  movie: { nameField: 'title', fixedKind: 'movie' },
+  book: { nameField: 'title', fixedKind: 'book' },
+  place: { nameField: 'name', fixedKind: 'place' },
+  product: { nameField: 'title', fixedKind: 'product' },
+  recipe: { nameField: 'title', fixedKind: 'recipe' },
+  github_repo: { nameField: 'name', fixedKind: 'github_repo' },
+};
+
+/**
+ * K4c: the user's curation over the derived view — mirrors
+ * `CollectionOverrides.java`. `mergeRedirects` is keyed by the losing entity
+ * key and already fully chased through any chain; `entityNames`/
+ * `collectionNames` are keyed by the post-redirect id. Threaded as plain
+ * data into the pure functions below, exactly like the Java side, so the
+ * merge core stays database-free.
+ */
+export interface CollectionOverrides {
+  mergeRedirects: Record<string, string>;
+  entityNames: Record<string, string>;
+  collectionNames: Record<string, string>;
+}
+
+export const EMPTY_OVERRIDES: CollectionOverrides = { mergeRedirects: {}, entityNames: {}, collectionNames: {} };
+
+function resolveKey(key: string, overrides: CollectionOverrides): string {
+  return overrides.mergeRedirects[key] ?? key;
+}
+
 /** Mirrors the entity-bearing subset of `KnowledgeFacets.FACETS`. */
 const FACETS: Record<string, string> = {
   recommendation_list: 'medium',
@@ -138,8 +178,54 @@ function singleFacetValue(save: CollectionSaveFacts, field: string): string | nu
   return typeof raw === 'string' && isUsable(raw) ? raw.trim() : null;
 }
 
-/** Walks every save's items once, bucketing by entity key and by facet value — mirrors `CollectionService.index`. */
-function indexType(type: string, typeSaves: CollectionSaveFacts[]): TypeIndex {
+/**
+ * K4, shape 2: every ready save of a save-is-the-entity type, reduced to a
+ * single synthetic occurrence of itself — mirrors
+ * `CollectionService.shape2Occurrences`. Computed once over the whole ready
+ * list, not per shape-1 type, since a movie save's own `knowledgeType`
+ * never matches the shape-1 type it might join.
+ */
+function shape2Occurrences(
+  ready: CollectionSaveFacts[],
+  overrides: CollectionOverrides,
+): Map<string, Occurrence[]> {
+  const byEntity = new Map<string, Occurrence[]>();
+  for (const save of ready) {
+    const type = normaliseType(save.knowledgeType);
+    const def = type ? SHAPE2_TYPES[type] : undefined;
+    if (!def) continue;
+
+    const rawNameValue = save.structuredData[def.nameField];
+    if (!isUsable(rawNameValue)) continue;
+    const rawName = rawNameValue.trim();
+
+    const canonicalId = asString(save.structuredData.tmdbId);
+    const key = resolveKey(computeEntityKey(def.fixedKind, rawName, canonicalId), overrides);
+
+    const item = { ...save.structuredData };
+    delete item[def.nameField];
+
+    const occurrences = byEntity.get(key) ?? [];
+    occurrences.push({ saveId: save.id, savedAt: save.createdAt, rawName, item });
+    byEntity.set(key, occurrences);
+  }
+  return byEntity;
+}
+
+/**
+ * Walks every save's items once, bucketing by entity key and by facet value
+ * — mirrors `CollectionService.index`. K4 folds in the same two things at
+ * the same point the Java side does: a manual-merge redirect
+ * (`resolveKey`), and any shape-2 save that independently computed the same
+ * (post-redirect) key — never the other way around, a shape-2 save never
+ * creates an entity of its own here.
+ */
+function indexType(
+  type: string,
+  typeSaves: CollectionSaveFacts[],
+  shape2ByKey: Map<string, Occurrence[]>,
+  overrides: CollectionOverrides,
+): TypeIndex {
   const shape = ITEM_SHAPES[type];
   const facetField = FACETS[type];
   const byEntity = new Map<string, Occurrence[]>();
@@ -155,7 +241,8 @@ function indexType(type: string, typeSaves: CollectionSaveFacts[]): TypeIndex {
       if (!isUsable(rawNameValue)) continue;
       const rawName = rawNameValue.trim();
       const kindForKey = shape.kindField ? asString(item[shape.kindField]) : shape.fixedKind;
-      const key = computeEntityKey(kindForKey, rawName);
+      const canonicalId = asString(item.tmdbId);
+      const key = resolveKey(computeEntityKey(kindForKey, rawName, canonicalId), overrides);
 
       const occurrences = byEntity.get(key) ?? [];
       occurrences.push({ saveId: save.id, savedAt: save.createdAt, rawName, item });
@@ -170,6 +257,12 @@ function indexType(type: string, typeSaves: CollectionSaveFacts[]): TypeIndex {
       }
     }
   }
+
+  shape2ByKey.forEach((occurrences, key) => {
+    const existing = byEntity.get(key);
+    if (existing) existing.push(...occurrences);
+  });
+
   return { byEntity, entityKeysByFacet, looseEntityKeys: loose };
 }
 
@@ -262,32 +355,48 @@ function resolveSources(occurrences: Occurrence[]): CollectionSource[] {
   return [...bySave.values()];
 }
 
-function mergeEntity(key: string, occurrences: Occurrence[], shape: ItemShape): CollectionEntity {
-  const name = resolveName(occurrences);
+function mergeEntity(
+  key: string,
+  occurrences: Occurrence[],
+  shape: ItemShape,
+  overrides: CollectionOverrides,
+): CollectionEntity {
+  const name = overrides.entityNames[key] ?? resolveName(occurrences);
   const kind = resolveKind(occurrences, shape.kindField, shape.fixedKind);
   const fields = rollupFields(occurrences, shape.nameField, shape.kindField);
   const sources = resolveSources(occurrences);
   return { entityKey: key, name, kind, fields, sources, sourceCount: sources.length };
 }
 
-function mergeAll(byEntity: Map<string, Occurrence[]>, shape: ItemShape): Map<string, CollectionEntity> {
+function mergeAll(
+  byEntity: Map<string, Occurrence[]>,
+  shape: ItemShape,
+  overrides: CollectionOverrides,
+): Map<string, CollectionEntity> {
   const merged = new Map<string, CollectionEntity>();
-  byEntity.forEach((occurrences, key) => merged.set(key, mergeEntity(key, occurrences, shape)));
+  byEntity.forEach((occurrences, key) => merged.set(key, mergeEntity(key, occurrences, shape, overrides)));
   return merged;
 }
 
-/** Pure: the merged entity list for one type, optionally filtered to a facet value — mirrors `CollectionService.mergeType`. */
+/**
+ * Pure: the merged entity list for one type, optionally filtered to a facet
+ * value and with K4's overrides applied — mirrors `CollectionService.mergeType`.
+ * `overrides` defaults to no-op so every existing caller (mock data with no
+ * curation yet) is unaffected.
+ */
 export function mergeType(
   ready: CollectionSaveFacts[],
   type: string,
   facet?: string | null,
+  overrides: CollectionOverrides = EMPTY_OVERRIDES,
 ): CollectionEntity[] {
   const normalizedType = normaliseType(type);
   if (!normalizedType || !ITEM_SHAPES[normalizedType]) return [];
 
   const typeSaves = ready.filter((s) => normaliseType(s.knowledgeType) === normalizedType);
-  const idx = indexType(normalizedType, typeSaves);
-  const merged = mergeAll(idx.byEntity, ITEM_SHAPES[normalizedType]);
+  const shape2ByKey = shape2Occurrences(ready, overrides);
+  const idx = indexType(normalizedType, typeSaves, shape2ByKey, overrides);
+  const merged = mergeAll(idx.byEntity, ITEM_SHAPES[normalizedType], overrides);
 
   if (!facet || !facet.trim()) return [...merged.values()];
 
@@ -344,19 +453,26 @@ function nodeOf(
   };
 }
 
-function buildTypeNode(type: string, typeSaves: CollectionSaveFacts[], minGroupSize: number): CollectionNode {
-  const idx = indexType(type, typeSaves);
-  const merged = mergeAll(idx.byEntity, ITEM_SHAPES[type]);
+function buildTypeNode(
+  type: string,
+  typeSaves: CollectionSaveFacts[],
+  minGroupSize: number,
+  shape2ByKey: Map<string, Occurrence[]>,
+  overrides: CollectionOverrides,
+): CollectionNode {
+  const idx = indexType(type, typeSaves, shape2ByKey, overrides);
+  const merged = mergeAll(idx.byEntity, ITEM_SHAPES[type], overrides);
 
   const subgroups: CollectionNode[] = [];
   const loose = new Set(idx.looseEntityKeys);
 
   idx.entityKeysByFacet.forEach((keys, facetValue) => {
     if (keys.size >= minGroupSize) {
+      const id = `${type}${ID_SEPARATOR}${slug(facetValue)}`;
       subgroups.push(
         nodeOf(
-          `${type}${ID_SEPARATOR}${slug(facetValue)}`,
-          titleCase(facetValue),
+          id,
+          overrides.collectionNames[id] ?? titleCase(facetValue),
           undefined,
           [],
           [...keys],
@@ -370,13 +486,24 @@ function buildTypeNode(type: string, typeSaves: CollectionSaveFacts[], minGroupS
     }
   });
 
-  return nodeOf(type, displayName(type), undefined, subgroups, [...loose], saveIdsFor(loose, merged));
+  return nodeOf(
+    type,
+    overrides.collectionNames[type] ?? displayName(type),
+    undefined,
+    subgroups,
+    [...loose],
+    saveIdsFor(loose, merged),
+  );
 }
 
-/** Pure: the collection tree — mirrors `CollectionService.buildTree`. `minGroupSize` defaults to the production threshold. */
+/**
+ * Pure: the collection tree — mirrors `CollectionService.buildTree`.
+ * `minGroupSize` defaults to the production threshold, `overrides` to no-op.
+ */
 export function buildTree(
   ready: CollectionSaveFacts[],
   minGroupSize: number = MIN_GROUP_SIZE,
+  overrides: CollectionOverrides = EMPTY_OVERRIDES,
 ): CollectionNode[] {
   const byType = new Map<string, CollectionSaveFacts[]>();
   for (const save of ready) {
@@ -386,8 +513,9 @@ export function buildTree(
     list.push(save);
     byType.set(type, list);
   }
+  const shape2ByKey = shape2Occurrences(ready, overrides);
   const nodes: CollectionNode[] = [];
-  byType.forEach((typeSaves, type) => nodes.push(buildTypeNode(type, typeSaves, minGroupSize)));
+  byType.forEach((typeSaves, type) => nodes.push(buildTypeNode(type, typeSaves, minGroupSize, shape2ByKey, overrides)));
   return nodes;
 }
 

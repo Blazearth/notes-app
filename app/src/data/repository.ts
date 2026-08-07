@@ -137,6 +137,17 @@ export interface Repository {
    * later save. Always a full replace, never a merge.
    */
   setEntityState(entityKey: string, state: Record<string, unknown>): Promise<Record<string, unknown>>;
+
+  /**
+   * K4's curation over the derived collection view — manual merge (the
+   * alias fix when no canonical id resolves it automatically), rename.
+   * Applied server-side as a post-processing step over the pure merge core,
+   * so a merge/rename shows up the next time collections are re-fetched.
+   */
+  mergeEntities(fromKey: string, intoKey: string): Promise<void>;
+  unmergeEntity(fromKey: string): Promise<void>;
+  renameEntity(entityKey: string, name: string): Promise<void>;
+  renameCollection(collectionId: string, name: string): Promise<void>;
 }
 
 /**

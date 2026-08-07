@@ -289,6 +289,146 @@ class CollectionServiceTest {
         assertThat(withDone.entityCount()).isEqualTo(2);
     }
 
+    // ------------------------------------------------------------------ K4a: canonical ids
+
+    /**
+     * The alias fix stated as a known limit of {@link Entities#key(String, String)}:
+     * two different surface forms that both carry the same {@code tmdbId}
+     * (written by {@code TmdbEnricher}/{@code RecommendationListEnricher} on a
+     * confident match) collide even though no normalization rule over the
+     * strings would ever unify "Shingeki no Kyojin" and "Attack on Titan".
+     */
+    @Test
+    void itemsSharingATmdbIdMergeEvenWithDifferentSurfaceForms() {
+        List<CollectionEntity> entities = CollectionService.mergeType(
+                List.of(
+                        recommendationSave("anime",
+                                recommendationItem("Shingeki no Kyojin", Map.of("kind", "anime", "tmdbId", "1429"))),
+                        recommendationSave("anime",
+                                recommendationItem("Attack on Titan", Map.of("kind", "anime", "tmdbId", "1429")))),
+                "recommendation_list", null);
+
+        assertThat(entities).hasSize(1);
+        assertThat(entities.getFirst().entityKey()).isEqualTo("tmdb:1429");
+        assertThat(entities.getFirst().sourceCount()).isEqualTo(2);
+    }
+
+    // ------------------------------------------------------------------ K4b: shape 2 join
+
+    private static SaveFacts movieSave(Map<String, Object> data) {
+        return ready("movie", data);
+    }
+
+    /**
+     * "A movie save of Blue Box and a watchlist item named Blue Box resolve to
+     * the same entity" (docs/knowledge-collections.md) — the review attaches
+     * as an extra source, and its own fields (director, here) roll up into
+     * the entity alongside the watchlist item's own {@code reason}.
+     */
+    @Test
+    void shape2MovieSaveJoinsAnExistingWatchlistEntityAsAnAdditionalSource() {
+        List<SaveFacts> ready = List.of(
+                recommendationSave("anime",
+                        recommendationItem("Blue Box", Map.of("kind", "anime", "reason", "best arc"))),
+                movieSave(Map.of("title", "Blue Box", "director", "Someone", "synopsis", "A romance anime")));
+
+        List<CollectionEntity> entities = CollectionService.mergeType(ready, "recommendation_list", null);
+
+        assertThat(entities).hasSize(1);
+        CollectionEntity blueBox = entities.getFirst();
+        assertThat(blueBox.sourceCount()).isEqualTo(2);
+        assertThat(blueBox.fields()).containsEntry("director", "Someone");
+        assertThat(blueBox.fields()).containsEntry("reason", "best arc");
+    }
+
+    /** No shape-1 item shares its key — the movie save stays an ordinary, individually-presented save, unchanged. */
+    @Test
+    void shape2SaveWithNoMatchingEntityContributesNothing() {
+        List<SaveFacts> ready = List.of(
+                recommendationSave("anime", recommendationItem("Call of the Night", Map.of("kind", "anime"))),
+                movieSave(Map.of("title", "Parasite", "director", "Bong Joon-ho")));
+
+        List<CollectionEntity> entities = CollectionService.mergeType(ready, "recommendation_list", null);
+
+        assertThat(entities).hasSize(1);
+        assertThat(entities.getFirst().sourceCount()).isEqualTo(1);
+    }
+
+    /** Shape 2 types never get their own top-level node — K1's scoping holds even once shape-2 data exists. */
+    @Test
+    void shape2TypesStillProduceNoTopLevelNodeOfTheirOwn() {
+        List<SaveFacts> ready = List.of(movieSave(Map.of("title", "Parasite")));
+
+        assertThat(CollectionService.buildTree(ready, 1)).isEmpty();
+        assertThat(CollectionService.mergeType(ready, "movie", null)).isEmpty();
+    }
+
+    // ------------------------------------------------------------------ K4c: manual overrides
+
+    private static CollectionOverrides mergeOverride(String fromKey, String intoKey) {
+        return new CollectionOverrides(Map.of(fromKey, intoKey), Map.of(), Map.of());
+    }
+
+    /**
+     * The user's escape hatch for the alias problem when no canonical id
+     * exists to resolve it automatically — same outcome as the tmdbId test
+     * above, applied by hand instead of by enrichment.
+     */
+    @Test
+    void manualMergeOverrideCombinesTwoEntitiesIntoOne() {
+        String from = Entities.key("anime", "Shingeki no Kyojin");
+        String into = Entities.key("anime", "Attack on Titan");
+        List<SaveFacts> ready = List.of(
+                recommendationSave("anime", recommendationItem("Shingeki no Kyojin", Map.of("kind", "anime"))),
+                recommendationSave("anime", recommendationItem("Attack on Titan", Map.of("kind", "anime"))));
+
+        List<CollectionEntity> entities = CollectionService.mergeType(
+                ready, "recommendation_list", null, mergeOverride(from, into));
+
+        assertThat(entities).hasSize(1);
+        assertThat(entities.getFirst().entityKey()).isEqualTo(into);
+        assertThat(entities.getFirst().sourceCount()).isEqualTo(2);
+    }
+
+    /** A merge redirect must also apply to shape-2 saves computing the same losing key. */
+    @Test
+    void manualMergeOverrideAlsoRedirectsAShape2Occurrence() {
+        String from = Entities.key("movie", "Bluebox");
+        String into = Entities.key("anime", "Blue Box");
+        List<SaveFacts> ready = List.of(
+                recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))),
+                movieSave(Map.of("title", "Bluebox", "director", "Someone")));
+
+        List<CollectionEntity> entities = CollectionService.mergeType(
+                ready, "recommendation_list", null, mergeOverride(from, into));
+
+        assertThat(entities).hasSize(1);
+        assertThat(entities.getFirst().sourceCount()).isEqualTo(2);
+        assertThat(entities.getFirst().fields()).containsEntry("director", "Someone");
+    }
+
+    @Test
+    void entityRenameOverrideReplacesTheResolvedSurfaceForm() {
+        String key = Entities.key("anime", "Blue Box");
+        CollectionOverrides overrides = new CollectionOverrides(Map.of(), Map.of(key, "My Favourite Anime"), Map.of());
+        List<SaveFacts> ready = List.of(recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))));
+
+        List<CollectionEntity> entities = CollectionService.mergeType(ready, "recommendation_list", null, overrides);
+
+        assertThat(entities.getFirst().name()).isEqualTo("My Favourite Anime");
+    }
+
+    @Test
+    void collectionRenameOverrideReplacesTheNodeName() {
+        CollectionOverrides overrides =
+                new CollectionOverrides(Map.of(), Map.of(), Map.of("recommendation_list", "My Watchlist"));
+        List<SaveFacts> ready = List.of(recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))));
+
+        CollectionNode recs = CollectionService.buildTree(ready, 1, overrides).getFirst();
+
+        assertThat(recs.name()).isEqualTo("My Watchlist");
+    }
+
     @Test
     void itineraryPlacesMergeTheSameWayRecommendationsDo() {
         SaveFacts trip = ready("itinerary", Map.of(

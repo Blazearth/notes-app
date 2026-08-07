@@ -20,8 +20,9 @@ import java.util.Set;
  * {@code recommendation_list} saves in the dev database (7 items, zero
  * overlapping titles) and found nothing to contradict the rules below, but it
  * could not exercise true-duplicate detection either, since none of those
- * items actually repeat. Canonical ids from enrichment (K4) are the answer,
- * not a fuzzier string rule here.
+ * items actually repeat. Canonical ids from enrichment (K4, {@link
+ * #key(String, String, String)}) are the answer, not a fuzzier string rule
+ * here.
  */
 final class Entities {
 
@@ -56,6 +57,24 @@ final class Entities {
      * resolve to {@code screen:blue box}, on purpose.
      */
     static String key(String kind, String name) {
+        return key(kind, name, null);
+    }
+
+    /**
+     * K4: when a canonical id is available — {@code tmdbId}, written by
+     * {@code TmdbEnricher}/{@code RecommendationListEnricher} on a confident
+     * match — it <em>overrides</em> the string key entirely, because it is
+     * exactly the alias fix stated as a known limit above: "Shingeki no
+     * Kyojin" and "Attack on Titan" both resolving to the same TMDB id
+     * collide here even though no normalization rule would ever unify their
+     * strings. {@code canonicalId} is scoped by source (prefixed
+     * {@code "tmdb:"}) rather than trusted bare, so a future second id
+     * source cannot collide with this one by numeric accident.
+     */
+    static String key(String kind, String name, String canonicalId) {
+        if (canonicalId != null && !canonicalId.isBlank()) {
+            return "tmdb:" + canonicalId.trim();
+        }
         return namespace(kind) + ":" + normalize(name);
     }
 

@@ -92,6 +92,10 @@ function Routes() {
             leaves (their detail is the in-screen sheet, not another route),
             so there is nothing to push onto itself. */}
         <Stack.Screen name="collection/[type]" options={{ animation: 'slide_from_right' }} />
+        {/* K5: the local-compute alternative to AI workout synthesis — a
+            side-by-side compare, reached by multi-select from the workout
+            group screen. */}
+        <Stack.Screen name="compare-workouts" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="shopping-list" options={{ animation: 'slide_from_right' }} />
         {/* Search reads as a layer over the feed rather than a place you
             travel to, so it fades in where the others slide. */}

@@ -73,4 +73,9 @@ export const apiRepository: Repository = {
   listCollections: client.listCollections,
   listCollectionEntities: client.listCollectionEntities,
   setEntityState: client.setEntityState,
+
+  mergeEntities: client.mergeEntities,
+  unmergeEntity: client.unmergeEntity,
+  renameEntity: client.renameEntity,
+  renameCollection: client.renameCollection,
 };

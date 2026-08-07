@@ -38,6 +38,7 @@ function EntityRow({
   const posterUrl = clean(entity.fields.posterUrl);
   const meta = [clean(entity.kind), clean(entity.fields.year)].filter((v): v is string => !!v).join(' · ');
   const done = entity.state?.done === true;
+  const pinned = entity.state?.pinned === true;
 
   return (
     <Card padding={0} radius={radius.md}>
@@ -74,6 +75,7 @@ function EntityRow({
               .join(' · ')}
           </AppText>
         </View>
+        {pinned ? <Glyph name="bookmark" size={14} weight={2} color={palette.accent} /> : null}
         {done ? <Glyph name="checkSquare" size={16} color={palette.accent} /> : null}
       </Touchable>
     </Card>
@@ -96,6 +98,7 @@ function EntityDetailSheet({
   onOpenSave,
   onToggleDone,
   onRate,
+  onTogglePin,
 }: {
   entity: CollectionEntityResponse;
   type: string;
@@ -103,10 +106,12 @@ function EntityDetailSheet({
   onOpenSave: (saveId: string) => void;
   onToggleDone: () => void;
   onRate: (rating: number) => void;
+  onTogglePin: () => void;
 }) {
   const { palette, radius, spacing, icon } = useTheme();
   const collMeta = collectionTypeMeta(type);
   const done = entity.state?.done === true;
+  const pinned = entity.state?.pinned === true;
   const rating = typeof entity.state?.rating === 'number' ? entity.state.rating : 0;
 
   return (
@@ -138,9 +143,29 @@ function EntityDetailSheet({
             }}
           />
           <ScrollView showsVerticalScrollIndicator={false}>
-            <AppText variant="heading" style={{ marginBottom: spacing.xs }}>
-              {entity.name}
-            </AppText>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                gap: spacing.sm,
+                marginBottom: spacing.xs,
+              }}
+            >
+              <AppText variant="heading" style={{ flex: 1 }}>
+                {entity.name}
+              </AppText>
+              <Touchable
+                accessibilityRole="button"
+                accessibilityState={{ selected: pinned }}
+                accessibilityLabel={pinned ? 'Unpin' : 'Pin to top'}
+                onPress={onTogglePin}
+                haptic="selection"
+                style={{ paddingTop: 4 }}
+              >
+                <Glyph name="bookmark" size={20} weight={2} color={pinned ? palette.accent : palette.textFaint} />
+              </Touchable>
+            </View>
             <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.lg }}>
               {[clean(entity.kind), clean(entity.fields.year)].filter(Boolean).join(' · ') || 'No details yet'}
             </AppText>
@@ -236,8 +261,12 @@ export function CollectionDetailScreen({ type }: { type: string }) {
 
   const collMeta = collectionTypeMeta(type);
   const typeMeta = saveTypeMeta(type);
-  const remaining = entities.filter((e) => e.state?.done !== true);
-  const done = entities.filter((e) => e.state?.done === true);
+  // Pinned first within each section — a curation signal, not a re-sort of
+  // the whole list, so "remaining" and "done" stay the sections that matter.
+  const bySectionOrder = (a: CollectionEntityResponse, b: CollectionEntityResponse) =>
+    Number(b.state?.pinned === true) - Number(a.state?.pinned === true);
+  const remaining = entities.filter((e) => e.state?.done !== true).sort(bySectionOrder);
+  const done = entities.filter((e) => e.state?.done === true).sort(bySectionOrder);
   const selected = entities.find((e) => e.entityKey === selectedKey) ?? null;
 
   const writeEntityState = useCallback(
@@ -257,6 +286,17 @@ export function CollectionDetailScreen({ type }: { type: string }) {
   );
   const rate = useCallback(
     (entity: CollectionEntityResponse, rating: number) => writeEntityState(entity, { ...entity.state, rating }),
+    [writeEntityState],
+  );
+  /**
+   * K4: pinning rides `entity_states`' existing `state` jsonb (`state.pinned`)
+   * rather than a fourth `collection_overrides` type — see
+   * `V14__collection_overrides.sql`'s note on why. Same full-replace write
+   * path as done/rating.
+   */
+  const togglePin = useCallback(
+    (entity: CollectionEntityResponse) =>
+      writeEntityState(entity, { ...entity.state, pinned: entity.state?.pinned !== true }),
     [writeEntityState],
   );
 
@@ -370,6 +410,7 @@ export function CollectionDetailScreen({ type }: { type: string }) {
           onClose={() => setSelectedKey(null)}
           onToggleDone={() => toggleDone(selected)}
           onRate={(rating) => rate(selected, rating)}
+          onTogglePin={() => togglePin(selected)}
           onOpenSave={(saveId) => {
             setSelectedKey(null);
             router.push({ pathname: '/save/[id]', params: { id: saveId } });

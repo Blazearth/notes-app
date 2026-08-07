@@ -20,17 +20,26 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The derived merge — collections, upgraded from {@code GroupService}'s save
  * groups to merged <em>entities</em>. See {@code docs/knowledge-collections.md}
- * for the full design; this is phase K1: only shape 1 (item-bearing list
- * types — {@code recommendation_list}, {@code itinerary}, {@code checklist})
- * is wired. Shape 2 (save-is-the-entity types) and shape 3 (synthesis types)
- * are explicitly out of scope here — everything else keeps today's
- * save-centric presentation.
+ * for the full design.
  *
- * <p><b>No table, no migration, no extra model call</b> — exactly
- * {@code GroupService}'s three reasons: a stored tree needs invalidating on
- * every classify/enrich/delete, the grouping signal was already produced by
- * the one classify call each save gets, and adding a merged field is a change
- * to {@link Entities} or the per-type shape below, never a migration.
+ * <p>K1 wired shape 1 (item-bearing list types — {@code recommendation_list},
+ * {@code itinerary}, {@code checklist}) only. K4 adds shape 2 (save-is-the-
+ * entity types — {@code movie}, {@code book}, {@code place}, {@code product},
+ * {@code recipe}, {@code github_repo}) as a <em>join</em> onto an entity a
+ * shape-1 item already created — see {@link #shape2Occurrences} — never as a
+ * standalone entity a shape-2 save could produce on its own; {@code GET
+ * /v1/collections/movie} still returns nothing, exactly as K1 left it. Shape
+ * 3 (synthesis types — {@code workout}, {@code course}) stays entirely out of
+ * scope, per the doc's own instruction not to force the metaphor onto them.
+ *
+ * <p><b>No table, no migration, no extra model call</b> for the merge itself
+ * — exactly {@code GroupService}'s three reasons: a stored tree needs
+ * invalidating on every classify/enrich/delete, the grouping signal was
+ * already produced by the one classify call each save gets, and adding a
+ * merged field is a change to {@link Entities} or the per-type shape below,
+ * never a migration. K4's one addition, {@link CollectionOverrides} (manual
+ * merge, rename), <em>is</em> stored — it is exactly the thing constraint 3
+ * says can't be derived: the user's own curation.
  */
 @Service
 public class CollectionService {
@@ -62,6 +71,22 @@ public class CollectionService {
             "checklist", new ItemShape("items", "text", null, "task"));
 
     /**
+     * K4, shape 2: a save-is-the-entity type's own name field and the fixed
+     * kind its saves always carry (there is no per-item kind field — the
+     * whole save is one thing). See {@code docs/knowledge-collections.md}
+     * ("Which types merge, and how", shape 2).
+     */
+    private record Shape2Def(String nameField, String fixedKind) {}
+
+    private static final Map<String, Shape2Def> SHAPE2_TYPES = Map.ofEntries(
+            Map.entry("movie", new Shape2Def("title", "movie")),
+            Map.entry("book", new Shape2Def("title", "book")),
+            Map.entry("place", new Shape2Def("name", "place")),
+            Map.entry("product", new Shape2Def("title", "product")),
+            Map.entry("recipe", new Shape2Def("title", "recipe")),
+            Map.entry("github_repo", new Shape2Def("name", "github_repo")));
+
+    /**
      * The only thing the merge needs from a save — {@code GroupService
      * .SaveFacts} plus {@code createdAt}, which the "most common surface
      * form, ties to the earliest save" rule needs and groups never did.
@@ -78,10 +103,12 @@ public class CollectionService {
 
     private final SaveRepository saves;
     private final EntityStateService entityStates;
+    private final CollectionOverrideService overrides;
 
-    CollectionService(SaveRepository saves, EntityStateService entityStates) {
+    CollectionService(SaveRepository saves, EntityStateService entityStates, CollectionOverrideService overrides) {
         this.saves = saves;
         this.entityStates = entityStates;
+        this.overrides = overrides;
     }
 
     /**
@@ -91,7 +118,7 @@ public class CollectionService {
      */
     @Transactional(readOnly = true)
     public List<CollectionNode> listCollections(UUID userId) {
-        List<CollectionNode> tree = buildTree(loadReady(userId));
+        List<CollectionNode> tree = buildTree(loadReady(userId), MIN_GROUP_SIZE, overrides.loadFor(userId));
         Set<String> allKeys = new LinkedHashSet<>();
         tree.forEach(node -> allKeys.addAll(node.allEntityKeys()));
         Set<String> doneKeys = doneEntityKeys(userId, allKeys);
@@ -107,7 +134,7 @@ public class CollectionService {
      */
     @Transactional(readOnly = true)
     public List<CollectionEntity> entities(UUID userId, String type, String facet) {
-        List<CollectionEntity> merged = mergeType(loadReady(userId), type, facet);
+        List<CollectionEntity> merged = mergeType(loadReady(userId), type, facet, overrides.loadFor(userId));
         if (merged.isEmpty()) {
             return merged;
         }
@@ -145,34 +172,57 @@ public class CollectionService {
 
     /** Pure: no database, no Spring, no clock. */
     public static List<CollectionNode> buildTree(List<SaveFacts> ready) {
-        return buildTree(ready, MIN_GROUP_SIZE);
+        return buildTree(ready, MIN_GROUP_SIZE, CollectionOverrides.EMPTY);
     }
 
-    /** Overload used by tests to bypass the production threshold. */
+    /** Overload used by tests to bypass the production threshold, with no overrides. */
     static List<CollectionNode> buildTree(List<SaveFacts> ready, int minGroupSize) {
+        return buildTree(ready, minGroupSize, CollectionOverrides.EMPTY);
+    }
+
+    /**
+     * The full pure builder: K1's tree, K4's shape-2 join and manual
+     * overrides both applied. Still pure — {@code overrides} is data, not a
+     * service reference, so a test can hand it a fixture the same way it
+     * hands one a list of saves.
+     */
+    static List<CollectionNode> buildTree(List<SaveFacts> ready, int minGroupSize, CollectionOverrides overrides) {
         Map<String, List<SaveFacts>> byType = new LinkedHashMap<>();
         for (SaveFacts save : ready) {
             String type = normaliseType(save.knowledgeType());
-            // Only the three item-bearing list types are wired in K1 — everything
-            // else (shape 2's save-is-the-entity types, shape 3's synthesis types,
-            // and unknown types) keeps its today's save-centric presentation.
+            // Only the three item-bearing list types get their own top-level
+            // node — shape 2's save-is-the-entity types never do (they only
+            // ever join an existing shape-1 entity, see shape2Occurrences),
+            // shape 3's synthesis types and unknown types keep today's
+            // save-centric presentation.
             if (type == null || !ITEM_SHAPES.containsKey(type)) continue;
             byType.computeIfAbsent(type, key -> new ArrayList<>()).add(save);
         }
 
+        Map<String, List<Occurrence>> shape2ByKey = shape2Occurrences(ready, overrides);
         List<CollectionNode> nodes = new ArrayList<>();
-        byType.forEach((type, typeSaves) -> nodes.add(buildTypeNode(type, typeSaves, minGroupSize)));
+        byType.forEach((type, typeSaves) ->
+                nodes.add(buildTypeNode(type, typeSaves, minGroupSize, shape2ByKey, overrides)));
         return nodes;
     }
 
     /**
-     * Pure: the entities behind {@code GET /v1/collections/{type}}. Reusable
-     * standalone of {@link #buildTree} because a caller who already knows the
-     * type shouldn't have to derive every other type's tree to reach it.
+     * Pure: the entities behind {@code GET /v1/collections/{type}}, no
+     * overrides applied. Reusable standalone of {@link #buildTree} because a
+     * caller who already knows the type shouldn't have to derive every other
+     * type's tree to reach it.
      */
     static List<CollectionEntity> mergeType(List<SaveFacts> ready, String type, String facet) {
+        return mergeType(ready, type, facet, CollectionOverrides.EMPTY);
+    }
+
+    /** The full pure entity list for one type — K4's shape-2 join and overrides both applied. */
+    static List<CollectionEntity> mergeType(List<SaveFacts> ready, String type, String facet, CollectionOverrides overrides) {
         String normalizedType = normaliseType(type);
         if (normalizedType == null || !ITEM_SHAPES.containsKey(normalizedType)) {
+            // Shape 2 types (movie, place, ...) are deliberately not wired here
+            // either — they only ever attach to an entity a shape-1 type
+            // already produced, never stand alone as their own type node.
             return List.of();
         }
 
@@ -180,8 +230,9 @@ public class CollectionService {
                 .filter(save -> normalizedType.equals(normaliseType(save.knowledgeType())))
                 .toList();
 
-        TypeIndex idx = index(normalizedType, typeSaves);
-        Map<String, CollectionEntity> merged = mergeAll(idx.byEntity(), ITEM_SHAPES.get(normalizedType));
+        Map<String, List<Occurrence>> shape2ByKey = shape2Occurrences(ready, overrides);
+        TypeIndex idx = index(normalizedType, typeSaves, shape2ByKey, overrides);
+        Map<String, CollectionEntity> merged = mergeAll(idx.byEntity(), ITEM_SHAPES.get(normalizedType), overrides);
 
         if (facet == null || facet.isBlank()) {
             return List.copyOf(merged.values());
@@ -194,18 +245,20 @@ public class CollectionService {
                 .toList();
     }
 
-    private static CollectionNode buildTypeNode(String type, List<SaveFacts> typeSaves, int minGroupSize) {
-        TypeIndex idx = index(type, typeSaves);
-        Map<String, CollectionEntity> merged = mergeAll(idx.byEntity(), ITEM_SHAPES.get(type));
+    private static CollectionNode buildTypeNode(String type, List<SaveFacts> typeSaves, int minGroupSize,
+                                                 Map<String, List<Occurrence>> shape2ByKey, CollectionOverrides overrides) {
+        TypeIndex idx = index(type, typeSaves, shape2ByKey, overrides);
+        Map<String, CollectionEntity> merged = mergeAll(idx.byEntity(), ITEM_SHAPES.get(type), overrides);
 
         List<CollectionNode> subgroups = new ArrayList<>();
         LinkedHashSet<String> loose = new LinkedHashSet<>(idx.looseEntityKeys());
 
         idx.entityKeysByFacet().forEach((facetValue, keys) -> {
             if (keys.size() >= minGroupSize) {
+                String id = type + ID_SEPARATOR + slug(facetValue);
                 subgroups.add(CollectionNode.of(
-                        type + ID_SEPARATOR + slug(facetValue),
-                        KnowledgeFacets.titleCase(facetValue),
+                        id,
+                        overrides.collectionNames().getOrDefault(id, KnowledgeFacets.titleCase(facetValue)),
                         null,
                         List.of(),
                         List.copyOf(keys),
@@ -218,16 +271,21 @@ public class CollectionService {
             }
         });
 
-        return CollectionNode.of(type, KnowledgeFacets.displayName(type), null, subgroups,
+        return CollectionNode.of(type,
+                overrides.collectionNames().getOrDefault(type, KnowledgeFacets.displayName(type)), null, subgroups,
                 List.copyOf(loose), saveIdsFor(loose, merged));
     }
 
     /**
      * Walks every save's items once, bucketing occurrences by entity key and,
      * separately, by the save's own facet value — so a type's items and its
-     * facet membership are both derived in one pass.
+     * facet membership are both derived in one pass. K4 folds in two more
+     * things at this same point, both keyed by the same entity key space:
+     * any manual-merge redirect ({@code overrides.resolve}), and any
+     * shape-2 save that independently computed the same (post-redirect) key.
      */
-    private static TypeIndex index(String type, List<SaveFacts> typeSaves) {
+    private static TypeIndex index(String type, List<SaveFacts> typeSaves,
+                                    Map<String, List<Occurrence>> shape2ByKey, CollectionOverrides overrides) {
         ItemShape shape = ITEM_SHAPES.get(type);
         String facetField = KnowledgeFacets.FACETS.get(type);
 
@@ -250,7 +308,8 @@ public class CollectionService {
                     continue;
                 }
                 String kindForKey = shape.kindField() != null ? asString(item.get(shape.kindField())) : shape.fixedKind();
-                String entityKey = Entities.key(kindForKey, rawName);
+                String canonicalId = asString(item.get("tmdbId"));
+                String entityKey = overrides.resolve(Entities.key(kindForKey, rawName, canonicalId));
 
                 byEntity.computeIfAbsent(entityKey, key -> new ArrayList<>())
                         .add(new Occurrence(save.id(), save.createdAt(), rawName.trim(), item));
@@ -262,18 +321,63 @@ public class CollectionService {
                 }
             }
         }
+
+        // K4, shape 2: a movie/place/... save never creates an entity of its
+        // own here — it only ever attaches as an additional source on a key a
+        // shape-1 item already put in byEntity, per "the review attaching to
+        // the watchlist entry" (docs/knowledge-collections.md). A shape-2 save
+        // whose key nothing above produced contributes nothing and is left as
+        // an ordinary, individually-presented save — unchanged from today.
+        shape2ByKey.forEach((key, occurrences) -> {
+            List<Occurrence> existing = byEntity.get(key);
+            if (existing != null) existing.addAll(occurrences);
+        });
+
         return new TypeIndex(byEntity, entityKeysByFacet, loose);
     }
 
-    private static Map<String, CollectionEntity> mergeAll(Map<String, List<Occurrence>> byEntity, ItemShape shape) {
+    /**
+     * K4, shape 2: every ready save of a save-is-the-entity type
+     * ({@link #SHAPE2_TYPES}), reduced to a single synthetic "occurrence" of
+     * itself — the save's own {@code structuredData} minus its name field,
+     * keyed the same way a shape-1 item is (canonical id preferred, manual
+     * merge applied). Computed once over the <em>whole</em> ready list, not
+     * per shape-1 type, because a movie save's own {@code knowledgeType}
+     * never matches the shape-1 type it might join.
+     */
+    private static Map<String, List<Occurrence>> shape2Occurrences(List<SaveFacts> ready, CollectionOverrides overrides) {
+        Map<String, List<Occurrence>> byEntity = new LinkedHashMap<>();
+        for (SaveFacts save : ready) {
+            String type = normaliseType(save.knowledgeType());
+            Shape2Def def = type == null ? null : SHAPE2_TYPES.get(type);
+            if (def == null) continue;
+
+            Object rawNameValue = save.structuredData().get(def.nameField());
+            if (!(rawNameValue instanceof String rawName) || !isUsable(rawName)) continue;
+
+            String canonicalId = asString(save.structuredData().get("tmdbId"));
+            String entityKey = overrides.resolve(Entities.key(def.fixedKind(), rawName, canonicalId));
+
+            Map<String, Object> item = new LinkedHashMap<>(save.structuredData());
+            item.remove(def.nameField());
+
+            byEntity.computeIfAbsent(entityKey, key -> new ArrayList<>())
+                    .add(new Occurrence(save.id(), save.createdAt(), rawName.trim(), item));
+        }
+        return byEntity;
+    }
+
+    private static Map<String, CollectionEntity> mergeAll(Map<String, List<Occurrence>> byEntity, ItemShape shape,
+                                                            CollectionOverrides overrides) {
         Map<String, CollectionEntity> merged = new LinkedHashMap<>();
-        byEntity.forEach((key, occurrences) -> merged.put(key, mergeEntity(key, occurrences, shape)));
+        byEntity.forEach((key, occurrences) -> merged.put(key, mergeEntity(key, occurrences, shape, overrides)));
         return merged;
     }
 
     /** One entity key's occurrences, collapsed into the entity {@link #entities} and {@link #listCollections} both return. */
-    private static CollectionEntity mergeEntity(String entityKey, List<Occurrence> occurrences, ItemShape shape) {
-        String name = resolveName(occurrences);
+    private static CollectionEntity mergeEntity(String entityKey, List<Occurrence> occurrences, ItemShape shape,
+                                                 CollectionOverrides overrides) {
+        String name = overrides.entityNames().getOrDefault(entityKey, resolveName(occurrences));
         String kind = resolveKind(occurrences, shape.kindField(), shape.fixedKind());
         Map<String, Object> fields = rollupFields(occurrences, shape.nameField(), shape.kindField());
         List<CollectionEntity.Source> sources = resolveSources(occurrences);

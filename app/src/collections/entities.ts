@@ -57,7 +57,21 @@ export function normalize(name: string | null | undefined): string {
   return s;
 }
 
-/** `kindNamespace + ":" + normalize(name)` — see `Entities.key` server-side. */
-export function entityKey(kind: string | null | undefined, name: string | null | undefined): string {
+/**
+ * `kindNamespace + ":" + normalize(name)` — see `Entities.key` server-side.
+ *
+ * K4: when `canonicalId` is present (a `tmdbId` written by `TmdbEnricher`/
+ * `RecommendationListEnricher` on a confident match), it overrides the
+ * string key entirely — the alias fix for titles that share no words at
+ * all, exactly `Entities.key(String, String, String)`'s three-arg overload.
+ */
+export function entityKey(
+  kind: string | null | undefined,
+  name: string | null | undefined,
+  canonicalId?: string | null,
+): string {
+  if (canonicalId && canonicalId.trim()) {
+    return `tmdb:${canonicalId.trim()}`;
+  }
   return `${namespace(kind)}:${normalize(name)}`;
 }

@@ -587,3 +587,44 @@ export function setEntityState(
     body: JSON.stringify({ entityKey, state }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Collection overrides (K4) - the user's own curation over the derived view:
+// manual merge (the alias fix when no canonical id resolves it automatically),
+// entity/collection rename. Pin isn't here - it rides `setEntityState`'s
+// existing `state` jsonb (`state.pinned`) instead of a fourth override type.
+// ---------------------------------------------------------------------------
+
+/** Merges `fromKey`'s entity into `intoKey` - every source it had now attaches to `intoKey` instead. */
+export function mergeEntities(fromKey: string, intoKey: string): Promise<void> {
+  return request<void>('/v1/collection-overrides/merge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fromKey, intoKey }),
+  });
+}
+
+/** Undoes a single manual merge. */
+export function unmergeEntity(fromKey: string): Promise<void> {
+  return request<void>('/v1/collection-overrides/unmerge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fromKey }),
+  });
+}
+
+export function renameEntity(entityKey: string, name: string): Promise<void> {
+  return request<void>('/v1/collection-overrides/entity-name', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entityKey, name }),
+  });
+}
+
+export function renameCollection(collectionId: string, name: string): Promise<void> {
+  return request<void>('/v1/collection-overrides/collection-name', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ collectionId, name }),
+  });
+}

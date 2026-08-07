@@ -80,4 +80,31 @@ class EntitiesTest {
         // "ﬁnal" (U+FB01 LATIN SMALL LIGATURE FI) NFKC-decomposes to "final".
         assertThat(Entities.normalize("ﬁnal fantasy")).isEqualTo("final fantasy");
     }
+
+    // ------------------------------------------------------------------ K4a: canonical ids
+
+    /**
+     * K4's answer to the alias limit stated above the two-arg overload: two
+     * titles that share no words at all — "Shingeki no Kyojin" and "Attack on
+     * Titan" — collide once a canonical id says they're the same thing, which
+     * no string rule here could ever produce on its own.
+     */
+    @Test
+    void aCanonicalIdOverridesTheStringKeyEntirely() {
+        assertThat(Entities.key("anime", "Shingeki no Kyojin", "1429"))
+                .isEqualTo(Entities.key("anime", "Attack on Titan", "1429"))
+                .isEqualTo("tmdb:1429");
+    }
+
+    @Test
+    void aBlankOrNullCanonicalIdFallsBackToTheStringKey() {
+        assertThat(Entities.key("anime", "Blue Box", null)).isEqualTo("screen:blue box");
+        assertThat(Entities.key("anime", "Blue Box", "  ")).isEqualTo("screen:blue box");
+    }
+
+    /** The two-arg overload other callers already use is unchanged — just the no-canonical-id case of the three-arg form. */
+    @Test
+    void theTwoArgOverloadIsEquivalentToNoCanonicalId() {
+        assertThat(Entities.key("anime", "Blue Box")).isEqualTo(Entities.key("anime", "Blue Box", null));
+    }
 }
