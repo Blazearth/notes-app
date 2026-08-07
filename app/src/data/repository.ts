@@ -55,6 +55,12 @@ export interface Repository {
     state: Record<string, unknown>,
   ): Promise<SaveResponse>;
   searchSaves(query: string, limit?: number): Promise<SearchHit[]>;
+  /**
+   * "You also saved…" — nearest neighbours of this save's own embedding.
+   * Zero Gemini cost; an empty array means nothing cleared the similarity
+   * cutoff, not that the request failed.
+   */
+  getRelatedSaves(id: string, limit?: number): Promise<SaveResponse[]>;
 
   // Account
   getMe(): Promise<MeResponse>;

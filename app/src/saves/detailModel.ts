@@ -29,6 +29,13 @@ export interface DetailObject {
   restLabel?: string;
   /** Pure URL construction from name + area/address — an "Open in Maps" button, no state. */
   mapsUrl?: string;
+  /**
+   * A poster/cover image — currently only `recommendation_list` items that
+   * `RecommendationListEnricher` (§5.3) found a TMDB match for. Additive and
+   * absent on most items: enrichment is best-effort and only covers the
+   * first several screen-kind items on a save.
+   */
+  imageUrl?: string;
 }
 
 /** A field rendered as its own block: one value, a list of them, or objects. */
@@ -116,19 +123,76 @@ function mapsUrl(query: string): string {
 }
 
 /**
- * done/total across a set of `control: 'check'` objects — the checklist
- * progress bar and course "continue where I left off", both derived here
- * rather than stored (`docs/next-phases.md` §4.2: "count of done/total —
- * derived in the client, never stored").
+ * done/total across a set of `control: 'check'` or `control: 'watch'`
+ * objects — the checklist progress bar, course "continue where I left off",
+ * and (§5.2) the watchlist's watched-count, all derived here rather than
+ * stored (`docs/next-phases.md` §4.2: "count of done/total — derived in the
+ * client, never stored"; §5.2 extends the same derivation to `recommendation_list`).
+ * Both controls key their "done" state the same way (`state.done === true`),
+ * so one function covers a tick and a watched-mark alike.
  */
 function checkProgress(
   objects: DetailObject[],
   itemStates: ItemStates,
 ): { done: number; total: number } | undefined {
-  const checkable = objects.filter((o) => o.control === 'check' && o.statePath);
-  if (!checkable.length) return undefined;
-  const done = checkable.filter((o) => itemStates?.[o.statePath as string]?.done === true).length;
-  return { done, total: checkable.length };
+  const trackable = objects.filter((o) => (o.control === 'check' || o.control === 'watch') && o.statePath);
+  if (!trackable.length) return undefined;
+  const done = trackable.filter((o) => itemStates?.[o.statePath as string]?.done === true).length;
+  return { done, total: trackable.length };
+}
+
+/**
+ * §5.2 local compute: total sets and an estimated session length from the
+ * routine's own `sets`/`rest` values — arithmetic on what the model already
+ * extracted, never a model call and never invented content. Only estimates a
+ * duration when the content did not already state one (`workout.duration`) —
+ * no point guessing at what the creator already said.
+ *
+ * The per-set time (`ASSUMED_SECONDS_PER_SET`) is a fixed, undisclosed-to-the-
+ * user constant standing in for time-under-tension plus transition — it is
+ * not extracted from anything, which is why the result is always labelled
+ * "est." rather than presented as a fact.
+ */
+const ASSUMED_SECONDS_PER_SET = 40;
+
+function parseLeadingInt(value: unknown): number | null {
+  const text = clean(value);
+  if (!text) return null;
+  const match = text.match(/\d+/);
+  return match ? parseInt(match[0], 10) : null;
+}
+
+function parseSecondsLenient(value: unknown): number | null {
+  const text = clean(value);
+  if (!text) return null;
+  const match = text.match(/(\d+(?:\.\d+)?)\s*(s|sec|second|m|min|minute)/i);
+  if (!match) return null;
+  const amount = parseFloat(match[1]);
+  return Math.round(match[2].toLowerCase().startsWith('m') ? amount * 60 : amount);
+}
+
+function workoutLoadField(exercises: unknown, statedDuration: string | null): DetailField | null {
+  if (!Array.isArray(exercises)) return null;
+  let totalSets = 0;
+  let estimatedSeconds = 0;
+  let countedExercises = 0;
+  for (const raw of exercises) {
+    if (!isRecord(raw)) continue;
+    const sets = parseLeadingInt(raw.sets);
+    if (sets === null) continue;
+    countedExercises++;
+    totalSets += sets;
+    const rest = parseSecondsLenient(raw.rest) ?? 0;
+    estimatedSeconds += sets * (ASSUMED_SECONDS_PER_SET + rest);
+  }
+  if (!countedExercises) return null;
+
+  const parts = [`${totalSets} set${totalSets === 1 ? '' : 's'} across ${countedExercises} exercise${countedExercises === 1 ? '' : 's'}`];
+  if (!statedDuration) {
+    const minutes = Math.max(1, Math.round(estimatedSeconds / 60));
+    parts.push(`~${minutes} min (est.)`);
+  }
+  return { label: 'Session load', text: parts.join(' · '), style: 'text' };
 }
 
 /**
@@ -200,9 +264,11 @@ function exercisesField(value: unknown, itemStates: ItemStates): DetailField | n
  * generic leftovers rows the way `objectListField` would render it.
  *
  * Each item carries a `statePath` and `control: 'watch'` for the
- * watched/rating control — Phase 4 §4.2, the flagship behavior.
+ * watched/rating control — Phase 4 §4.2, the flagship behavior. §5.2 adds a
+ * watched-count progress bar on top, the same derivation `checkProgress`
+ * already does for checklist ticks and course sections.
  */
-function recommendationItemsField(value: unknown): DetailField | null {
+function recommendationItemsField(value: unknown, itemStates: ItemStates): DetailField | null {
   if (!Array.isArray(value)) return null;
   const objects: DetailObject[] = [];
   value.forEach((raw, i) => {
@@ -223,9 +289,12 @@ function recommendationItemsField(value: unknown): DetailField | null {
       rows,
       statePath: `items[${i}]`,
       control: 'watch',
+      imageUrl: clean(raw.posterUrl) ?? undefined,
     });
   });
-  return objects.length ? { label: 'Items', objects, style: 'objects' } : null;
+  return objects.length
+    ? { label: 'Items', objects, style: 'objects', progress: checkProgress(objects, itemStates) }
+    : null;
 }
 
 /**
@@ -359,10 +428,11 @@ const HANDLED_ELSEWHERE: Record<string, ReadonlySet<string>> = {
   workout: new Set([
     'title', 'summary', 'category', 'goal', 'muscleGroups', 'duration', 'difficulty',
     'equipment', 'warmup', 'exercises', 'cooldown', 'progression', 'warnings',
+    'estimatedDurationMin', 'estimatedDifficulty',
   ]),
   other: new Set(['title', 'summary', 'tags']),
   unusable: new Set(['reason']),
-  recommendation_list: new Set(['title', 'medium', 'summary', 'items', 'orderMatters']),
+  recommendation_list: new Set(['title', 'medium', 'summary', 'items', 'orderMatters', 'suggestedOrder']),
   checklist: new Set(['title', 'summary', 'context', 'items']),
   course: new Set(['title', 'subject', 'level', 'summary', 'sections', 'prerequisites', 'resources', 'outcomes']),
   itinerary: new Set(['title', 'destination', 'durationDays', 'summary', 'bestSeason', 'places', 'generalTips']),
@@ -434,6 +504,19 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
     case 'workout': {
       const title = clean(d.title);
       if (!title) return null;
+      // §5.1: `estimatedDurationMin`/`estimatedDifficulty` are the model's own
+      // judgement, not something the content stated — shown only when the
+      // real field is unclear, and always suffixed "(estimated)" so it can
+      // never be mistaken for a fact the creator said (docs/next-phases.md
+      // §5.1's "distinguishable from extracted ones" rule).
+      const durationEstimate =
+        !clean(d.duration) && clean(d.estimatedDurationMin)
+          ? `${clean(d.estimatedDurationMin)} min (estimated)`
+          : null;
+      const difficultyEstimate =
+        !clean(d.difficulty) && clean(d.estimatedDifficulty)
+          ? `${clean(d.estimatedDifficulty)} (estimated)`
+          : null;
       return {
         title,
         meta: join([clean(d.duration), clean(d.category), clean(d.goal), clean(d.difficulty)]),
@@ -443,6 +526,9 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
             listField('Muscle groups', d.muscleGroups),
             listField('Equipment', d.equipment),
             listField('Warm-up', d.warmup, 'steps'),
+            workoutLoadField(d.exercises, clean(d.duration)),
+            textField('Est. duration', durationEstimate),
+            textField('Est. difficulty', difficultyEstimate),
             exercisesField(d.exercises, save.itemStates),
             listField('Cool-down', d.cooldown, 'steps'),
             textField('Progression', d.progression),
@@ -505,11 +591,25 @@ export function buildDetailModel(save: SaveResponse): SaveDetailModel | null {
     case 'recommendation_list': {
       const title = clean(d.title);
       if (!title) return null;
+      // §5.1: `suggestedOrder` is the model's own suggestion (only populated
+      // when `orderMatters` is 'no'), never the creator's — the label says
+      // "Suggested" rather than "Order", and the field is skipped entirely
+      // when the creator did prescribe one, so the two are never confusable.
+      const suggestedOrder =
+        clean(d.orderMatters) !== 'yes' ? cleanList(d.suggestedOrder) : [];
       return {
         title,
         meta: join([clean(d.medium), clean(d.orderMatters) === 'yes' ? 'watch in order' : null]),
         lede: clean(d.summary) ?? undefined,
-        fields: [...compact([recommendationItemsField(d.items)]), ...leftovers(d, type)],
+        fields: [
+          ...compact([
+            recommendationItemsField(d.items, save.itemStates),
+            suggestedOrder.length
+              ? { label: 'Suggested order (estimated)', items: suggestedOrder, style: 'chips' as const }
+              : null,
+          ]),
+          ...leftovers(d, type),
+        ],
       };
     }
 

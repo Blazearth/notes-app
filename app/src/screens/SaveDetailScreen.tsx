@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Image, Linking, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
@@ -12,12 +12,15 @@ import { Glyph } from '@/components/Glyph';
 import { Reveal } from '@/components/Reveal';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
+import { SaveThumb } from '@/components/SaveThumb';
 import { Touchable } from '@/components/Touchable';
 import { Discussion } from '@/components/Discussion';
 import { LifecycleStrip } from '@/components/LifecycleStrip';
+import { buildCardModel } from '@/saves/cardModel';
 import { buildDetailModel, type DetailField, type DetailObject } from '@/saves/detailModel';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { baseServings, scaleQuantity } from '@/saves/scaling';
+import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { useSaves } from '@/saves/SavesProvider';
 import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -246,6 +249,97 @@ function RestTimer({ label }: { label: string }) {
   );
 }
 
+/** Horizontally scrolling rail that bleeds into the screen gutter — mirrors `HomeScreen`'s `Rail`. */
+function Rail({ children }: { children: React.ReactNode }) {
+  const { layout, spacing } = useTheme();
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={{ marginHorizontal: -layout.screenGutter }}
+      contentContainerStyle={{ paddingHorizontal: layout.screenGutter, gap: spacing.md }}
+    >
+      {children}
+    </ScrollView>
+  );
+}
+
+/** One tile in the "You also saved" rail — thumbnail, title, meta, nothing else. */
+function RelatedCard({ save, onPress }: { save: SaveResponse; onPress: () => void }) {
+  const { radius, spacing } = useTheme();
+  const typeMeta = save.knowledgeType ? saveTypeMeta(save.knowledgeType) : undefined;
+  const model = buildCardModel(save);
+  return (
+    <Card padding={0} radius={radius.lg} style={{ width: 156, overflow: 'hidden' }}>
+      <Touchable accessibilityRole="button" onPress={onPress} haptic="selection">
+        <SaveThumb
+          thumbnailUrl={save.thumbnailUrl}
+          width={156}
+          height={90}
+          radius={0}
+          tint={typeMeta?.color}
+          glyph={typeMeta?.glyph}
+        />
+        <View style={{ padding: spacing.smd }}>
+          <AppText variant="cardTitle" numberOfLines={1}>
+            {model?.title ?? saveTitle(save)}
+          </AppText>
+          {model?.meta ? (
+            <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
+              {model.meta}
+            </AppText>
+          ) : null}
+        </View>
+      </Touchable>
+    </Card>
+  );
+}
+
+/**
+ * "You also saved…" — Phase 5 §5.3. Fetches lazily, only once the save is
+ * `ready` (an unclassified save has no embedding to compare against), and
+ * renders nothing on an empty result: the server's distance cutoff means an
+ * empty array is "nothing genuinely similar," the same honest-empty-state
+ * rule the search screen already follows, not a loading or error state.
+ */
+function RelatedRail({ saveId }: { saveId: string }) {
+  const router = useRouter();
+  const [related, setRelated] = useState<SaveResponse[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    repo
+      .getRelatedSaves(saveId)
+      .then((saves) => {
+        if (!cancelled) setRelated(saves);
+      })
+      .catch(() => {
+        // Silent: a failed suggestion rail is not worth an error card on an
+        // otherwise-successful save view.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [saveId]);
+
+  if (related.length === 0) return null;
+
+  return (
+    <View style={{ marginBottom: 24 }}>
+      <SectionLabel>You also saved</SectionLabel>
+      <Rail>
+        {related.map((save) => (
+          <RelatedCard
+            key={save.id}
+            save={save}
+            onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
+          />
+        ))}
+      </Rail>
+    </View>
+  );
+}
+
 /** An itinerary place's "Open in Maps" deep link — pure URL, no state. */
 function MapsButton({ url }: { url: string }) {
   const { palette, spacing } = useTheme();
@@ -297,6 +391,13 @@ function ObjectCards({
               gap: spacing.xs,
             }}
           >
+            {object.imageUrl ? (
+              <Image
+                source={{ uri: object.imageUrl }}
+                style={{ width: 56, height: 84, borderRadius: radius.sm, marginBottom: spacing.xs }}
+                resizeMode="cover"
+              />
+            ) : null}
             {object.title ? <AppText variant="cardTitle">{object.title}</AppText> : null}
             {object.meta ? (
               <AppText variant="bodySmall" tone="muted">
@@ -910,6 +1011,10 @@ export function SaveDetailScreen({ id }: { id: string }) {
               />
             </Reveal>
           ) : null}
+
+          {/* Renders nothing when there is nothing similar enough — the
+              server's distance cutoff, not a loading placeholder. */}
+          {save.status === 'ready' ? <RelatedRail saveId={save.id} /> : null}
 
           {/* Renders nothing for a private save: a comment thread only you can
               see is a note to self, not a discussion. */}

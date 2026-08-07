@@ -213,6 +213,22 @@ export const mockRepository: Repository = {
     return delay(hits.slice(0, limit));
   },
 
+  /**
+   * No embeddings exist in mock mode, so this stands in for the real
+   * pgvector query with the cheapest signal that still exercises the "you
+   * also saved" rail honestly: same `knowledgeType`, excluding the source
+   * itself and anything not `ready`. Real relevance (a shared cuisine, a
+   * shared genre) is exactly what the real embedding buys over this.
+   */
+  getRelatedSaves(id: string, limit = 10): Promise<SaveResponse[]> {
+    const source = saves.find((s) => s.id === id);
+    if (!source || !source.knowledgeType) return delay([]);
+    const related = saves
+      .filter((s) => s.id !== id && s.status === 'ready' && s.knowledgeType === source.knowledgeType)
+      .slice(0, limit);
+    return delay(copy(related));
+  },
+
   // -------------------------------------------------------------- account
 
   getMe(): Promise<MeResponse> {

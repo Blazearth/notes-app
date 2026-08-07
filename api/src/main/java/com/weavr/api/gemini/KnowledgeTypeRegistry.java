@@ -259,7 +259,17 @@ public final class KnowledgeTypeRegistry {
                                 field("alternatives", "array", "Substitute exercises if mentioned, or []")),
                         field("cooldown", "array", "Cool-down steps if given, or []"),
                         field("progression", "string", "Progression advice if given, or '[unclear]'"),
-                        field("warnings", "array", "Safety warnings or common mistakes called out, or []")
+                        field("warnings", "array", "Safety warnings or common mistakes called out, or []"),
+                        field("estimatedDurationMin", "string",
+                                "YOUR ESTIMATE of total session length in minutes from the exercises, " +
+                                "sets and rest — not a figure the content stated (that is `duration`). " +
+                                "A plain number as a string, e.g. '35', or '[unclear]' if there is not " +
+                                "enough of a routine to estimate from."),
+                        field("estimatedDifficulty", "string",
+                                "YOUR JUDGEMENT of difficulty from the routine itself — one of: " +
+                                "beginner, intermediate, advanced. Not a figure the content stated " +
+                                "(that is `difficulty`); '[unclear]' only if there is not enough of a " +
+                                "routine to judge from.")
                 ),
                 """
                 Input: "Science-based push day. Start with 5 min band shoulder warm-up. \
@@ -301,7 +311,9 @@ public final class KnowledgeTypeRegistry {
                   ],
                   "cooldown": [],
                   "progression": "Add a rep each week",
-                  "warnings": ["Skip cable flys if your shoulder clicks"]
+                  "warnings": ["Skip cable flys if your shoulder clicks"],
+                  "estimatedDurationMin": "25",
+                  "estimatedDifficulty": "intermediate"
                 }
                 """
         ));
@@ -329,7 +341,13 @@ public final class KnowledgeTypeRegistry {
                                 field("platform", "string", "Where to watch/read/play if stated, or '[unclear]'"),
                                 field("rank", "string", "Position if the list is ordered, or '[unclear]'")),
                         field("orderMatters", "string",
-                                "'yes' if the creator prescribes a viewing/reading order, else 'no'")
+                                "'yes' if the creator prescribes a viewing/reading order, else 'no'"),
+                        field("suggestedOrder", "array",
+                                "ONLY when orderMatters is 'no': YOUR SUGGESTION of a sensible order to " +
+                                "work through the list, as an array of item names, reasoned from the " +
+                                "`reason` given for each — e.g. easiest/shortest first. This is your " +
+                                "judgement, not something the creator said. Use [] whenever orderMatters " +
+                                "is 'yes', or when there is no sensible basis to suggest one.")
                 ),
                 """
                 Input: "3 anime you need before you die: 2. Horimiya — best-paced romance anime \
@@ -346,7 +364,8 @@ public final class KnowledgeTypeRegistry {
                     {"name": "Horimiya", "kind": "anime", "year": "[unclear]", "genre": ["romance"], "reason": "best-paced romance anime out there", "platform": "Crunchyroll", "rank": "2"},
                     {"name": "Clannad", "kind": "anime", "year": "[unclear]", "genre": ["drama", "romance"], "reason": "will wreck you emotionally — save it for last", "platform": "[unclear]", "rank": "1"}
                   ],
-                  "orderMatters": "yes"
+                  "orderMatters": "yes",
+                  "suggestedOrder": []
                 }
                 """
         ));
@@ -652,6 +671,11 @@ public final class KnowledgeTypeRegistry {
                   when the content is ambiguous.
                 - Whitespace-normalize the input before extracting — ignore formatting \
                   artifacts from VTT captions or OCR.
+                - A field description that says "YOUR ESTIMATE", "YOUR JUDGEMENT" or \
+                  "YOUR SUGGESTION" is asking for your own reasoning over the content, \
+                  not something the creator stated — fill it from your judgement, but \
+                  never let it contradict or replace a field the content did state, and \
+                  never invent specifics (numbers, names) an estimate has no basis for.
 
                 Knowledge types:
                 """);

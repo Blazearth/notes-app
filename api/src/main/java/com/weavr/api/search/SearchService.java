@@ -183,6 +183,49 @@ public class SearchService {
     }
 
     /**
+     * "You also saved…" — nearest neighbours of one save's own embedding,
+     * rather than a query's. Phase 5 §5.3: zero generation cost, the same
+     * embedding pool and the same measured 0.40 cutoff the search half
+     * already uses, so a save with nothing genuinely similar returns nothing
+     * rather than the user's whole library ranked by noise.
+     *
+     * <p>Scoped to {@code userId}'s own saves, not the source save's owner —
+     * for a save shared into a Space, "you also saved" is about the
+     * <em>viewer's</em> library, which is the useful reading of the feature
+     * and also the safer one: it never surfaces a Space co-member's other
+     * private saves.
+     *
+     * <p>The source embedding is read via a correlated subquery rather than
+     * fetched into Java first — one round trip, and it sidesteps
+     * reconstructing a {@code pgvector} literal from a value that is already
+     * sitting in the same table. If the source save has no embedding yet
+     * (still processing, or embedding failed) every comparison is against
+     * {@code null} and the query returns no rows — not an error, the same
+     * "no match" shape {@link #semanticCandidates} already relies on.
+     */
+    public List<UUID> relatedTo(UUID userId, UUID saveId, int limit) {
+        return jdbc.sql("""
+                        select id
+                        from saves
+                        where user_id = ?
+                          and status = 'ready'
+                          and id != ?
+                          and embedding is not null
+                          and embedding <=> (select embedding from saves where id = ?) < ?
+                        order by embedding <=> (select embedding from saves where id = ?)
+                        limit ?
+                        """)
+                .param(userId)
+                .param(saveId)
+                .param(saveId)
+                .param(props.maxSemanticDistance())
+                .param(saveId)
+                .param(limit)
+                .query(UUID.class)
+                .list();
+    }
+
+    /**
      * Builds a prefix-aware tsquery so partial words still match — "chick"
      * finds "chicken", "past rec" finds "pasta recipe".
      *

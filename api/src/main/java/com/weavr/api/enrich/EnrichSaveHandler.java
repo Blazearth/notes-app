@@ -1,5 +1,6 @@
 package com.weavr.api.enrich;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -160,6 +161,12 @@ public class EnrichSaveHandler implements JobHandler {
      * Keeps only what the save was actually missing. See the class javadoc:
      * enrichment is additive, and a field the extraction already filled belongs
      * to the user's content, not to a database.
+     *
+     * <p>One extra case, for {@link RecommendationListEnricher}: when both the
+     * current and the found value are lists of the same length, the field is
+     * an object array (a workout's exercises, a recommendation list's items)
+     * an enricher wants to add to <em>per item</em> rather than replace
+     * wholesale — see {@link #mergeItemLists}.
      */
     static Map<String, Object> gapsOnly(Map<String, Object> current, Map<String, Object> found) {
         Map<String, Object> additions = new LinkedHashMap<>();
@@ -167,15 +174,72 @@ public class EnrichSaveHandler implements JobHandler {
             if (value == null) {
                 return;
             }
+            Object existing = current.get(key);
             // An empty array counts as a gap: the extractor emits [] for "the
             // content listed none", which for `genre` is absence rather than a
             // statement that the film has no genres.
-            boolean emptyList = current.get(key) instanceof List<?> list && list.isEmpty();
+            boolean emptyList = existing instanceof List<?> list && list.isEmpty();
             if (Fields.isGap(current, key) || emptyList) {
                 additions.put(key, value);
+                return;
+            }
+            if (existing instanceof List<?> existingList && value instanceof List<?> foundList) {
+                List<Object> merged = mergeItemLists(existingList, foundList);
+                if (merged != null) {
+                    additions.put(key, merged);
+                }
             }
         });
         return additions;
+    }
+
+    /**
+     * Per-item additive merge for an object-array field: every existing item
+     * keeps every key the extraction produced, and gains only the keys the
+     * enricher found that it did not already have — never a wholesale
+     * overwrite of the array, which would risk silently dropping or
+     * reordering the creator's own items.
+     *
+     * <p><b>Identity is the array index</b>, safe for the same reason Phase
+     * 4's item-state mechanism relies on it: enrichment runs once, between
+     * classify and embed, entirely before the save is ever visible as
+     * {@code ready} — there is no later point at which the array could grow,
+     * shrink or reorder out from under an index computed here.
+     *
+     * <p>A length mismatch means the enricher did not describe the list
+     * item-for-item (or {@code found} is not actually a parallel array), and
+     * guessing at a correspondence is worse than adding nothing — so it is
+     * left untouched rather than merged positionally against a different
+     * list. Returns {@code null} when nothing in the list actually changed,
+     * so an unchanged array is never written back as a no-op "addition".
+     */
+    private static List<Object> mergeItemLists(List<?> existing, List<?> found) {
+        if (existing.isEmpty() || existing.size() != found.size()) {
+            return null;
+        }
+        boolean changed = false;
+        List<Object> merged = new ArrayList<>(existing.size());
+        for (int i = 0; i < existing.size(); i++) {
+            Object existingItem = existing.get(i);
+            Object foundItem = found.get(i);
+            if (!(existingItem instanceof Map<?, ?> existingMap) || !(foundItem instanceof Map<?, ?> foundMap)) {
+                merged.add(existingItem);
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> existingFields = (Map<String, Object>) existingMap;
+            Map<String, Object> mergedItem = new LinkedHashMap<>(existingFields);
+            for (Map.Entry<?, ?> entry : foundMap.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                Object value = entry.getValue();
+                if (value != null && Fields.isGap(existingFields, key)) {
+                    mergedItem.put(key, value);
+                    changed = true;
+                }
+            }
+            merged.add(mergedItem);
+        }
+        return changed ? merged : null;
     }
 
     /**

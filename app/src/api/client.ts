@@ -289,6 +289,19 @@ export function searchSaves(query: string, limit = 25): Promise<SearchHit[]> {
 }
 
 /**
+ * `GET /v1/saves/{id}/related` — "you also saved…", Phase 5 §5.3. A pgvector
+ * nearest-neighbour query over the same embedding pool `searchSaves` uses, so
+ * it costs no Gemini request. An empty array is a legitimate answer: the
+ * server applies the same 0.40 distance cutoff full search does, so a save
+ * with nothing genuinely similar returns nothing rather than the rest of the
+ * library ranked by noise.
+ */
+export function getRelatedSaves(id: string, limit = 10): Promise<SaveResponse[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return request<SaveResponse[]>(`/v1/saves/${id}/related?${params.toString()}`);
+}
+
+/**
  * `POST /v1/saves/{id}/acts/shopping-list` → **202**.
  *
  * The conversion is a queued job that spends a Gemini request, so the list is

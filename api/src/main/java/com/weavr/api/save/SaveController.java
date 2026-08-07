@@ -1,6 +1,7 @@
 package com.weavr.api.save;
 
 import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -12,6 +13,7 @@ import com.weavr.api.save.dto.UpdateFlagsRequest;
 import com.weavr.api.save.dto.UpdateItemStateRequest;
 import com.weavr.api.save.dto.UpdateLifecycleRequest;
 import com.weavr.api.save.dto.UpdateSpaceRequest;
+import com.weavr.api.search.SearchService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,12 +30,19 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/v1/saves")
 class SaveController {
 
+    private static final int MAX_RELATED_LIMIT = 25;
+
     private final SaveService saveService;
     private final SaveItemStateService itemStates;
+    private final SaveRepository saveRepository;
+    private final SearchService searchService;
 
-    SaveController(SaveService saveService, SaveItemStateService itemStates) {
+    SaveController(SaveService saveService, SaveItemStateService itemStates,
+                   SaveRepository saveRepository, SearchService searchService) {
         this.saveService = saveService;
         this.itemStates = itemStates;
+        this.saveRepository = saveRepository;
+        this.searchService = searchService;
     }
 
     /**
@@ -133,5 +142,34 @@ class SaveController {
         Map<String, Map<String, Object>> states =
                 itemStates.setState(userId, id, request.itemPath(), request.state());
         return SaveResponse.from(save, states);
+    }
+
+    /**
+     * "You also saved…" — Phase 5 §5.3. Costs no Gemini request: it is a
+     * pgvector nearest-neighbour query over embeddings every {@code ready}
+     * save already has from the ordinary pipeline. {@code getForUser} both
+     * authorizes (own save, or a save in a Space the caller belongs to) and
+     * 404s a foreign one before the related query ever runs.
+     */
+    @GetMapping("/{id}/related")
+    List<SaveResponse> related(@CurrentUser UUID userId, @PathVariable UUID id,
+                               @RequestParam(defaultValue = "10") int limit) {
+        saveService.getForUser(userId, id);
+
+        List<UUID> ids = searchService.relatedTo(userId, id, Math.clamp(limit, 1, MAX_RELATED_LIMIT));
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        // Same "one query, re-impose rank order" shape as SearchController —
+        // findAllById does not promise to preserve the id list's order.
+        Map<UUID, Save> byId = new LinkedHashMap<>();
+        saveRepository.findAllById(ids).forEach(save -> byId.put(save.getId(), save));
+
+        return ids.stream()
+                .map(byId::get)
+                .filter(java.util.Objects::nonNull)
+                .map(SaveResponse::from)
+                .toList();
     }
 }

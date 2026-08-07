@@ -233,6 +233,8 @@ redesign), and push-notification reminders (needs infra that doesn't exist).
 
 ## Phase 5 — derived intelligence (inside the cost classes, or not at all)
 
+**Landed 2026-08-07**, in the order this doc's own "suggested overall sequence"
+lays out (5.2 → 5.3 → 5.1) — see CLAUDE.md for the full verification record.
 Three legal cost classes; every idea must name its class before it's built.
 
 ### 5.1 Same-call tokens — extend extraction schemas with *labelled* derived fields
@@ -247,33 +249,82 @@ estimates:
   "distinguishable" rule CLAUDE.md's principle section requires).
 - `recommendation_list.suggestedOrder` — only when `orderMatters` is 'no' and
   the model can justify one from the reasons given.
-- `recipe.estimatedNutrition` — **do not build this one.** Nutrition numbers
-  read as facts, get eaten against, and a wrong estimate has real-world
-  consequences the difficulty estimate doesn't. If ever, it's an enrichment
-  lookup against a nutrition database, not a model guess.
+- `recipe.estimatedNutrition` — **not built, per this doc's own instruction.**
+  Nutrition numbers read as facts, get eaten against, and a wrong estimate has
+  real-world consequences the difficulty estimate doesn't.
 
-Cost: tokens only. Risk: schema bloat — re-run the pre-flight after each batch.
+Cost: tokens only. Both new fields landed and were confirmed against the real
+API by the existing `KnowledgeTypeRegistrySchemaLiveTest` pre-flight — the
+15-branch `anyOf` (workout's two new fields plus recommendation_list's third)
+was accepted (HTTP 200), and on this run the sample content (`orderMatters:
+'no'`) came back with a populated `suggestedOrder`, so the field's actual
+shape is confirmed, not just its schema validity. **App-side, an estimate is
+never rendered under the real field's label** — `detailModel.ts`'s workout
+case only shows "Est. duration"/"Est. difficulty" when the stated
+`duration`/`difficulty` is `[unclear]`, each suffixed literally "(estimated)";
+`suggestedOrder` renders as its own "Suggested order (estimated)" chip row,
+shown only when `orderMatters` is not `'yes'` — even if the model filled the
+field in anyway, the UI suppresses it, since a prescribed order must never
+share a label with a guessed one.
 
 ### 5.2 Local compute — free, do liberally
 
-- Workout total volume (sets × reps across exercises), session duration from
-  sets/rest parsing.
-- Checklist/course/watchlist progress percentages.
-- Serving scaling (already Phase 4).
+- **Workout total volume and an estimated session length** — `workoutLoadField`
+  in `detailModel.ts`, pure arithmetic over the exercises the model already
+  extracted (parses a leading integer from `sets`, a lenient duration from
+  `rest`). The estimate only appears when `duration` itself is `[unclear]` —
+  no point guessing at what the creator already said — and is always suffixed
+  "(est.)" for the same distinguishability reason as 5.1's fields, even though
+  nothing here is a model call.
+- **Checklist/course/watchlist progress percentages** — `checkProgress`
+  (renamed from the Phase 4 checklist-only version) now covers both
+  `control: 'check'` and `control: 'watch'` objects, since both key their done
+  state the same way (`state.done === true`). `recommendation_list`'s Items
+  field gained a `progress` the same way checklist/course already had one;
+  checklist/course themselves are unchanged, and a regression test pins that.
+- Serving scaling — already Phase 4, unchanged.
 
 ### 5.3 Enrichment + embeddings — existing machinery, new consumers
 
-- **Related saves**: pgvector nearest-neighbours over `saves.embedding` with
-  the measured 0.40 cutoff → "you also saved…" on the detail screen. Zero
-  generation cost; the embedding pool is separate and 1000 RPD. The cutoff was
-  provisional (three saves, seven queries) — revisit it with the larger corpus
-  before shipping the rail.
-- **Per-item enrichment for `recommendation_list`** (TMDB for each film on the
-  list): possible but *N lookups per save* where every other type does one.
-  TMDB is free and not RPD-gated, so the cost is latency and error surface,
-  not budget — still, cap at the first ~10 items and keep it additive-only
-  behind the similarity threshold. A wrong TMDB match on item 7 must never
-  overwrite the creator's `reason`.
+- **Related saves**: `SearchService.relatedTo` — a correlated-subquery variant
+  of the existing `semanticCandidates` query (same `<=>` operator, same
+  `maxSemanticDistance` cutoff from `SearchProperties`, so the "0.40, provisional"
+  caveat on that number still applies unchanged), scoped to the *viewer's*
+  saves rather than the source save's owner — the useful reading of "you also
+  saved" for a save shared into a Space, and the safer one, since it can never
+  surface a co-member's own private saves. `GET /v1/saves/{id}/related`
+  authorizes via the same `SaveService.getForUser` every other `/{id}/...`
+  endpoint uses. App-side: `RelatedRail` on `SaveDetailScreen`, fetched lazily
+  once a save is `ready`, rendering nothing on an empty result rather than a
+  loading or error state — an empty array is the server's honest "nothing
+  cleared the cutoff," the same rule full search already follows. **Not yet
+  exercised against a real Postgres** — no local instance exists, and unlike
+  the V11 jsonpath work this didn't get a live read-only probe before landing,
+  because it touches no migration and reuses `semanticCandidates`' already-verified
+  query shape verbatim; that substitution is reasoned, not measured.
+- **Per-item enrichment for `recommendation_list`**: `RecommendationListEnricher`,
+  capped at the first 10 items whose `kind` reads as film/TV/anime (a
+  books-and-games list spends nothing), one `/search/multi` lookup each,
+  `TitleMatch`-guarded exactly like `TmdbEnricher`. Adds only `posterUrl` —
+  never touches `reason`, `name`, or any other field the creator's content
+  produced. This needed a real extension to the shared merge mechanism:
+  `EnrichSaveHandler.gapsOnly` previously only ever added or replaced a whole
+  top-level field, which cannot express "add one new key to item 3 of an
+  existing 5-item array" without either overwriting the array (risking a
+  dropped or reordered item) or refusing to touch it at all (the array is
+  non-empty, so the old "is it a gap" check would just skip it). The fix
+  generalizes rather than special-cases: when both the current and found
+  values are same-length lists, `mergeItemLists` merges per item by array
+  index (safe for the identical reason Phase 4's item-state mechanism already
+  relies on that precondition — enrichment runs once, entirely before the
+  save is ever `ready`), keeping every existing key and adding only what was
+  a gap. A regression test (`EnrichmentMergeTest`) pins that a same-length
+  plain string array (TMDB's `genre` against a movie's own non-empty genre
+  list) still falls through unchanged rather than being mistaken for an
+  object array. **Mocked, like every other enricher here** — `TmdbEnricherTest`'s
+  own caveat about not knowing whether the real API answers this way applies
+  identically to `/search/multi`, which has never been called with a real key
+  (no `WEAVR_TMDB_API_KEY` is configured in this environment).
 
 ### Not Phase 5, not any phase
 
