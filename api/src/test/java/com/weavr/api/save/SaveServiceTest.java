@@ -4,6 +4,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.weavr.api.common.NotFoundException;
+import com.weavr.api.config.SupabaseStorageClient;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.profile.ProfileService;
 import com.weavr.api.save.dto.CreateSaveRequest;
@@ -39,6 +40,7 @@ class SaveServiceTest {
     private ProfileService profiles;
     private JobQueue jobs;
     private SpaceService spaces;
+    private SupabaseStorageClient storage;
     private SaveService service;
 
     @BeforeEach
@@ -47,7 +49,8 @@ class SaveServiceTest {
         profiles = mock(ProfileService.class);
         jobs = mock(JobQueue.class);
         spaces = mock(SpaceService.class);
-        service = new SaveService(saves, profiles, jobs, spaces);
+        storage = mock(SupabaseStorageClient.class);
+        service = new SaveService(saves, profiles, jobs, spaces, storage);
 
         // @UuidGenerator only assigns `id` on a real flush; simulate that here
         // so create()'s save.getId() (used to build the job payload) isn't null.

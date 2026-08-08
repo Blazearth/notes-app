@@ -1,5 +1,6 @@
 package com.weavr.api.save;
 
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -15,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestClient;
 
 /**
  * Entry point for a new save: run the extraction cascade and park the result.
@@ -43,14 +45,17 @@ class ProcessSaveHandler implements JobHandler {
     private final ExtractionCascade cascade;
     private final JobQueue jobQueue;
     private final JdbcClient jdbc;
+    private final RestClient http;
 
     ProcessSaveHandler(SaveRepository saves, SaveStageWriter stages,
-                       ExtractionCascade cascade, JobQueue jobQueue, JdbcClient jdbc) {
+                       ExtractionCascade cascade, JobQueue jobQueue, JdbcClient jdbc,
+                       RestClient.Builder restClientBuilder) {
         this.saves = saves;
         this.stages = stages;
         this.cascade = cascade;
         this.jobQueue = jobQueue;
         this.jdbc = jdbc;
+        this.http = restClientBuilder.build();
     }
 
     @Override
@@ -67,15 +72,15 @@ class ProcessSaveHandler implements JobHandler {
 
         String text = switch (save.getSourceType()) {
             case URL -> extractFromUrl(saveId, save);
-            // Text the client already holds — nothing to fetch. A screenshot
-            // carries on-device OCR output the same way a typed note carries
-            // its caption (SourceType.IMAGE's own doc comment), so it takes
-            // the identical path.
-            case TEXT, IMAGE -> requireText(save);
-            // Both need a Storage upload path that does not exist yet — the
-            // client posts a link or text today, never a file. PDF-by-URL
-            // already works: that is a URL save, and ExtractionCascade routes
-            // a .pdf link straight to PdfExtractor without touching yt-dlp.
+            // TEXT saves already have their content in rawCaption.
+            case TEXT -> requireText(save);
+            // IMAGE: if mediaStoragePath is set, download the image bytes so
+            // ClassifySaveHandler can send them directly to Gemini Vision.
+            // Otherwise fall back to requireText() for backward-compat with
+            // old on-device-OCR saves that pre-date the upload endpoint.
+            case IMAGE -> save.getMediaStoragePath() != null
+                    ? downloadAndStoreImage(saveId, save)
+                    : requireText(save);
             case PDF, AUDIO -> throw new PermanentJobException(
                     "unsupported_source_type",
                     "Weavr can't process this kind of save yet.");
@@ -137,6 +142,45 @@ class ProcessSaveHandler implements JobHandler {
             throw new PermanentJobException("no_text_extracted", "That save is empty.");
         }
         return text;
+    }
+
+    static final String STAGE_IMAGE_READY = "image_ready";
+
+    /**
+     * Downloads the image from Supabase Storage and writes its bytes (base64)
+     * to {@code save_stages} so {@link ClassifySaveHandler} can send them
+     * directly to Gemini Vision without a second download.
+     *
+     * <p>Returns a minimal placeholder text because the pipeline expects a
+     * non-null, non-blank string here; {@code ClassifySaveHandler} ignores it
+     * for IMAGE saves and reads the stage payload instead.
+     */
+    private String downloadAndStoreImage(UUID saveId, Save save) {
+        String url = save.getSourceUrl() != null ? save.getSourceUrl() : save.getMediaStoragePath();
+        if (url == null || url.isBlank()) {
+            throw new PermanentJobException("no_image_url", "Image save has no storage URL.");
+        }
+
+        log.info("Downloading image for save={} from {}", saveId, url);
+
+        byte[] imageBytes = http.get()
+                .uri(url)
+                .retrieve()
+                .body(byte[].class);
+
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new PermanentJobException("empty_image", "Downloaded image is empty.");
+        }
+
+        String b64 = Base64.getEncoder().encodeToString(imageBytes);
+        stages.record(saveId, STAGE_IMAGE_READY, Map.of(
+                "image_b64", b64,
+                "mime_type", "image/jpeg",
+                "size_bytes", imageBytes.length
+        ));
+
+        log.info("Save {} image stored in stages: {} bytes", saveId, imageBytes.length);
+        return "[image]";  // non-blank placeholder; classify_save uses stage data instead
     }
 
     private static String truncate(String text) {

@@ -1,8 +1,9 @@
 import * as Clipboard from 'expo-clipboard';
 import { BlurView } from 'expo-blur';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
 import Animated, {
   interpolate,
   runOnJS,
@@ -27,11 +28,13 @@ import { useHaptic } from '@/motion/haptics';
 import { useSaves } from '@/saves/SavesProvider';
 import { Spring, staggerDelay } from '@/theme/motion';
 import { useTheme } from '@/theme/ThemeProvider';
+import { supabase } from '@/auth/supabase';
+import { SUPABASE_URL } from '@/api/config';
 
 const COLUMNS = 4;
 
-/** Only `link` and `note` post today; the rest need capture surfaces that do not exist. */
-const IMPLEMENTED: ReadonlySet<string> = new Set(['link', 'note']);
+/** Only `link`, `note`, and `screenshot` post today; the rest need capture surfaces. */
+const IMPLEMENTED: ReadonlySet<string> = new Set(['link', 'note', 'screenshot']);
 
 const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
 
@@ -376,6 +379,74 @@ export function CaptureSheet() {
   }, []);
 
   /**
+   * Opens the system image picker (gallery), uploads the selected image to
+   * Supabase Storage, then creates an IMAGE save that Gemini will analyse.
+   *
+   * Flow:
+   *   1. Request media library permission (auto-granted on first share).
+   *   2. Let user pick one image from the gallery.
+   *   3. Upload to `screenshots` bucket as `{userId}/{uuid}.jpg`.
+   *   4. POST /v1/saves with sourceType=image + sourceUrl = public URL.
+   */
+  const handleOpenScreenshot = useCallback(async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Allow Weavr to access your photos to save screenshots.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images' as const,
+      quality: 0.85,
+      allowsEditing: false,
+      allowsMultipleSelection: false,
+    });
+
+    if (result.canceled || result.assets.length === 0) return;
+
+    const asset = result.assets[0];
+    const fileName = `${Date.now()}.jpg`;
+
+    // Read the file as a Blob for Supabase Storage upload
+    const response = await fetch(asset.uri);
+    const blob = await response.blob();
+
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session?.session?.user?.id ?? 'anonymous';
+    const storagePath = `${userId}/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('screenshots')
+      .upload(storagePath, blob, { contentType: 'image/jpeg', upsert: true });
+
+    if (uploadError) {
+      haptic('error');
+      setError('Upload failed. Try again.');
+      console.warn('[screenshot] upload error:', uploadError.message);
+      return;
+    }
+
+    const supabaseBase = SUPABASE_URL.replace(/\/$/, '');
+    const publicUrl = `${supabaseBase}/storage/v1/object/public/screenshots/${storagePath}`;
+
+    haptic('success');
+    dismiss();
+
+    void repo
+      .createSave({ sourceType: 'image', sourceUrl: publicUrl })
+      .then(prepend)
+      .catch((e: unknown) => {
+        haptic('error');
+        console.warn('[screenshot] save failed:', e instanceof ApiError ? e.message : e);
+      });
+  }, [dismiss, haptic, prepend]);
+
+  const handleOpenScreenshotPress = useCallback(
+    () => void handleOpenScreenshot(),
+    [handleOpenScreenshot],
+  );
+
+  /**
    * Save the typed note and dismiss, mirroring pasteLink's fire-and-forget
    * pattern: validate locally → haptic → dismiss → POST in background.
    * The sheet is never held open waiting on the network.
@@ -598,8 +669,9 @@ export function CaptureSheet() {
                       // — a fresh arrow per render makes every tile re-render on
                       // every keystroke of sheet state.
                       onPress={
-                        option.id === 'link' ? handlePasteLink :
-                        option.id === 'note' ? handleOpenNote :
+                        option.id === 'link'       ? handlePasteLink :
+                        option.id === 'note'       ? handleOpenNote :
+                        option.id === 'screenshot' ? handleOpenScreenshotPress :
                         noop
                       }
                     />
@@ -618,7 +690,7 @@ export function CaptureSheet() {
               </AppText>
             ) : (
               <AppText variant="caption" tone="faint" style={{ marginTop: spacing.lg }}>
-                Paste Link and Text Note are wired to the API. The rest arrive with their capture surfaces.
+                Paste Link, Text Note, and Screenshot are wired up. The rest arrive with their capture surfaces.
               </AppText>
             )}
           </>

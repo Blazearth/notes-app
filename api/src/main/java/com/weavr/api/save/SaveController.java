@@ -25,7 +25,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/v1/saves")
@@ -60,6 +62,35 @@ class SaveController {
                                         @RequestHeader(value = "Idempotency-Key", required = false)
                                         String idempotencyKey) {
         Save save = saveService.create(userId, request, idempotencyKey);
+        return ResponseEntity
+                .accepted()
+                .location(URI.create("/v1/saves/" + save.getId()))
+                .body(SaveResponse.from(save));
+    }
+
+    /**
+     * {@code POST /v1/saves/image} — accepts a screenshot or photo as a
+     * {@code multipart/form-data} upload.
+     *
+     * <p>The Android share worker calls this instead of {@code /v1/saves}
+     * because it holds raw bytes, not a URL. The backend uploads the image
+     * to Supabase Storage and enqueues the normal pipeline job so Gemini can
+     * analyse the visual content and classify the save.
+     *
+     * <p>Max file size is enforced by the Spring multipart configuration
+     * ({@code spring.servlet.multipart.max-file-size=10MB}).
+     */
+    @PostMapping(value = "/image", consumes = "multipart/form-data")
+    ResponseEntity<SaveResponse> createFromImage(
+            @CurrentUser UUID userId,
+            @RequestPart("image") MultipartFile image,
+            @RequestParam(value = "spaceId", required = false) UUID spaceId)
+            throws java.io.IOException {
+        if (image.isEmpty()) {
+            return ResponseEntity.badRequest().build();
+        }
+        String mimeType = image.getContentType() != null ? image.getContentType() : "image/jpeg";
+        Save save = saveService.createFromImage(userId, image.getBytes(), mimeType, spaceId);
         return ResponseEntity
                 .accepted()
                 .location(URI.create("/v1/saves/" + save.getId()))

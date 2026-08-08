@@ -150,6 +150,92 @@ public class GeminiClient {
     }
 
     /**
+     * Classifies and extracts structured data from a raw image (screenshot).
+     *
+     * <p>Unlike {@link #classify(UUID, String, BudgetApproved)}, which takes
+     * assembled text, this method sends the image directly as {@code inline_data}
+     * alongside the same system prompt and response schema, so Gemini sees the
+     * full visual context — overlay captions, UI elements, embedded text — in
+     * one call without a lossy OCR intermediate.
+     *
+     * <p>The response parsing is identical to {@code classify()}: the model
+     * returns structured JSON conforming to the schema, so {@link GeminiResponse}
+     * carries it unchanged.
+     *
+     * @param saveId    UUID of the save — used for observability logging only
+     * @param imageBytes raw JPEG (or other image) bytes
+     * @param mimeType  the image MIME type, e.g. {@code image/jpeg}
+     * @param budget    proof that the daily budget has been checked
+     * @return the parsed Gemini response
+     */
+    public GeminiResponse classifyImage(UUID saveId, byte[] imageBytes, String mimeType,
+                                        BudgetApproved budget) {
+        String model = budget.model();
+        Instant callStart = Instant.now();
+        String outcome = "success";
+        int inputTokens = 0;
+        int outputTokens = 0;
+        double confidence = 0.0;
+
+        try {
+            Map<String, Object> requestBody = buildImageClassifyRequest(imageBytes, mimeType, model);
+            String url = GEMINI_BASE + model + ":generateContent?key=" + props.apiKey();
+
+            log.debug("Gemini classifyImage: save={} model={} bytes={}", saveId, model, imageBytes.length);
+
+            byte[] rawResponse = http.post()
+                    .uri(url)
+                    .body(objectMapper.writeValueAsString(requestBody))
+                    .retrieve()
+                    .body(byte[].class);
+
+            JsonNode root = objectMapper.readTree(rawResponse);
+
+            JsonNode usage = root.path("usageMetadata");
+            inputTokens = usage.path("promptTokenCount").asInt(0);
+            outputTokens = usage.path("candidatesTokenCount").asInt(0);
+
+            String generatedJson = root
+                    .path("candidates").get(0)
+                    .path("content").path("parts").get(0)
+                    .path("text").asText();
+
+            JsonNode parsed = objectMapper.readTree(generatedJson);
+            String knowledgeType = parsed.path("knowledgeType").asText("other");
+            confidence = parsed.path("confidence").asDouble(0.5);
+
+            Map<String, Object> structuredData = objectMapper.convertValue(parsed, Map.class);
+            structuredData.remove("knowledgeType");
+            structuredData.remove("confidence");
+
+            log.info("Gemini classifyImage save={} type={} confidence={} model={} in={}tok out={}tok",
+                    saveId, knowledgeType, confidence, model, inputTokens, outputTokens);
+
+            return new GeminiResponse(knowledgeType, confidence, structuredData,
+                    inputTokens, outputTokens, model);
+
+        } catch (HttpClientErrorException e) {
+            outcome = "client_error_" + e.getStatusCode().value();
+            if (e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
+                throw new RetryableJobException("Gemini rate limit hit (429) on image classify, will retry.", e);
+            }
+            throw new RetryableJobException(
+                    "Gemini returned an unexpected client error on image classify: " + e.getStatusCode(), e);
+        } catch (HttpServerErrorException e) {
+            outcome = "server_error_" + e.getStatusCode().value();
+            throw new RetryableJobException(
+                    "Gemini is temporarily unavailable on image classify (" + e.getStatusCode() + "), will retry.", e);
+        } catch (Exception e) {
+            outcome = "error";
+            throw new RetryableJobException(
+                    "An error occurred calling Gemini image classify: " + e.getMessage(), e);
+        } finally {
+            logCall(saveId, model, inputTokens, outputTokens, confidence, outcome, callStart,
+                    "classify_image");
+        }
+    }
+
+    /**
      * A general structured-output call, for features that need JSON back but
      * are not classification.
      *
@@ -458,6 +544,40 @@ public class GeminiClient {
                                 // Enable thinking explicitly — Flash Lite has it off by default.
                                 "thinkingBudget", 1024
                         )
+                )
+        );
+    }
+
+    /**
+     * Builds a Gemini request that sends an image inline alongside the full
+     * classification schema, producing structured output from visual content.
+     *
+     * <p>Same system prompt and response schema as {@link #buildRequest} —
+     * the model does OCR + classification + field extraction in a single pass.
+     */
+    private Map<String, Object> buildImageClassifyRequest(byte[] imageBytes, String mimeType,
+                                                           String model) {
+        String systemPrompt = KnowledgeTypeRegistry.buildSystemPrompt();
+        Map<String, Object> responseSchema = KnowledgeTypeRegistry.buildResponseSchema();
+
+        List<Map<String, Object>> parts = new java.util.ArrayList<>();
+        parts.add(Map.of("text",
+                "Analyse this screenshot. Identify what it shows and extract all relevant information " +
+                "according to the schema. If the image contains text (captions, ingredients, steps, etc.) " +
+                "read it carefully — it is the primary signal. Be thorough."));
+        parts.add(Map.of("inline_data", Map.of(
+                "mime_type", mimeType,
+                "data", Base64.getEncoder().encodeToString(imageBytes))));
+
+        return Map.of(
+                "system_instruction", Map.of(
+                        "parts", List.of(Map.of("text", systemPrompt))
+                ),
+                "contents", List.of(Map.of("parts", parts)),
+                "generationConfig", Map.of(
+                        "responseMimeType", "application/json",
+                        "responseSchema", responseSchema,
+                        "thinkingConfig", Map.of("thinkingBudget", 1024)
                 )
         );
     }

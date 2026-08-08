@@ -907,6 +907,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
   const model = save ? buildDetailModel(save, entityStates) : null;
   const isRecipe = save?.knowledgeType === 'recipe';
   const isTextNote = save?.sourceType === 'text';
+  const isImageSave = save?.sourceType === 'image';
   // Ingredients render through `RecipeIngredients` for recipes (it needs the
   // raw structured shape to scale by servings) rather than the model's
   // already-flattened chip strings.
@@ -993,6 +994,21 @@ export function SaveDetailScreen({ id }: { id: string }) {
                   />
                   <AppText variant="sectionLabel" tone="muted">NOTE</AppText>
                 </>
+              ) : isImageSave ? (
+                /* SCREENSHOT badge */
+                <>
+                  <View
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: TYPE_COLORS.other,
+                    }}
+                  />
+                  <AppText variant="sectionLabel" tone="muted">
+                    {save.knowledgeType ? save.knowledgeType.toUpperCase() : 'SCREENSHOT'}
+                  </AppText>
+                </>
               ) : save.knowledgeType ? (
                 <>
                   <View
@@ -1048,6 +1064,25 @@ export function SaveDetailScreen({ id }: { id: string }) {
           {model?.lede ? (
             <Reveal index={2}>
               <AppText style={{ marginBottom: spacing.xl, lineHeight: 22 }}>{model.lede}</AppText>
+            </Reveal>
+          ) : null}
+
+          {/* Full-width screenshot image — shown for IMAGE saves so users
+              can see their original screenshot alongside the extracted data. */}
+          {isImageSave && save.thumbnailUrl ? (
+            <Reveal index={2}>
+              <Image
+                source={{ uri: save.thumbnailUrl }}
+                style={{
+                  width: '100%',
+                  height: undefined,
+                  aspectRatio: 9 / 16,
+                  borderRadius: radius.lg,
+                  marginBottom: spacing.xl,
+                  backgroundColor: palette.surface,
+                }}
+                resizeMode="contain"
+              />
             </Reveal>
           ) : null}
 

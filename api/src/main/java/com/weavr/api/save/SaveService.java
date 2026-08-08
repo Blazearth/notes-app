@@ -10,6 +10,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 import com.weavr.api.common.NotFoundException;
+import com.weavr.api.config.SupabaseStorageClient;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobType;
 import com.weavr.api.profile.ProfileService;
@@ -44,12 +45,15 @@ public class SaveService {
     private final ProfileService profiles;
     private final JobQueue jobs;
     private final SpaceService spaces;
+    private final SupabaseStorageClient storage;
 
-    SaveService(SaveRepository saves, ProfileService profiles, JobQueue jobs, SpaceService spaces) {
+    SaveService(SaveRepository saves, ProfileService profiles, JobQueue jobs,
+                SpaceService spaces, SupabaseStorageClient storage) {
         this.saves = saves;
         this.profiles = profiles;
         this.jobs = jobs;
         this.spaces = spaces;
+        this.storage = storage;
     }
 
     /**
@@ -354,5 +358,45 @@ public class SaveService {
 
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
+    }
+
+    /**
+     * Creates a save from a raw image upload (screenshot share).
+     *
+     * <p>Steps:
+     * <ol>
+     *   <li>Upload image bytes to Supabase Storage — the public URL doubles as
+     *       the thumbnail so the card shows the real screenshot immediately.</li>
+     *   <li>Persist the save with {@code sourceType = IMAGE} and no idempotency
+     *       key (share-image uploads do not dedupe today; WorkManager's
+     *       unique-work policy handles that at the worker level).</li>
+     *   <li>Enqueue {@code PROCESS_SAVE}.</li>
+     * </ol>
+     *
+     * @param userId    owner
+     * @param imageBytes JPEG bytes (already compressed by the Android worker)
+     * @param mimeType  MIME type, typically {@code image/jpeg}
+     * @param spaceId   optional space to place the save in
+     * @return the newly-persisted save (status {@code processing})
+     */
+    @Transactional
+    public Save createFromImage(UUID userId, byte[] imageBytes, String mimeType, UUID spaceId) {
+        if (spaceId != null) {
+            spaces.requireRole(userId, spaceId, SpaceRole.EDITOR);
+        }
+
+        // Generate the save ID first so we can derive the storage path from it.
+        UUID saveId = UUID.randomUUID();
+        String publicUrl = storage.upload(userId, saveId, imageBytes, mimeType);
+
+        Save save = saves.save(Save.acceptedImage(userId, saveId, publicUrl, spaceId));
+
+        jobs.enqueueForUser(
+                JobType.PROCESS_SAVE,
+                Map.of("saveId", save.getId().toString()),
+                JobType.PROCESS_SAVE + ":" + save.getId(),
+                userId);
+        log.info("Image save created: id={} user={} storageUrl={}", save.getId(), userId, publicUrl);
+        return save;
     }
 }
