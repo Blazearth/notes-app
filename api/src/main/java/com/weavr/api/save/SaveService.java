@@ -107,6 +107,17 @@ public class SaveService {
             return saves.findByUserIdAndIdempotencyKey(userId, key).orElseThrow(() -> e);
         }
 
+        // Text notes carry their full content in raw_caption — there is nothing
+        // for the extraction pipeline or Gemini to do. Mark ready immediately so
+        // the card never shows "Processing" and no Gemini budget is spent.
+        if (request.sourceType() == SourceType.TEXT) {
+            save.setStatus(SaveStatus.READY);
+            saves.save(save);
+            recordSaveAddedAfterCommit(save.getSpaceId(), userId, save.getId());
+            log.info("Accepted text note id={} user={}, marked ready immediately", save.getId(), userId);
+            return save;
+        }
+
         // Keyed on the save id, so a retried enqueue is a no-op. This does not
         // dedupe a re-shared URL - that is content-level and lands with the
         // share extension work.

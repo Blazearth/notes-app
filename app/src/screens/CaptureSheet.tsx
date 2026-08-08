@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
 import Animated, {
   interpolate,
   runOnJS,
@@ -405,7 +405,11 @@ export function CaptureSheet() {
   const rows = useMemo(() => chunk(CAPTURE_OPTIONS, COLUMNS), []);
 
   return (
-    <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+    <KeyboardAvoidingView
+      style={{ flex: 1, justifyContent: 'flex-end' }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+    >
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
         <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={dismiss} style={{ flex: 1 }}>
           {blurEffects ? (
@@ -595,6 +599,6 @@ export function CaptureSheet() {
           </>
         )}
       </Animated.View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
