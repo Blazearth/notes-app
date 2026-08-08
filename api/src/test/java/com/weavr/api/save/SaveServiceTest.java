@@ -65,7 +65,7 @@ class SaveServiceTest {
     }
 
     private static CreateSaveRequest urlRequest() {
-        return new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, null);
+        return new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, null, null);
     }
 
     /**
@@ -82,7 +82,7 @@ class SaveServiceTest {
                 .when(spaces).requireRole(userId, spaceId, SpaceRole.EDITOR);
 
         assertThatThrownBy(() -> service.create(userId,
-                new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, spaceId), null))
+                new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, null, spaceId), null))
                 .isInstanceOf(NotFoundException.class);
 
         verify(saves, never()).save(any());
@@ -96,7 +96,7 @@ class SaveServiceTest {
         UUID spaceId = UUID.randomUUID();
 
         service.create(userId,
-                new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, spaceId), null);
+                new CreateSaveRequest(SourceType.URL, "https://example.com/reel", null, null, spaceId), null);
 
         verify(spaces).requireRole(userId, spaceId, SpaceRole.EDITOR);
     }
