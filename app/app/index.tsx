@@ -1,9 +1,11 @@
 import { Redirect, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Extrapolation,
   interpolate,
+  runOnJS,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -26,6 +28,8 @@ const TABS: NavItem[] = [
   { key: 'library', label: 'Library' },
   { key: 'spaces', label: 'Spaces' },
 ];
+/** Keys in order, used by the swipe gesture. */
+const TAB_KEYS = TABS.map((t) => t.key);
 
 /** Cross-fade duration. Short — this is a tab switch, not a page load. */
 const FADE_MS = 170;
@@ -234,6 +238,62 @@ export default function TabShell() {
   };
 
   /**
+   * Stable callbacks for the swipe gesture worklet to call via runOnJS.
+   *
+   * Both read from `activeRef` rather than closing over `active`, so they
+   * never go stale and the gesture never needs to be re-created.
+   */
+  const goToNextTab = useCallback(() => {
+    const idx = TAB_KEYS.indexOf(activeRef.current);
+    if (idx < TAB_KEYS.length - 1) {
+      const key = TAB_KEYS[idx + 1];
+      setVisited((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+      setActive(key);
+    }
+  // activeRef is a stable ref — no dependency needed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const goToPrevTab = useCallback(() => {
+    const idx = TAB_KEYS.indexOf(activeRef.current);
+    if (idx > 0) {
+      const key = TAB_KEYS[idx - 1];
+      setVisited((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+      setActive(key);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Horizontal swipe gesture for tab switching.
+   *
+   * `activeOffsetX` — the gesture only activates after 15 px of horizontal
+   * movement, giving vertical scrollers inside each tab a head start.
+   *
+   * `failOffsetY` — if the user moves 20 px vertically first the gesture
+   * fails entirely, so lists and scroll views stay unaffected.
+   *
+   * The threshold inside `onEnd` (50 px OR 400 px/s) is deliberately generous:
+   * too tight and accidental swipes switch tabs; too loose and intentional
+   * swipes do nothing.
+   */
+  const swipeGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-15, 15])
+        .failOffsetY([-20, 20])
+        .onEnd((e) => {
+          'worklet';
+          if (e.translationX < -50 || e.velocityX < -400) {
+            runOnJS(goToNextTab)();
+          } else if (e.translationX > 50 || e.velocityX > 400) {
+            runOnJS(goToPrevTab)();
+          }
+        }),
+    [goToNextTab, goToPrevTab],
+  );
+
+  /**
    * Android back-button handling — edge cases covered:
    *
    * 1. A screen is pushed on the stack (Space detail, Settings, Capture, Search,
@@ -278,6 +338,7 @@ export default function TabShell() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.background }}>
       <Animated.View style={[{ flex: 1, overflow: 'hidden' }, shellStyle]}>
+        <GestureDetector gesture={swipeGesture}>
         <View style={{ flex: 1 }}>
           {visited.home ? (
             <TabPane active={active === 'home'}>
@@ -295,6 +356,7 @@ export default function TabShell() {
             </TabPane>
           ) : null}
         </View>
+        </GestureDetector>
       </Animated.View>
 
       {/*
