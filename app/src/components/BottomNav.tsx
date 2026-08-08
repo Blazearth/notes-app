@@ -1,17 +1,16 @@
 import { BlurView } from 'expo-blur';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { Platform, Pressable, View, type LayoutChangeEvent } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
-  withSpring,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useHaptic } from '@/motion/haptics';
+import { activeTabFraction } from '@/motion/tabs';
 import { withAlpha } from '@/theme/contrast';
-import { Spring } from '@/theme/motion';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppText } from './AppText';
 import { Glyph } from './Glyph';
@@ -41,28 +40,34 @@ export interface BottomNavProps {
  */
 function NavTab({
   item,
+  tabIndex,
   active,
   floating,
   onPress,
 }: {
   item: NavItem;
+  tabIndex: number;
   active: boolean;
   floating: boolean;
   onPress: () => void;
 }) {
   const { palette, spacing } = useTheme();
   const reduced = useReducedMotion();
-  const t = useSharedValue(active ? 1 : 0);
 
-  useEffect(() => {
-    const target = active ? 1 : 0;
-    t.value = reduced ? target : withSpring(target, Spring.travel);
-  }, [active, reduced, t]);
-
-  // The dot swells rather than only recolouring, so the active tab is legible
-  // as a shape — colour alone fails for the ~8% of men with a colour vision
-  // deficiency, and fails again against the blurred content behind the pill.
-  const dotStyle = useAnimatedStyle(() => ({ transform: [{ scale: 1 + t.value * 0.4 }] }));
+  /**
+   * Dot scale driven directly by activeTabFraction on the UI thread.
+   * No useEffect, no re-render — the animation starts the same frame the
+   * shared value changes, whether from a tap or a swipe.
+   *
+   * Bonus: the dot pulses proportionally during a swipe, giving a live
+   * position indicator that mirrors the fill pill.
+   */
+  const dotStyle = useAnimatedStyle(() => {
+    if (reduced) return { transform: [{ scale: active ? 1.4 : 1 }] };
+    const distance = Math.abs(activeTabFraction.value - tabIndex);
+    const scale = 1 + Math.max(0, 1 - distance) * 0.4;
+    return { transform: [{ scale }] };
+  });
 
   const dotColor = active
     ? floating
@@ -86,8 +91,6 @@ function NavTab({
       accessibilityState={{ selected: active }}
       accessibilityLabel={item.label}
       onPress={onPress}
-      // The travelling fill is the press feedback here; scaling the tab as
-      // well would compete with it.
       style={{
         flex: 1,
         flexDirection: 'row',
@@ -137,32 +140,32 @@ export function BottomNav({ items, activeKey, onSelect, onCapture }: BottomNavPr
   const floating = navBarStyle === 'floating';
 
   const [width, setWidth] = useState(0);
-  const activeIndex = Math.max(
-    0,
-    items.findIndex((item) => item.key === activeKey),
-  );
 
-  // `width` is measured on the inner track, which carries no padding of its
-  // own — so this is a plain division rather than the strip width minus the
-  // container's inset. See `track` below for why that matters.
+  /**
+   * Strip width as a shared value so the fill pill position can be computed
+   * entirely on the UI thread: fillX = activeTabFraction * stripSV.
+   * Set once on first layout; stable thereafter.
+   */
+  const stripSV = useSharedValue(0);
   const strip = width > 0 ? width / items.length : 0;
-  const x = useSharedValue(0);
-  const settled = useRef(false);
 
-  useEffect(() => {
-    if (strip <= 0) return;
-    const target = activeIndex * strip;
-    // Placed, not animated, on first measure — otherwise the fill sweeps in
-    // from Home every time the shell mounts.
-    if (settled.current && !reduced) {
-      x.value = withSpring(target, Spring.travel);
-    } else {
-      x.value = target;
-      settled.current = true;
-    }
-  }, [activeIndex, strip, reduced, x]);
+  const onLayout = (event: LayoutChangeEvent) => {
+    const w = event.nativeEvent.layout.width;
+    setWidth(w);
+    stripSV.value = w / items.length;
+  };
 
-  const fillStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
+  /**
+   * Fill position driven directly by activeTabFraction on the UI thread.
+   *
+   * Previously this was a useEffect on activeIndex → withSpring(target) which
+   * meant every tap had to survive a full React render cycle before the
+   * animation even started. Now the shared value is written by selectTab /
+   * the swipe gesture and read here — the animation starts the same frame.
+   */
+  const fillStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: activeTabFraction.value * stripSV.value }],
+  }));
 
   const select = (key: string) => {
     if (key === activeKey) return;
@@ -194,17 +197,17 @@ export function BottomNav({ items, activeKey, onSelect, onCapture }: BottomNavPr
     </Touchable>
   );
 
-  const tabs = items.map((item) => (
+  const tabs = items.map((item, index) => (
     <NavTab
       key={item.key}
       item={item}
+      tabIndex={index}
       active={item.key === activeKey}
       floating={floating}
       onPress={() => select(item.key)}
     />
   ));
 
-  const onLayout = (event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width);
 
   /**
    * The tabs and the fill share one unpadded track.

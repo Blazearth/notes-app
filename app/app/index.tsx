@@ -17,6 +17,7 @@ import { AppText } from '@/components/AppText';
 import { BottomNav, type NavItem } from '@/components/BottomNav';
 import { Touchable } from '@/components/Touchable';
 import { morphProgress } from '@/motion/morph';
+import { activeTabFraction } from '@/motion/tabs';
 import { Spring } from '@/theme/motion';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { LibraryScreen } from '@/screens/LibraryScreen';
@@ -212,6 +213,7 @@ export default function TabShell() {
       activeRef.current = key;
       activeIndexSV.value = idx;
       panX.value = withSpring(-idx * SCREEN_WIDTH, Spring.travel);
+      activeTabFraction.value = withSpring(idx, Spring.travel);
     },
     // panX / activeIndexSV are stable Reanimated shared values, not React deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -246,10 +248,13 @@ export default function TabShell() {
         .onUpdate((e) => {
           'worklet';
           const baseX = -activeIndexSV.value * SCREEN_WIDTH;
-          panX.value = Math.min(
+          const clamped = Math.min(
             0,
             Math.max(-(TAB_KEYS.length - 1) * SCREEN_WIDTH, baseX + e.translationX),
           );
+          panX.value = clamped;
+          // Keep the nav pill in sync on the UI thread — no JS round-trip needed.
+          activeTabFraction.value = -clamped / SCREEN_WIDTH;
         })
         .onEnd((e) => {
           'worklet';
@@ -258,6 +263,7 @@ export default function TabShell() {
           if (e.velocityX < -400 && target < TAB_KEYS.length - 1) target += 1;
           if (e.velocityX > 400 && target > 0) target -= 1;
           panX.value = withSpring(-target * SCREEN_WIDTH, { damping: 24, stiffness: 240, mass: 0.9 });
+          activeTabFraction.value = withSpring(target, { damping: 24, stiffness: 240, mass: 0.9 });
           activeIndexSV.value = target;
           runOnJS(setActiveFromIndex)(target);
         }),
