@@ -17,6 +17,14 @@ export function saveTitle(save: SaveResponse): string {
     return structuredTitle.trim();
   }
 
+  // Text saves: use the first line of rawCaption as the title so the card is
+  // immediately meaningful before the pipeline classifies the note.
+  if (save.sourceType === 'text' && save.rawCaption) {
+    const firstLine = save.rawCaption.split('\n')[0].trim();
+    if (firstLine) return firstLine.length > 72 ? `${firstLine.slice(0, 72)}…` : firstLine;
+    return 'Untitled note';
+  }
+
   if (save.sourceUrl) {
     try {
       const url = new URL(save.sourceUrl);
@@ -28,6 +36,7 @@ export function saveTitle(save: SaveResponse): string {
   }
 
   return 'Untitled save';
+
 }
 
 /** The metadata line: what we know so far, which early on is just the source. */

@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
 import Animated, {
   interpolate,
   runOnJS,
@@ -30,8 +30,8 @@ import { useTheme } from '@/theme/ThemeProvider';
 
 const COLUMNS = 4;
 
-/** Only `link` posts today; the rest need capture surfaces that do not exist. */
-const IMPLEMENTED: ReadonlySet<string> = new Set(['link']);
+/** Only `link` and `note` post today; the rest need capture surfaces that do not exist. */
+const IMPLEMENTED: ReadonlySet<string> = new Set(['link', 'note']);
 
 const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
 
@@ -204,6 +204,9 @@ export function CaptureSheet() {
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 'tiles' — the grid; 'note' — the inline text editor. */
+  const [mode, setMode] = useState<'tiles' | 'note'>('tiles');
+  const [noteText, setNoteText] = useState('');
 
   const reducedMotion = useReducedMotion();
   // Drives the backdrop blur/scrim and the panel's rise together, on the same
@@ -354,10 +357,6 @@ export function CaptureSheet() {
       .createSave({ sourceType: 'url', sourceUrl: clipboard })
       .then(prepend)
       .catch((e: unknown) => {
-        // The sheet is gone, so this cannot be shown where it was raised. The
-        // save simply never appears in the feed, which understates the problem
-        // — a transient surface for post-dismissal failures is the missing
-        // piece here, and it does not exist yet.
         haptic('error');
         console.warn('[capture] save failed:', e instanceof ApiError ? e.message : e);
       });
@@ -366,6 +365,41 @@ export function CaptureSheet() {
   // `pasteLink` has to be stable too, or this changes every render and the
   // `React.memo` on the tiles is decorative.
   const handlePasteLink = useCallback(() => void pasteLink(), [pasteLink]);
+
+  /** Switch the panel to the inline note editor. */
+  const handleOpenNote = useCallback(() => {
+    setError(null);
+    setNoteText('');
+    setMode('note');
+  }, []);
+
+  /**
+   * Save the typed note and dismiss, mirroring pasteLink's fire-and-forget
+   * pattern: validate locally → haptic → dismiss → POST in background.
+   * The sheet is never held open waiting on the network.
+   */
+  const handleSaveNote = useCallback(async () => {
+    const trimmed = noteText.trim();
+    if (!trimmed) {
+      haptic('error');
+      setError('Write something first.');
+      return;
+    }
+    haptic('success');
+    setMode('tiles');
+    setNoteText('');
+    dismiss();
+
+    void repo
+      .createSave({ sourceType: 'text', text: trimmed })
+      .then(prepend)
+      .catch((e: unknown) => {
+        haptic('error');
+        console.warn('[capture] note save failed:', e instanceof ApiError ? e.message : e);
+      });
+  }, [noteText, dismiss, haptic, prepend]);
+
+  const handleSaveNotePress = useCallback(() => void handleSaveNote(), [handleSaveNote]);
 
   // Static input, so this must not be rebuilt on every keystroke of state.
   const rows = useMemo(() => chunk(CAPTURE_OPTIONS, COLUMNS), []);
@@ -436,45 +470,129 @@ export function CaptureSheet() {
             marginBottom: spacing.lg + 2,
           }}
         />
-        <AppText variant="heading" style={{ marginBottom: spacing.xs }}>
-          Add to Weavr
-        </AppText>
-        <AppText tone="muted" style={{ fontSize: 12.5, marginBottom: spacing.xl }}>
-          {CAPTURE_SUBTITLE}
-        </AppText>
 
-        <View style={{ gap: spacing.md + 2 }}>
-          {rows.map((row, rowIndex) => (
-            <View key={rowIndex} style={{ flexDirection: 'row', gap: spacing.md + 2 }}>
-              {row.map((option, colIndex) => (
-                <OptionTile
-                  key={option.id}
-                  option={option}
-                  busy={busyId === option.id}
-                  index={rowIndex * COLUMNS + colIndex}
-                  tilesOut={tilesOut}
-                  // Stable identities, or `React.memo` on the tile buys nothing
-                  // — a fresh arrow per render makes every tile re-render on
-                  // every keystroke of sheet state.
-                  onPress={option.id === 'link' ? handlePasteLink : noop}
-                />
-              ))}
-              {/* Keep the last row's columns aligned with the first. */}
-              {Array.from({ length: COLUMNS - row.length }).map((_, i) => (
-                <View key={`spacer-${i}`} style={{ flex: 1 }} />
+        {mode === 'note' ? (
+          /*
+           * Inline note editor — replaces the tile grid when the user taps
+           * "Text Note". No navigation, no new route: the panel content swaps
+           * in place so the sheet entrance/exit animation is unchanged.
+           */
+          <View>
+            {/* Back navigation */}
+            <Pressable
+              onPress={() => { setMode('tiles'); setError(null); }}
+              style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.lg }}
+              accessibilityRole="button"
+              accessibilityLabel="Back to capture options"
+            >
+              <Glyph name="chevron" size={16} weight={2.5} color={palette.accent} />
+              <AppText style={{ color: palette.accent, fontSize: 14, marginLeft: 4 }}>
+                Text note
+              </AppText>
+            </Pressable>
+
+            {/* Multiline text input */}
+            <TextInput
+              value={noteText}
+              onChangeText={(t) => { setNoteText(t); setError(null); }}
+              placeholder="Write your note…"
+              placeholderTextColor={palette.textFaint}
+              multiline
+              autoFocus
+              maxLength={100_000}
+              textAlignVertical="top"
+              style={{
+                minHeight: 140,
+                fontSize: 15,
+                lineHeight: 22,
+                color: palette.text,
+                backgroundColor: palette.surfaceVariant,
+                borderRadius: radius.lg,
+                borderWidth: 1,
+                borderColor: error ? palette.danger : palette.border,
+                padding: spacing.md,
+                fontFamily: 'System',
+              }}
+            />
+
+            {/* Counter + error + save */}
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginTop: spacing.md,
+              }}
+            >
+              <AppText variant="caption" style={{ color: error ? palette.danger : palette.textFaint, fontSize: 12, flex: 1 }}>
+                {error ?? `${noteText.length.toLocaleString()} / 100,000`}
+              </AppText>
+              <Touchable
+                onPress={handleSaveNotePress}
+                weight="control"
+                style={{
+                  paddingVertical: spacing.sm + 2,
+                  paddingHorizontal: spacing.lg,
+                  borderRadius: radius.pill,
+                  backgroundColor: palette.accent,
+                }}
+              >
+                <AppText variant="navLabel" style={{ color: palette.onAccent }}>
+                  Save note
+                </AppText>
+              </Touchable>
+            </View>
+          </View>
+        ) : (
+          /*
+           * Default tile grid.
+           */
+          <>
+            <AppText variant="heading" style={{ marginBottom: spacing.xs }}>
+              Add to Weavr
+            </AppText>
+            <AppText tone="muted" style={{ fontSize: 12.5, marginBottom: spacing.xl }}>
+              {CAPTURE_SUBTITLE}
+            </AppText>
+
+            <View style={{ gap: spacing.md + 2 }}>
+              {rows.map((row, rowIndex) => (
+                <View key={rowIndex} style={{ flexDirection: 'row', gap: spacing.md + 2 }}>
+                  {row.map((option, colIndex) => (
+                    <OptionTile
+                      key={option.id}
+                      option={option}
+                      busy={busyId === option.id}
+                      index={rowIndex * COLUMNS + colIndex}
+                      tilesOut={tilesOut}
+                      // Stable identities, or `React.memo` on the tile buys nothing
+                      // — a fresh arrow per render makes every tile re-render on
+                      // every keystroke of sheet state.
+                      onPress={
+                        option.id === 'link' ? handlePasteLink :
+                        option.id === 'note' ? handleOpenNote :
+                        noop
+                      }
+                    />
+                  ))}
+                  {/* Keep the last row's columns aligned with the first. */}
+                  {Array.from({ length: COLUMNS - row.length }).map((_, i) => (
+                    <View key={`spacer-${i}`} style={{ flex: 1 }} />
+                  ))}
+                </View>
               ))}
             </View>
-          ))}
-        </View>
 
-        {error ? (
-          <AppText variant="caption" style={{ color: palette.danger, marginTop: spacing.lg }}>
-            {error}
-          </AppText>
-        ) : (
-          <AppText variant="caption" tone="faint" style={{ marginTop: spacing.lg }}>
-            Paste Link is wired to the API. The rest arrive with their capture surfaces.
-          </AppText>
+            {error ? (
+              <AppText variant="caption" style={{ color: palette.danger, marginTop: spacing.lg }}>
+                {error}
+              </AppText>
+            ) : (
+              <AppText variant="caption" tone="faint" style={{ marginTop: spacing.lg }}>
+                Paste Link and Text Note are wired to the API. The rest arrive with their capture surfaces.
+              </AppText>
+            )}
+          </>
         )}
       </Animated.View>
     </View>

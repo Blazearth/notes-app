@@ -158,13 +158,31 @@ export function LibraryScreen() {
   // the flat presentation like any other type.
   const entityBearingTypes = useMemo(() => new Set(collections.map((c) => c.id)), [collections]);
 
+  // Handnotes — manually typed text saves — get their own named section so
+  // they are always visible at a glance without the user having to know to
+  // filter by 'other'. Non-archived only: archived handnotes stay reachable
+  // via the Archived filter just like any other save.
+  const handnotes = useMemo(
+    () => saves.filter((s) => s.sourceType === 'text' && !s.archived),
+    [saves],
+  );
+
   // Archived saves sit out of the ordinary views entirely — an archive is
   // only useful if it actually gets things out of the way. The `Archived`
   // filter is the one place they're still reachable. Entity-bearing types
   // are excluded here too: their saves are represented by the Collections
   // section above, not as individual rows.
+  // Text saves are excluded from `activeSaves` when the filter is ALL because
+  // they are shown in the dedicated Handnotes section instead; when a type
+  // filter is active the type-filtered list still includes them if the pipeline
+  // classified them as that type (e.g. 'other').
   const activeSaves = useMemo(
-    () => saves.filter((s) => !s.archived && !(s.knowledgeType && entityBearingTypes.has(s.knowledgeType))),
+    () =>
+      saves.filter(
+        (s) =>
+          !s.archived &&
+          !(s.knowledgeType && entityBearingTypes.has(s.knowledgeType)),
+      ),
     [saves, entityBearingTypes],
   );
 
@@ -190,7 +208,10 @@ export function LibraryScreen() {
   ];
 
   const filtered: SaveResponse[] = useMemo(() => {
-    if (filter === ALL) return activeSaves;
+    // In the ALL view, text saves are shown in the Handnotes section above,
+    // not in the 'Everything' list, to avoid duplication.
+    const base = filter === ALL ? activeSaves.filter((s) => s.sourceType !== 'text') : activeSaves;
+    if (filter === ALL) return base;
     if (filter === FAVORITES) return activeSaves.filter((s) => s.favorite);
     if (filter === ARCHIVED) return saves.filter((s) => s.archived);
     return activeSaves.filter((s) => s.knowledgeType === filter);
@@ -435,6 +456,34 @@ export function LibraryScreen() {
                     type={node.id}
                     onPress={() => router.push({ pathname: '/collection/[type]', params: { type: node.id } })}
                   />
+                ))}
+              </View>
+            </Reveal>
+          ) : null}
+
+          {handnotes.length > 0 && filter === ALL ? (
+            <Reveal index={3}>
+              <SectionLabel>Handnotes</SectionLabel>
+              <View style={{ gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
+                {handnotes.map((save, i) => (
+                  <Reveal key={`handnote-${save.id}`} index={i}>
+                    <SaveCard
+                      save={save}
+                      selectionMode={selectionMode}
+                      selected={selectedIds.has(save.id)}
+                      onPress={() => handleCardPress(save)}
+                      onLongPress={() => handleLongPress(save.id)}
+                      onFavorite={() => void setFlag(save, { favorite: !save.favorite })}
+                      onArchive={() => void setFlag(save, { archived: !save.archived })}
+                      trailing={
+                        save.status === 'ready' ? undefined : (
+                          <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>
+                            {STATUS_LABELS[save.status]}
+                          </AppText>
+                        )
+                      }
+                    />
+                  </Reveal>
                 ))}
               </View>
             </Reveal>

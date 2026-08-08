@@ -21,6 +21,14 @@ public record SaveResponse(
         UUID spaceId,
         SourceType sourceType,
         String sourceUrl,
+        /**
+         * The raw text the user typed (or on-device OCR output for images).
+         * Only present when {@code sourceType} is {@code TEXT} or {@code IMAGE};
+         * omitted for URL saves so the field costs nothing on the common path.
+         * Used by the client to render a note preview before the pipeline
+         * classifies the save and populates {@code structuredData}.
+         */
+        String rawCaption,
         SaveStatus status,
         String knowledgeType,
         Double confidence,
@@ -58,6 +66,7 @@ public record SaveResponse(
                 save.getSpaceId(),
                 save.getSourceType(),
                 save.getSourceUrl(),
+                save.getRawCaption(),
                 save.getStatus(),
                 save.getKnowledgeType(),
                 save.getConfidence(),

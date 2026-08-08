@@ -40,6 +40,8 @@ export interface SaveResponse {
   spaceId?: string;
   sourceType: SourceType;
   sourceUrl?: string;
+  /** Raw text the user typed (or on-device OCR for images). Present only for `text` / `image` sourceTypes. */
+  rawCaption?: string;
   status: SaveStatus;
   knowledgeType?: string;
   confidence?: number;
