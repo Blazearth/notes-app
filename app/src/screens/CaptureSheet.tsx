@@ -206,6 +206,7 @@ export function CaptureSheet() {
   const [error, setError] = useState<string | null>(null);
   /** 'tiles' — the grid; 'note' — the inline text editor. */
   const [mode, setMode] = useState<'tiles' | 'note'>('tiles');
+  const [noteTitle, setNoteTitle] = useState('');
   const [noteText, setNoteText] = useState('');
 
   const reducedMotion = useReducedMotion();
@@ -369,6 +370,7 @@ export function CaptureSheet() {
   /** Switch the panel to the inline note editor. */
   const handleOpenNote = useCallback(() => {
     setError(null);
+    setNoteTitle('');
     setNoteText('');
     setMode('note');
   }, []);
@@ -379,25 +381,27 @@ export function CaptureSheet() {
    * The sheet is never held open waiting on the network.
    */
   const handleSaveNote = useCallback(async () => {
-    const trimmed = noteText.trim();
-    if (!trimmed) {
+    const body = noteText.trim();
+    if (!body) {
       haptic('error');
       setError('Write something first.');
       return;
     }
+    const title = noteTitle.trim() || undefined;
     haptic('success');
     setMode('tiles');
+    setNoteTitle('');
     setNoteText('');
     dismiss();
 
     void repo
-      .createSave({ sourceType: 'text', text: trimmed })
+      .createSave({ sourceType: 'text', text: body, title })
       .then(prepend)
       .catch((e: unknown) => {
         haptic('error');
         console.warn('[capture] note save failed:', e instanceof ApiError ? e.message : e);
       });
-  }, [noteText, dismiss, haptic, prepend]);
+  }, [noteTitle, noteText, dismiss, haptic, prepend]);
 
   const handleSaveNotePress = useCallback(() => void handleSaveNote(), [handleSaveNote]);
 
@@ -495,27 +499,48 @@ export function CaptureSheet() {
               </AppText>
             </Pressable>
 
-            {/* Multiline text input */}
+            {/* Title — single line, auto-focused */}
+            <TextInput
+              value={noteTitle}
+              onChangeText={(t) => { setNoteTitle(t); setError(null); }}
+              placeholder="Title"
+              placeholderTextColor={palette.textFaint}
+              autoFocus
+              returnKeyType="next"
+              maxLength={500}
+              style={{
+                fontSize: 18,
+                fontWeight: '600',
+                color: palette.text,
+                backgroundColor: palette.surfaceVariant,
+                borderRadius: radius.md,
+                borderWidth: 1,
+                borderColor: palette.border,
+                paddingHorizontal: spacing.md,
+                paddingVertical: spacing.sm + 2,
+                marginBottom: spacing.sm,
+              }}
+            />
+
+            {/* Body — multiline */}
             <TextInput
               value={noteText}
               onChangeText={(t) => { setNoteText(t); setError(null); }}
               placeholder="Write your note…"
               placeholderTextColor={palette.textFaint}
               multiline
-              autoFocus
               maxLength={100_000}
               textAlignVertical="top"
               style={{
-                minHeight: 140,
+                minHeight: 110,
                 fontSize: 15,
                 lineHeight: 22,
                 color: palette.text,
                 backgroundColor: palette.surfaceVariant,
-                borderRadius: radius.lg,
+                borderRadius: radius.md,
                 borderWidth: 1,
                 borderColor: error ? palette.danger : palette.border,
                 padding: spacing.md,
-                fontFamily: 'System',
               }}
             />
 

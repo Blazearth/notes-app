@@ -179,6 +179,18 @@ public class Save {
         return structuredData;
     }
 
+    /** Stamps {@code updatedAt} for the same reason {@link #setLifecycleStatus} does. */
+    public void setStructuredData(Map<String, Object> structuredData) {
+        this.structuredData = structuredData;
+        this.updatedAt = Instant.now();
+    }
+
+    /** Stamps {@code updatedAt} for the same reason {@link #setLifecycleStatus} does. */
+    public void setRawCaption(String rawCaption) {
+        this.rawCaption = rawCaption;
+        this.updatedAt = Instant.now();
+    }
+
     public LifecycleStatus getLifecycleStatus() {
         return lifecycleStatus;
     }

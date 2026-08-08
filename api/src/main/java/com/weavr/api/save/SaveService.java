@@ -1,6 +1,7 @@
 package com.weavr.api.save;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -111,6 +112,12 @@ public class SaveService {
         // for the extraction pipeline or Gemini to do. Mark ready immediately so
         // the card never shows "Processing" and no Gemini budget is spent.
         if (request.sourceType() == SourceType.TEXT) {
+            Map<String, Object> structured = new HashMap<>();
+            String title = blankToNull(request.title());
+            if (title != null) structured.put("title", title.trim());
+            String body = blankToNull(request.text());
+            if (body != null) structured.put("body", body);
+            save.setStructuredData(structured);
             save.setStatus(SaveStatus.READY);
             saves.save(save);
             recordSaveAddedAfterCommit(save.getSpaceId(), userId, save.getId());
@@ -310,6 +317,38 @@ public class SaveService {
             recordSaveAddedAfterCommit(spaceId, userId, saveId);
         }
         log.info("Save {} moved to space={}", saveId, spaceId);
+        return save;
+    }
+
+    /**
+     * Updates the title and body of a text note.
+     *
+     * <p>Only the caller's own saves can be edited — the load goes through
+     * {@code findByIdAndUserId} so a foreign save produces a 404, not a 403.
+     * Only TEXT saves are editable this way; the guard keeps the endpoint from
+     * being used to corrupt a pipeline-classified save's structuredData.
+     */
+    @Transactional
+    public Save updateNote(UUID userId, UUID saveId, String title, String body) {
+        Save save = saves.findByIdAndUserId(saveId, userId)
+                .orElseThrow(() -> new NotFoundException("Save not found"));
+        if (save.getSourceType() != SourceType.TEXT) {
+            throw new IllegalArgumentException("Only text notes can be edited this way");
+        }
+        Map<String, Object> structured = new HashMap<>(save.getStructuredData());
+        if (title != null && !title.isBlank()) {
+            structured.put("title", title.trim());
+        } else {
+            structured.remove("title");
+        }
+        if (body != null && !body.isBlank()) {
+            structured.put("body", body.trim());
+        } else {
+            structured.remove("body");
+        }
+        save.setStructuredData(structured);
+        save.setRawCaption(body != null ? body.trim() : null);
+        log.info("Updated text note id={} user={}", saveId, userId);
         return save;
     }
 

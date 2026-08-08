@@ -15,6 +15,8 @@ import jakarta.validation.constraints.Size;
  * @param sourceType what is being handed over
  * @param sourceUrl  the shared link, for {@link SourceType#URL}
  * @param text       typed text, a caption, or on-device OCR output
+ * @param title      optional title for {@link SourceType#TEXT} notes; the first line of
+ *                   {@code text} is used as a fallback when absent
  * @param spaceId    optional target space; null means the user's private feed
  */
 public record CreateSaveRequest(
@@ -24,6 +26,8 @@ public record CreateSaveRequest(
         @Size(max = 2048) String sourceUrl,
 
         @Size(max = 100_000) String text,
+
+        @Size(max = 500) String title,
 
         UUID spaceId
 ) {

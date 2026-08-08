@@ -25,8 +25,16 @@ export interface CreateSaveRequest {
   sourceUrl?: string;
   /** Required when `sourceType` is `text`. Max 100,000 chars server-side. */
   text?: string;
+  /** Optional title for text notes. Max 500 chars. */
+  title?: string;
   /** Optional target space; omit for the user's private feed. */
   spaceId?: string;
+}
+
+/** Body for `PATCH /v1/saves/{id}/note` — edits a text note's title and body. */
+export interface UpdateNoteRequest {
+  title?: string;
+  body?: string;
 }
 
 /**

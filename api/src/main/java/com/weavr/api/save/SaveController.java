@@ -12,6 +12,7 @@ import com.weavr.api.save.dto.SaveResponse;
 import com.weavr.api.save.dto.UpdateFlagsRequest;
 import com.weavr.api.save.dto.UpdateItemStateRequest;
 import com.weavr.api.save.dto.UpdateLifecycleRequest;
+import com.weavr.api.save.dto.UpdateNoteRequest;
 import com.weavr.api.save.dto.UpdateSpaceRequest;
 import com.weavr.api.search.SearchService;
 import jakarta.validation.Valid;
@@ -125,6 +126,18 @@ class SaveController {
                           @RequestBody UpdateSpaceRequest request) {
         return SaveResponse.from(
                 saveService.setSpace(userId, id, request.spaceId()));
+    }
+
+    /**
+     * Edits the title and body of a {@code TEXT} save.
+     * Returns 404 for a non-existent or foreign save, 400 if the target is
+     * not a text note.
+     */
+    @PatchMapping("/{id}/note")
+    SaveResponse updateNote(@CurrentUser UUID userId, @PathVariable UUID id,
+                            @Valid @RequestBody UpdateNoteRequest request) {
+        return SaveResponse.from(
+                saveService.updateNote(userId, id, request.title(), request.body()));
     }
 
     /**

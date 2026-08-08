@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Linking, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Image, Linking, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
@@ -790,6 +790,23 @@ export function SaveDetailScreen({ id }: { id: string }) {
   // entity-keyed control today.
   const [entityStates, setEntityStates] = useState<EntityStates>(undefined);
 
+  // Text-note inline editor state. Initialised from the save's structuredData
+  // and kept in sync whenever the save refreshes (e.g., after a successful save).
+  const [noteTitle, setNoteTitle] = useState('');
+  const [noteBody, setNoteBody] = useState('');
+  const [noteSaving, setNoteSaving] = useState(false);
+
+  // Sync editor fields whenever the underlying save changes.
+  useEffect(() => {
+    if (!save || save.sourceType !== 'text') return;
+    setNoteTitle((save.structuredData?.title as string | undefined) ?? '');
+    setNoteBody(
+      (save.structuredData?.body as string | undefined) ??
+      save.rawCaption ??
+      '',
+    );
+  }, [save]);
+
   const load = useCallback(async () => {
     setError(null);
     try {
@@ -889,10 +906,38 @@ export function SaveDetailScreen({ id }: { id: string }) {
 
   const model = save ? buildDetailModel(save, entityStates) : null;
   const isRecipe = save?.knowledgeType === 'recipe';
+  const isTextNote = save?.sourceType === 'text';
   // Ingredients render through `RecipeIngredients` for recipes (it needs the
   // raw structured shape to scale by servings) rather than the model's
   // already-flattened chip strings.
   const displayFields = model ? (isRecipe ? model.fields.filter((f) => f.label !== 'Ingredients') : model.fields) : [];
+
+  // Whether the editor fields differ from what's persisted.
+  const noteDirty =
+    isTextNote &&
+    (
+      noteTitle.trim() !== ((save?.structuredData?.title as string | undefined) ?? '') ||
+      noteBody.trim() !== ((save?.structuredData?.body as string | undefined) ?? save?.rawCaption ?? '')
+    );
+
+  /** Persist title + body. Optimistic local update then adopt the server echo. */
+  const saveNote = useCallback(async () => {
+    if (!save || noteSaving) return;
+    setNoteSaving(true);
+    try {
+      const updated = await repo.updateNote(save.id, {
+        title: noteTitle.trim() || undefined,
+        body: noteBody.trim() || undefined,
+      });
+      setSave(updated);
+      patch(save.id, { structuredData: updated.structuredData, rawCaption: updated.rawCaption });
+    } catch {
+      // Non-blocking — the edit stays in the local state so the user can retry.
+    } finally {
+      setNoteSaving(false);
+    }
+  }, [save, noteTitle, noteBody, noteSaving, patch]);
+
   const recipeSteps =
     isRecipe && Array.isArray(save?.structuredData?.steps)
       ? (save.structuredData.steps as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
@@ -935,24 +980,63 @@ export function SaveDetailScreen({ id }: { id: string }) {
         <>
           <Reveal index={1}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-              {save.knowledgeType ? (
-                <View
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 4,
-                    backgroundColor: TYPE_COLORS[save.knowledgeType] ?? TYPE_COLORS.other,
-                  }}
-                />
-              ) : null}
-              <AppText variant="sectionLabel" tone="muted">
-                {save.knowledgeType ?? STATUS_LABELS[save.status]}
-              </AppText>
+              {isTextNote ? (
+                /* NOTE badge — a fixed warm dot + label */
+                <>
+                  <View
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: TYPE_COLORS.other,
+                    }}
+                  />
+                  <AppText variant="sectionLabel" tone="muted">NOTE</AppText>
+                </>
+              ) : save.knowledgeType ? (
+                <>
+                  <View
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: TYPE_COLORS[save.knowledgeType] ?? TYPE_COLORS.other,
+                    }}
+                  />
+                  <AppText variant="sectionLabel" tone="muted">
+                    {save.knowledgeType ?? STATUS_LABELS[save.status]}
+                  </AppText>
+                </>
+              ) : (
+                <AppText variant="sectionLabel" tone="muted">
+                  {STATUS_LABELS[save.status]}
+                </AppText>
+              )}
             </View>
-            <AppText variant="display" style={{ marginTop: spacing.xs, marginBottom: spacing.xs }}>
-              {model?.title ?? saveTitle(save)}
-            </AppText>
-            {model?.meta ? (
+
+            {isTextNote ? (
+              /* Editable title for text notes */
+              <TextInput
+                value={noteTitle}
+                onChangeText={setNoteTitle}
+                placeholder="Title"
+                placeholderTextColor={palette.textFaint}
+                style={{
+                  fontSize: 26,
+                  fontWeight: '700',
+                  color: palette.text,
+                  marginTop: spacing.xs,
+                  marginBottom: spacing.xs,
+                  paddingVertical: 0,
+                }}
+              />
+            ) : (
+              <AppText variant="display" style={{ marginTop: spacing.xs, marginBottom: spacing.xs }}>
+                {model?.title ?? saveTitle(save)}
+              </AppText>
+            )}
+
+            {!isTextNote && model?.meta ? (
               <AppText tone="muted" style={{ marginBottom: spacing.lg }}>
                 {model.meta}
               </AppText>
@@ -1071,7 +1155,32 @@ export function SaveDetailScreen({ id }: { id: string }) {
             </Reveal>
           ) : null}
 
-          {model ? (
+          {isTextNote ? (
+            /* Editable body for text notes — the full note content. */
+            <Reveal index={3}>
+              <SectionLabel>Note</SectionLabel>
+              <TextInput
+                value={noteBody}
+                onChangeText={setNoteBody}
+                placeholder="Write your note…"
+                placeholderTextColor={palette.textFaint}
+                multiline
+                textAlignVertical="top"
+                style={{
+                  minHeight: 180,
+                  fontSize: 15,
+                  lineHeight: 23,
+                  color: palette.text,
+                  backgroundColor: palette.surfaceVariant,
+                  borderRadius: radius.md,
+                  borderWidth: 1,
+                  borderColor: palette.border,
+                  padding: spacing.md,
+                  marginBottom: spacing.smd,
+                }}
+              />
+            </Reveal>
+          ) : model ? (
             displayFields.map((field, i) => (
               <Reveal key={field.label} index={3 + i}>
                 <Field
@@ -1088,6 +1197,40 @@ export function SaveDetailScreen({ id }: { id: string }) {
               <UnfinishedSave save={save} />
             </Reveal>
           )}
+
+          {/* Save changes button — only visible for text notes with unsaved edits. */}
+          {isTextNote && noteDirty ? (
+            <Reveal index={4}>
+              <Touchable
+                accessibilityRole="button"
+                accessibilityLabel="Save changes"
+                onPress={() => void saveNote()}
+                haptic="medium"
+                weight="tile"
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: spacing.sm,
+                  paddingVertical: spacing.md,
+                  borderRadius: radius.sm,
+                  borderWidth: 1,
+                  borderColor: 'transparent',
+                  backgroundColor: palette.accent,
+                  marginBottom: spacing.smd,
+                }}
+              >
+                {noteSaving ? (
+                  <ActivityIndicator size="small" color={palette.onAccent} />
+                ) : (
+                  <Glyph name="check" size={16} weight={2.5} color={palette.onAccent} />
+                )}
+                <AppText variant="label" style={{ color: palette.onAccent }}>
+                  {noteSaving ? 'Saving…' : 'Save changes'}
+                </AppText>
+              </Touchable>
+            </Reveal>
+          ) : null}
 
           {/* Progress only makes sense once there is something to make
               progress on — a save still being processed has no content yet. */}
