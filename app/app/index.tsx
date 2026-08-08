@@ -1,6 +1,6 @@
 import { Redirect, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { BackHandler, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -11,7 +11,9 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { useSession } from '@/auth/SessionProvider';
+import { AppText } from '@/components/AppText';
 import { BottomNav, type NavItem } from '@/components/BottomNav';
+import { Touchable } from '@/components/Touchable';
 import { morphProgress } from '@/motion/morph';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { LibraryScreen } from '@/screens/LibraryScreen';
@@ -27,6 +29,87 @@ const TABS: NavItem[] = [
 
 /** Cross-fade duration. Short — this is a tab switch, not a page load. */
 const FADE_MS = 170;
+
+/**
+ * Themed exit-confirmation dialog.
+ *
+ * `Alert.alert` is a native OS dialog and cannot be styled. This component
+ * reproduces the same two-button pattern using the app's own palette, radius,
+ * and elevation tokens, so it feels like part of the product rather than a
+ * system interruption.
+ */
+function ExitDialog({ visible, onStay, onExit }: { visible: boolean; onStay: () => void; onExit: () => void }) {
+  const { palette, spacing, radius, elevation } = useTheme();
+  return (
+    <Modal transparent animationType="fade" visible={visible} onRequestClose={onStay} statusBarTranslucent>
+      {/* Scrim — tap outside = stay */}
+      <Pressable
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: spacing.xl }}
+        onPress={onStay}
+      >
+        {/* Dialog card — absorb taps so pressing inside doesn't dismiss */}
+        <Pressable
+          style={[
+            {
+              width: '100%',
+              backgroundColor: palette.surface,
+              borderRadius: radius.xl,
+              padding: spacing.xl,
+              gap: spacing.lg,
+            },
+            elevation.sheet,
+          ]}
+        >
+          <View style={{ gap: spacing.xs }}>
+            <AppText variant="heading" style={{ fontSize: 18 }}>
+              Exit Weavr?
+            </AppText>
+            <AppText tone="muted" style={{ fontSize: 14 }}>
+              Are you sure you want to close the app?
+            </AppText>
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: spacing.md }}>
+            {/* Stay — secondary outline button */}
+            <Touchable
+              onPress={onStay}
+              weight="control"
+              style={{
+                flex: 1,
+                paddingVertical: spacing.md,
+                borderRadius: radius.pill,
+                borderWidth: 1.5,
+                borderColor: palette.border,
+                alignItems: 'center',
+              }}
+            >
+              <AppText variant="navLabel" style={{ color: palette.text }}>
+                Stay
+              </AppText>
+            </Touchable>
+
+            {/* Exit — accent filled button */}
+            <Touchable
+              onPress={onExit}
+              weight="control"
+              style={{
+                flex: 1,
+                paddingVertical: spacing.md,
+                borderRadius: radius.pill,
+                backgroundColor: palette.danger ?? palette.accent,
+                alignItems: 'center',
+              }}
+            >
+              <AppText variant="navLabel" style={{ color: '#ffffff' }}>
+                Exit
+              </AppText>
+            </Touchable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
 
 /**
  * How far the shell recedes while Settings expands over it.
@@ -97,6 +180,7 @@ export default function TabShell() {
   const reduced = useReducedMotion();
   const [active, setActive] = useState('home');
   const [visited, setVisited] = useState<Record<string, boolean>>({ home: true });
+  const [exitDialogVisible, setExitDialogVisible] = useState(false);
 
   /**
    * The shell's half of the Settings morph.
@@ -148,6 +232,48 @@ export default function TabShell() {
     setVisited((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
     setActive(key);
   };
+
+  /**
+   * Android back-button handling — edge cases covered:
+   *
+   * 1. A screen is pushed on the stack (Space detail, Settings, Capture, Search,
+   *    Save detail, etc.): `router.canGoBack()` is true → return `false` so
+   *    React Navigation pops it. Our tab logic never runs.
+   *
+   * 2. At the root of the tab shell on Library or Spaces: no stack to pop →
+   *    jump back to Home tab.
+   *
+   * 3. At the root on Home: show the themed exit dialog.
+   *
+   * `activeRef` keeps the closure stable so the handler is only registered
+   * once and never re-registered when the active tab changes.
+   */
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+      // Case 1: React Navigation has a screen to pop — let it.
+      if (router.canGoBack()) return false;
+
+      // Case 2: Not on Home root — navigate back to Home tab.
+      if (activeRef.current !== 'home') {
+        select('home');
+        return true;
+      }
+
+      // Case 3: On Home root — show themed exit dialog.
+      setExitDialogVisible(true);
+      return true;
+    });
+
+    return () => handler.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <View style={{ flex: 1, backgroundColor: palette.background }}>
@@ -207,6 +333,12 @@ export default function TabShell() {
           onCapture={() => router.push('/capture')}
         />
       </Animated.View>
+
+      <ExitDialog
+        visible={exitDialogVisible}
+        onStay={() => setExitDialogVisible(false)}
+        onExit={() => BackHandler.exitApp()}
+      />
     </View>
   );
 }
