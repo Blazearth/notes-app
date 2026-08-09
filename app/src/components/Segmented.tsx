@@ -107,6 +107,11 @@ export function Segmented<T extends string>({ options, value, onChange }: Segmen
           <Pressable
             key={option.value}
             accessibilityRole="tab"
+            // Explicit, even though the child text would usually be announced:
+            // React Native Web emits no `aria-selected` for `accessibilityState`
+            // (see docs/testing.md), so the label is the only stable handle a
+            // screen reader — or a probe — has on an individual tab.
+            accessibilityLabel={option.label}
             accessibilityState={{ selected: active }}
             onPress={() => {
               if (active) return;

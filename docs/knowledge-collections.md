@@ -730,6 +730,127 @@ real-data check open question 1 asked for — no checklist save exists yet.
 
 ---
 
+### K7 — domain state and domain surfaces (landed 2026-08-10)
+
+K6 built the hierarchy and deliberately stopped there. K7 is the other half:
+the per-type state and actions that turn a correct aggregation into something
+worth opening. App-only — `entity_states.state` is jsonb written by full
+replace, so every addition below is additive by construction and needed no
+migration and no server change.
+
+**The three-state watchlist, without breaking the boolean everything counts.**
+`entityStatus.ts` adds Want to watch → Watching → Watched, and the rule that
+makes it safe is that **`done` stays canonical**: a status does not replace it,
+it refines it. Every status declares whether it *implies* done, and writing a
+status always writes both keys. That is what keeps `CollectionNode.doneCount`
+(server *and* client), the Library's "1 watched" line, and
+`SaveDetailScreen`'s dual-read of the same entity working with no knowledge of
+statuses at all. The back-compat direction matters just as much: an entity
+with a bare `done: true` and no `status` — everything marked watched before
+this existed, and everything the save screen's simpler control writes — reads
+as the *terminal* status, not as "want to watch". Without that fallback a
+previously-watched title silently reappears as unwatched, which is the same
+class of quiet data loss as an optimistic revert.
+
+Only `recommendation_list` has a status model. A checklist item genuinely has
+two states, and nobody tracks "currently visiting Kyoto" — inventing a middle
+state for those would be ceremony.
+
+**The controls are on the row, not behind a tap.** Setting a title to Watching
+is the single most common thing anyone does on a watchlist; putting it inside
+the detail sheet turns the screen back into a read-only list of extractions.
+The pill *cycles* rather than opening a picker: the states are ordered and the
+overwhelmingly common move is forward by one, so a menu would make the cheap
+action cost two taps to save the rare backward one.
+
+**`entityFields.ts` closes the gap K6 named.** A workout exercise's sheet read
+"No details yet" while its `sets`, `reps`, `rest` and `cues` sat rolled up in
+`fields` — the generic renderer only knew `kind` and `year`, which exist on a
+recommendation and on nothing else. Now: per-type lead-field *order and
+labelling*, then a generic pass for everything unnamed, so a new registry
+field shows up immediately rather than disappearing. The row's compact line is
+per-type too — "4 × 6-8 · rest 2 min" is what an exercise *is*, and
+"anime · 2024" says nothing about one.
+
+One deliberate omission: `reason` is excluded from a recommendation's headline
+fields even though the rollup produces it. The rolled-up value is one source's,
+picked arbitrarily by the scalar rule, and every source's own reason is
+already shown attributed below — a headline "Why" would present one
+recommender's words as the collective view, which is exactly the blending K1
+refused.
+
+**A leaf node gets tabs, per its type.** `itinerary` leads with Overview
+(each trip's route, in order, plus every merged place as a chip), then Places,
+then Sources. `recommendation_list` and `workout` skip the overview — for a
+watchlist the titles *are* the content. A node **with folders** never gets
+tabs: offering a tab strip and a folder list at once gives two competing ways
+down.
+
+Overview and Sources have genuinely different jobs, and the first version got
+this wrong by rendering the identical cards in both. Overview answers "what
+shape did each source have" — `sourceSummary.ts` builds "Tokyo → Mount Fuji →
+Hiroshima → Kyoto", which the merged place list *cannot* express because a set
+has no order. Sources answers "which of my saves are these", and so uses the
+ordinary `SaveCard` with its thumbnail, platform and status.
+
+**The workout session runs the union, and stores nothing.** "Start workout" on
+a training split opens `/session/[nodeId]`, which walks the **merged**
+exercises — Bench press once, with both push days' cues unioned — rather than
+one creator's routine. Three limits, all the same kind, because this screen
+*runs* the library rather than inventing a programme:
+
+- Exercise order is the merge's order, not a generated one. Ordering a session
+  is programming advice.
+- **Ticks are session-local, not `entity_states`.** Marking an exercise done
+  in a collection means "this is a movement I have dealt with"; doing it in a
+  session means "I finished that set, this time". Writing session ticks to the
+  shared flag would leave every exercise you have ever performed permanently
+  greyed out in the collection. Pinned by a CDP assertion that ending a
+  session leaves the collection untouched.
+- The rest timer is never persisted, for the same reason it never was on a
+  save: a timer is a thing happening now, and resuming a rest period two days
+  later is nonsense.
+
+`RestTimer` moved out of `SaveDetailScreen` into `components/` rather than
+being copied — two callers running the same lenient parse is how the two would
+drift on the first `1m30s` nobody handled.
+
+**Two things the CDP run found that nothing else would have.** The
+`session/[nodeId]` route was never registered in `app/_layout.tsx`, so the
+button navigated nowhere while typecheck, bundle and a direct URL visit were
+all perfectly happy — a route file existing is not a route working. And a
+click dispatched immediately after dismissing the entity sheet lands on the
+`Modal`'s backdrop, because React Native Web portals it *above* the document
+and it has not finished unmounting; the click silently does nothing, which
+reads exactly like a broken button. Verified in isolation that the same click
+works on a clean document, and the probe now re-navigates rather than racing
+the unmount.
+
+`Segmented` gained an explicit `accessibilityLabel` per tab. RNW emits no
+`aria-selected` for `accessibilityState` (already in `docs/testing.md`), so
+without a label an individual tab has no stable handle for a screen reader or
+a probe.
+
+**Verified.** Backend suite green (**431/431**, 6 opt-in skipped — unchanged,
+since nothing server-side moved). App typechecks; `expo export --platform web`
+bundles clean. **122 node-standalone assertions** over the real shipped pure
+modules (69 from K6 plus 53 new covering the status model's cycle and
+back-compat, the field renderer's ordering/`[unclear]`-dropping/unknown-field
+fallback, and every per-type source summary). **39 CDP checks** driving the
+real app: cycling a title through all three statuses and watching the parent
+collection's "1 watched" follow it, the status surviving a reload, rating set
+and cleared, Japan's three tabs with the route rendered in order, the workout
+sheet's merged prescription and unioned cues, and a session tick advancing
+progress without leaking into the collection. **Not run on a device** — so the
+haptics, `useKeepAwake` and the real-time countdown remain unverified beyond
+typechecking and review, the same standing caveat as the rest of the app.
+
+**Still open.** Two Japan trips years apart still merge into one Japan (open
+question 2, unanswered on real data). `checklist` remains wired without the
+real-data check open question 1 asked for — no checklist save exists yet.
+
+---
+
 ## Explicitly out, and why
 
 - **Reprocessing old saves into new shapes** — no reprocess path exists; the

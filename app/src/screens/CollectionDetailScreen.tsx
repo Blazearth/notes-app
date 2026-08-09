@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Modal, ScrollView, View } from 'react-native';
 
 import type { CollectionEntityResponse, CollectionNodeResponse, SaveResponse } from '@/api/types';
@@ -13,19 +13,31 @@ import {
 import { writeEntityState } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
+import { StatusPill, StarRating } from '@/components/EntityControls';
 import { Glyph } from '@/components/Glyph';
 import { Reveal } from '@/components/Reveal';
+import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
+import { Segmented } from '@/components/Segmented';
 import { Touchable } from '@/components/Touchable';
 import {
   collectionTypeMeta,
   nodeDepth,
   nodeEntityNoun,
   nodeType,
+  type CollectionTab,
 } from '@/collections/collectionMeta';
+import { entityDetailFields, entityMetaLine } from '@/collections/entityFields';
+import {
+  bySection,
+  currentStatus,
+  nextStatus,
+  stateForStatus,
+  statusesFor,
+} from '@/collections/entityStatus';
+import { sourceSummaries, type SourceSummary } from '@/collections/sourceSummary';
 import { displayName } from '@/knowledge/facets';
-import { saveTitle } from '@/saves/format';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -42,6 +54,10 @@ function clean(value: unknown): string | null {
 
 function sourceLabel(count: number): string {
   return `${count} ${count === 1 ? 'source' : 'sources'}`;
+}
+
+function capitalise(value: string): string {
+  return value ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
 /**
@@ -71,6 +87,7 @@ function SubgroupRow({
     parts.push(`${node.subgroups.length} ${meta.groupNoun(node.subgroups.length, depth)}`);
   }
   parts.push(sourceLabel(node.sourceCount));
+  if (node.doneCount > 0) parts.push(`${node.doneCount} ${meta.doneNoun}`);
 
   return (
     <Card padding={0} radius={radius.md}>
@@ -110,80 +127,166 @@ function SubgroupRow({
 }
 
 /**
- * One entity, as a row.
+ * One entity, as a row, with whatever controls its type actually supports.
  *
- * The source count is deliberately worded as "in N saves" rather than
- * "N sources": the number is only interesting when it is greater than one,
- * where it says *this keeps coming up*. A bare "1 source" on every row is
- * noise that makes the extraction structure visible for no benefit, so it is
- * omitted entirely.
+ * The status pill and the stars sit **on the row**, not behind a tap into the
+ * sheet. Setting a title to Watching is the single most common thing anyone
+ * does on a watchlist, and putting it two taps away turns the screen back
+ * into a read-only list of extractions. Types with no status model keep the
+ * plain done tick.
+ *
+ * The source count is worded "in N saves" and only shown when it is greater
+ * than one, where it says *this keeps coming up*. "1 source" on every row is
+ * noise that makes the extraction structure visible for no benefit.
  */
 function EntityRow({
   entity,
   type,
   onPress,
+  onCycleStatus,
+  onToggleDone,
+  onRate,
 }: {
   entity: CollectionEntityResponse;
   type: string;
   onPress: () => void;
+  onCycleStatus: () => void;
+  onToggleDone: () => void;
+  onRate: (rating: number) => void;
 }) {
   const { palette, radius, spacing } = useTheme();
   const typeMeta = saveTypeMeta(type);
+  const collMeta = collectionTypeMeta(type);
   const posterUrl = clean(entity.fields.posterUrl);
   const done = entity.state?.done === true;
   const pinned = entity.state?.pinned === true;
   const crossSource = entity.sourceCount > 1;
+  const status = currentStatus(type, entity.state);
+  const rating = typeof entity.state?.rating === 'number' ? entity.state.rating : 0;
 
-  const kind = collectionTypeMeta(type).showsKind ? clean(entity.kind) : null;
-  const meta = [kind, clean(entity.fields.year)].filter((v): v is string => !!v).join(' · ');
+  const kind = collMeta.showsKind ? clean(entity.kind) : null;
+  const meta = entityMetaLine(type, kind, entity.fields);
 
+  return (
+    <Card padding={0} radius={radius.md}>
+      <View style={{ padding: spacing.md, gap: spacing.sm }}>
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel={crossSource ? `${entity.name}, in ${entity.sourceCount} saves` : entity.name}
+          onPress={onPress}
+          haptic="selection"
+          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}
+        >
+          {posterUrl ? (
+            <Image
+              source={{ uri: posterUrl }}
+              style={{ width: 36, height: 54, borderRadius: radius.sm }}
+              resizeMode="cover"
+            />
+          ) : (
+            <View
+              style={{
+                width: 36,
+                height: 54,
+                borderRadius: radius.sm,
+                backgroundColor: `${typeMeta.color}26`,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Glyph name={typeMeta.glyph} size={16} weight={2} color={typeMeta.color} />
+            </View>
+          )}
+          <View style={{ flex: 1 }}>
+            <AppText variant="cardTitle" numberOfLines={1}>
+              {entity.name}
+            </AppText>
+            {meta || crossSource ? (
+              <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
+                {[meta, crossSource ? `in ${entity.sourceCount} saves` : null].filter(Boolean).join(' · ')}
+              </AppText>
+            ) : null}
+          </View>
+          {pinned ? <Glyph name="bookmark" size={14} weight={2} color={palette.accent} /> : null}
+          {!status && done ? <Glyph name="checkSquare" size={16} color={palette.accent} /> : null}
+        </Touchable>
+
+        {/* The action strip. Present only where the type has something to act
+            on — an itinerary place has no status model and no rating, so it
+            gets nothing rather than an empty row of affordances. */}
+        {status || collMeta.ratable ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, flexWrap: 'wrap' }}>
+            {status ? (
+              <StatusPill status={status} name={entity.name} onPress={onCycleStatus} />
+            ) : (
+              <Touchable
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: done }}
+                accessibilityLabel={`${entity.name}: ${done ? `mark as not ${collMeta.doneNoun}` : `mark ${collMeta.doneNoun}`}`}
+                onPress={onToggleDone}
+                haptic="light"
+                style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
+              >
+                <Glyph name={done ? 'checkSquare' : 'square'} size={16} color={done ? palette.accent : palette.textMuted} />
+                <AppText variant="caption" tone={done ? 'accent' : 'muted'}>
+                  {done ? capitalise(collMeta.doneNoun) : `Mark ${collMeta.doneNoun}`}
+                </AppText>
+              </Touchable>
+            )}
+            {collMeta.ratable ? (
+              <StarRating rating={rating} name={entity.name} onRate={onRate} />
+            ) : null}
+          </View>
+        ) : null}
+      </View>
+    </Card>
+  );
+}
+
+/**
+ * One source save, as a card — the un-merged view.
+ *
+ * Shows the source's own *shape*: "Tokyo → Mount Fuji → Hiroshima → Kyoto…",
+ * which is what a person recognises a saved trip by, and which the merged
+ * place list cannot express because a set has no order.
+ */
+function SourceCard({ summary, onPress }: { summary: SourceSummary; onPress: () => void }) {
+  const { palette, radius, spacing, icon } = useTheme();
   return (
     <Card padding={0} radius={radius.md}>
       <Touchable
         accessibilityRole="button"
-        accessibilityLabel={
-          crossSource ? `${entity.name}, in ${entity.sourceCount} saves` : entity.name
-        }
+        accessibilityLabel={`${summary.title}${summary.meta ? `, ${summary.meta}` : ''}`}
         onPress={onPress}
         haptic="selection"
         style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd, padding: spacing.md }}
       >
-        {posterUrl ? (
-          <Image source={{ uri: posterUrl }} style={{ width: 36, height: 54, borderRadius: radius.sm }} resizeMode="cover" />
-        ) : (
-          <View
-            style={{
-              width: 36,
-              height: 54,
-              borderRadius: radius.sm,
-              backgroundColor: `${typeMeta.color}26`,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Glyph name={typeMeta.glyph} size={16} weight={2} color={typeMeta.color} />
-          </View>
-        )}
         <View style={{ flex: 1 }}>
-          <AppText variant="cardTitle" numberOfLines={1}>
-            {entity.name}
+          <AppText variant="cardTitle" numberOfLines={2}>
+            {summary.title}
           </AppText>
-          {meta || crossSource ? (
-            <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
-              {[meta, crossSource ? `in ${entity.sourceCount} saves` : null].filter(Boolean).join(' · ')}
+          {summary.meta ? (
+            <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
+              {summary.meta}
+            </AppText>
+          ) : null}
+          {summary.outline ? (
+            <AppText variant="bodySmall" tone="muted" numberOfLines={2} style={{ marginTop: spacing.xs }}>
+              {summary.outline}
             </AppText>
           ) : null}
         </View>
-        {pinned ? <Glyph name="bookmark" size={14} weight={2} color={palette.accent} /> : null}
-        {done ? <Glyph name="checkSquare" size={16} color={palette.accent} /> : null}
+        <View style={{ transform: [{ scaleX: -1 }] }}>
+          <Glyph name="chevron" size={icon.sm} color={palette.textFaint} />
+        </View>
       </Touchable>
     </Card>
   );
 }
 
 /**
- * The entity detail sheet — every source's own account of this entity,
- * attributed to the save it came from, with a way back to each.
+ * The entity detail sheet — everything the merged entity says, plus every
+ * source's own account of it, attributed to the save it came from.
  *
  * A plain `Modal` rather than the shared `Sheet` chrome: `Sheet` drives its
  * dismissal through `router.back()`, which assumes it is its own route — this
@@ -196,6 +299,7 @@ function EntityDetailSheet({
   sourceTitles,
   onClose,
   onOpenSave,
+  onCycleStatus,
   onToggleDone,
   onRate,
   onTogglePin,
@@ -205,6 +309,7 @@ function EntityDetailSheet({
   sourceTitles: Map<string, string>;
   onClose: () => void;
   onOpenSave: (saveId: string) => void;
+  onCycleStatus: () => void;
   onToggleDone: () => void;
   onRate: (rating: number) => void;
   onTogglePin: () => void;
@@ -214,6 +319,13 @@ function EntityDetailSheet({
   const done = entity.state?.done === true;
   const pinned = entity.state?.pinned === true;
   const rating = typeof entity.state?.rating === 'number' ? entity.state.rating : 0;
+  const status = currentStatus(type, entity.state);
+
+  // `reason` is excluded from the headline fields on purpose: the rolled-up
+  // value is one source's, chosen arbitrarily by the scalar rollup, and every
+  // source's own reason is already shown attributed below. A headline "Why"
+  // would present one recommender's words as the collective view.
+  const fields = entityDetailFields(type, entity.fields, ['reason', 'detail']);
 
   return (
     <Modal transparent animationType="slide" visible onRequestClose={onClose}>
@@ -230,7 +342,7 @@ function EntityDetailSheet({
             borderTopLeftRadius: radius.xl,
             borderTopRightRadius: radius.xl,
             padding: spacing.lg,
-            maxHeight: '80%',
+            maxHeight: '85%',
           }}
         >
           <View
@@ -268,48 +380,60 @@ function EntityDetailSheet({
               </Touchable>
             </View>
             <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.lg }}>
-              {[collMeta.showsKind ? clean(entity.kind) : null, clean(entity.fields.year)]
-                .filter(Boolean)
-                .join(' · ') || 'No details yet'}
+              {entityMetaLine(type, collMeta.showsKind ? clean(entity.kind) : null, entity.fields) ??
+                `In ${entity.sourceCount} ${entity.sourceCount === 1 ? 'save' : 'saves'}`}
             </AppText>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.xl }}>
-              <Touchable
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: done }}
-                accessibilityLabel={done ? `Mark as not ${collMeta.doneNoun}` : `Mark ${collMeta.doneNoun}`}
-                onPress={onToggleDone}
-                haptic="light"
-                style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
-              >
-                <Glyph name={done ? 'checkSquare' : 'square'} size={18} color={done ? palette.accent : palette.textMuted} />
-                <AppText variant="label" tone={done ? 'accent' : 'muted'}>
-                  {done ? `${collMeta.doneNoun[0].toUpperCase()}${collMeta.doneNoun.slice(1)}` : `Mark ${collMeta.doneNoun}`}
-                </AppText>
-              </Touchable>
-              {collMeta.ratable ? (
-                <View style={{ flexDirection: 'row', gap: 2 }}>
-                  {[1, 2, 3, 4, 5].map((n) => (
-                    <Touchable
-                      key={n}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Rate ${n} of 5`}
-                      onPress={() => onRate(n)}
-                      haptic="selection"
-                    >
-                      <Glyph name="star" size={14} color={n <= rating ? palette.accent : palette.textFaint} />
-                    </Touchable>
-                  ))}
-                </View>
-              ) : null}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.xl, flexWrap: 'wrap' }}>
+              {status ? (
+                <StatusPill status={status} name={entity.name} onPress={onCycleStatus} />
+              ) : (
+                <Touchable
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: done }}
+                  accessibilityLabel={done ? `Mark as not ${collMeta.doneNoun}` : `Mark ${collMeta.doneNoun}`}
+                  onPress={onToggleDone}
+                  haptic="light"
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
+                >
+                  <Glyph name={done ? 'checkSquare' : 'square'} size={18} color={done ? palette.accent : palette.textMuted} />
+                  <AppText variant="label" tone={done ? 'accent' : 'muted'}>
+                    {done ? capitalise(collMeta.doneNoun) : `Mark ${collMeta.doneNoun}`}
+                  </AppText>
+                </Touchable>
+              )}
+              {collMeta.ratable ? <StarRating rating={rating} name={entity.name} onRate={onRate} size={16} /> : null}
             </View>
 
             {/*
-              "Mentioned in 3 saves", with the saves named. This is the whole
-              point of the provenance block: the user should never have to
-              think "this Tokyo came from that reel", but *how many* of their
-              saves agree on something is exactly the signal a pile of
-              individual saves cannot give them.
+              What the merge actually produced. A list field is the union
+              across sources, a scalar the first source that stated it — which
+              is why this is worth showing rather than sending the user back
+              to one save: it is the combined answer, not any one source's.
+            */}
+            {fields.length > 0 ? (
+              <>
+                <SectionLabel>Details</SectionLabel>
+                <View style={{ gap: spacing.sm, marginBottom: spacing.lg }}>
+                  {fields.map((field) => (
+                    <View key={field.label} style={{ flexDirection: 'row', gap: spacing.md }}>
+                      <AppText variant="caption" tone="muted" style={{ width: 96 }}>
+                        {field.label}
+                      </AppText>
+                      <AppText variant="bodySmall" style={{ flex: 1 }}>
+                        {field.value}
+                      </AppText>
+                    </View>
+                  ))}
+                </View>
+              </>
+            ) : null}
+
+            {/*
+              "Mentioned in 3 saves", with the saves named. The user should
+              never have to think "this Tokyo came from that reel", but *how
+              many* of their saves agree on something is exactly the signal a
+              pile of individual saves cannot give them.
             */}
             <SectionLabel>
               {entity.sourceCount === 1 ? 'From one save' : `Mentioned in ${entity.sourceCount} saves`}
@@ -358,6 +482,12 @@ function EntityDetailSheet({
  * depth costs no extra screen — the same property `GroupDetailScreen` gets
  * from the group tree.
  *
+ * A **leaf** node additionally gets a tab strip, per its type's
+ * `tabs` (`collectionMeta`): the entity list always, plus an overview of the
+ * sources that formed it and the sources themselves where those are worth
+ * their own tab. A node *with folders* never does — offering a tab strip and
+ * a folder list at once gives two competing ways down.
+ *
  * `nodeId` is the tree's own id (`itinerary~japan`), so a deep link is just a
  * node id and needs no separate route per level.
  */
@@ -366,6 +496,7 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
   const router = useRouter();
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [tab, setTab] = useState<CollectionTab | null>(null);
 
   const type = nodeType(nodeId);
 
@@ -385,8 +516,6 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
     EMPTY_ENTITIES,
     [nodeId],
   );
-  // Only for naming a source in the entity sheet — a save's title is not on
-  // `CollectionSource`, and looking it up locally costs nothing.
   const sources = useLiveValue<SaveResponse[]>(
     DERIVED_TABLES,
     (store) => readCollectionSources(store, nodeId),
@@ -398,22 +527,53 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
   const typeMeta = saveTypeMeta(type);
   const depth = nodeDepth(nodeId);
 
-  const sourceTitles = new Map(sources.map((save) => [save.id, saveTitle(save)]));
+  const summaries = useMemo(() => sourceSummaries(sources), [sources]);
+  const sourceTitles = useMemo(
+    () => new Map(summaries.map((s) => [s.saveId, s.title])),
+    [summaries],
+  );
 
-  // Entities shown *here* are the ones this node holds directly: anything
-  // that lives in a folder is reached through the folder instead, so nothing
-  // is listed twice on one screen.
+  // Entities shown *here* are the ones this node holds directly: anything in
+  // a folder is reached through the folder instead, so nothing is listed
+  // twice on one screen.
   const subgroups = node?.subgroups ?? [];
-  const ownKeys = new Set(node?.entityKeys ?? []);
-  const shown = subgroups.length > 0 ? entities.filter((e) => ownKeys.has(e.entityKey)) : entities;
+  const hasFolders = subgroups.length > 0;
+  const ownKeys = useMemo(() => new Set(node?.entityKeys ?? []), [node]);
+  const shown = useMemo(
+    () => (hasFolders ? entities.filter((e) => ownKeys.has(e.entityKey)) : entities),
+    [hasFolders, entities, ownKeys],
+  );
 
   // Pinned first within each section — a curation signal, not a re-sort of
   // the whole list.
-  const bySectionOrder = (a: CollectionEntityResponse, b: CollectionEntityResponse) =>
+  const byPinned = (a: CollectionEntityResponse, b: CollectionEntityResponse) =>
     Number(b.state?.pinned === true) - Number(a.state?.pinned === true);
-  const open = shown.filter((e) => e.state?.done !== true).sort(bySectionOrder);
-  const done = shown.filter((e) => e.state?.done === true).sort(bySectionOrder);
+
+  /**
+   * Sections are the type's own status model where it has one (Want to watch
+   * / Watching / Watched), and a plain open/done split where it does not.
+   * Both drop empty sections, so a fresh collection is one list rather than
+   * three headings over nothing.
+   */
+  const sections = useMemo(() => {
+    const sorted = [...shown].sort(byPinned);
+    if (statusesFor(type)) {
+      return bySection(type, sorted).map((s) => ({ label: s.status.label, entities: s.entities }));
+    }
+    const open = sorted.filter((e) => e.state?.done !== true);
+    const done = sorted.filter((e) => e.state?.done === true);
+    return [
+      { label: collMeta.sectionLabel, entities: open },
+      { label: capitalise(collMeta.doneNoun), entities: done },
+    ].filter((s) => s.entities.length > 0);
+  }, [shown, type, collMeta.sectionLabel, collMeta.doneNoun]);
+
+  const doneCount = shown.filter((e) => e.state?.done === true).length;
   const selected = entities.find((e) => e.entityKey === selectedKey) ?? null;
+
+  // Tabs only on a leaf, and only when the type asks for more than the list.
+  const tabs = hasFolders ? [] : collMeta.tabs.filter((t) => t !== 'sources' || summaries.length > 0);
+  const activeTab: CollectionTab = tab && tabs.includes(tab) ? tab : (tabs[0] ?? 'entities');
 
   /**
    * Optimistic through the store rather than through local component state:
@@ -424,6 +584,13 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
   const setEntityState = useCallback((entity: CollectionEntityResponse, nextState: Record<string, unknown>) => {
     writeEntityState(entity.entityKey, nextState);
   }, []);
+  const cycleStatus = useCallback(
+    (entity: CollectionEntityResponse) => {
+      const next = nextStatus(type, entity.state);
+      if (next) setEntityState(entity, stateForStatus(entity.state, next));
+    },
+    [type, setEntityState],
+  );
   const toggleDone = useCallback(
     (entity: CollectionEntityResponse) => setEntityState(entity, { ...entity.state, done: entity.state?.done !== true }),
     [setEntityState],
@@ -436,7 +603,7 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
    * K4: pinning rides `entity_states`' existing `state` jsonb (`state.pinned`)
    * rather than a fourth `collection_overrides` type — see
    * `V14__collection_overrides.sql`'s note on why. Same full-replace write
-   * path as done/rating.
+   * path as status/done/rating.
    */
   const togglePin = useCallback(
     (entity: CollectionEntityResponse) =>
@@ -461,13 +628,75 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
   const entityCount = node?.entityCount ?? entities.length;
 
   const summary = [
-    subgroups.length > 0
-      ? `${subgroups.length} ${collMeta.groupNoun(subgroups.length, depth)}`
-      : null,
+    hasFolders ? `${subgroups.length} ${collMeta.groupNoun(subgroups.length, depth)}` : null,
     `${entityCount} ${nodeEntityNoun(type, nodeId, entityCount)}`,
     node ? sourceLabel(node.sourceCount) : null,
-    done.length > 0 ? `${done.length} ${collMeta.doneNoun}` : null,
+    doneCount > 0 ? `${doneCount} ${collMeta.doneNoun}` : null,
   ].filter(Boolean);
+
+  const entityList = (
+    <>
+      {sections.map((section, i) => (
+        <Reveal key={section.label} index={i + 1}>
+          <SectionLabel>{section.label}</SectionLabel>
+          <View style={{ gap: spacing.sm, marginBottom: spacing.xxl - 2 }}>
+            {section.entities.map((entity) => (
+              <EntityRow
+                key={entity.entityKey}
+                entity={entity}
+                type={type}
+                onPress={() => setSelectedKey(entity.entityKey)}
+                onCycleStatus={() => cycleStatus(entity)}
+                onToggleDone={() => toggleDone(entity)}
+                onRate={(rating) => rate(entity, rating)}
+              />
+            ))}
+          </View>
+        </Reveal>
+      ))}
+    </>
+  );
+
+  /**
+   * The Sources tab: the raw saves, as the rest of the app renders them.
+   *
+   * Deliberately `SaveCard` rather than the `SourceCard` the overview uses.
+   * The two tabs would otherwise be the same list twice — and they have
+   * genuinely different jobs: the overview answers "what shape did each
+   * source have" (the route, the prescription), while this one answers
+   * "which of my saves are these", with the thumbnail, source platform and
+   * status the user recognises them by everywhere else.
+   */
+  const sourceList = (
+    <Reveal index={1}>
+      <SectionLabel>{collMeta.sourcesLabel}</SectionLabel>
+      <View style={{ gap: spacing.smd }}>
+        {sources.map((save) => (
+          <SaveCard
+            key={save.id}
+            save={save}
+            onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
+          />
+        ))}
+      </View>
+    </Reveal>
+  );
+
+  /** The overview's un-merged view: each source's own shape, in its own order. */
+  const sourceOutlines = (
+    <Reveal index={1}>
+      <SectionLabel>{collMeta.sourcesLabel}</SectionLabel>
+      <View style={{ gap: spacing.sm }}>
+        {summaries.map((s) => (
+          <SourceCard
+            key={s.saveId}
+            summary={s}
+            onPress={() => router.push({ pathname: '/save/[id]', params: { id: s.saveId } })}
+          />
+        ))}
+      </View>
+    </Reveal>
+  );
 
   return (
     <>
@@ -485,10 +714,8 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
             </AppText>
           </Touchable>
 
-          {/*
-            A folder shows which collection it belongs to, so "Japan" is never
-            adrift — the header is the breadcrumb the stack cannot draw.
-          */}
+          {/* A folder shows which collection it belongs to, so "Japan" is
+              never adrift — the header is the breadcrumb the stack cannot draw. */}
           {depth > 0 ? (
             <AppText variant="caption" tone="muted" style={{ marginBottom: 2 }}>
               {displayName(type)}
@@ -497,9 +724,56 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
           <AppText variant="title" style={{ marginBottom: spacing.xs }}>
             {title}
           </AppText>
-          <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.xxl - 2 }}>
+          <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.md }}>
             {summary.join(' · ')}
           </AppText>
+
+          {/* The node's own action, where its type has one. Above the tabs
+              because it applies to the whole node, not to one tab's content. */}
+          {collMeta.action && !hasFolders && entities.length > 0 ? (
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={collMeta.action.label}
+              onPress={() => router.push({ pathname: '/session/[nodeId]', params: { nodeId } })}
+              haptic="medium"
+              weight="card"
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: spacing.xs,
+                paddingVertical: spacing.smd,
+                borderRadius: 100,
+                backgroundColor: palette.accent,
+                marginBottom: spacing.md,
+              }}
+            >
+              <Glyph name="activity" size={16} weight={2} color={palette.background} />
+              <AppText variant="label" style={{ color: palette.background }}>
+                {collMeta.action.label}
+              </AppText>
+            </Touchable>
+          ) : null}
+
+          {tabs.length > 1 ? (
+            <View style={{ marginBottom: spacing.lg }}>
+              <Segmented
+                options={tabs.map((t) => ({
+                  value: t,
+                  label:
+                    t === 'entities'
+                      ? collMeta.sectionLabel
+                      : t === 'sources'
+                        ? collMeta.sourcesLabel
+                        : 'Overview',
+                }))}
+                value={activeTab}
+                onChange={setTab}
+              />
+            </View>
+          ) : (
+            <View style={{ marginBottom: spacing.lg }} />
+          )}
         </Reveal>
 
         {entities.length === 0 ? (
@@ -510,69 +784,61 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
               </AppText>
             </Card>
           </Reveal>
-        ) : (
+        ) : hasFolders ? (
           <>
-            {subgroups.length > 0 ? (
-              <Reveal index={1}>
-                <SectionLabel>
-                  {`${collMeta.groupNoun(subgroups.length, depth)[0].toUpperCase()}${collMeta
-                    .groupNoun(subgroups.length, depth)
-                    .slice(1)}`}
-                </SectionLabel>
-                <View style={{ gap: spacing.sm, marginBottom: spacing.xxl - 2 }}>
-                  {subgroups.map((child) => (
-                    <SubgroupRow
-                      key={child.id}
-                      node={child}
-                      type={type}
-                      onPress={() =>
-                        router.push({ pathname: '/collection/[type]', params: { type: child.id } })
-                      }
-                    />
-                  ))}
-                </View>
-              </Reveal>
-            ) : null}
-
-            {/*
-              The section is named for what the objects *are* — Places,
-              Watchlist, Exercises — not "Remaining". Only a checklist is a
-              list of things left to do; an itinerary's places are not tasks,
-              and heading them that way was what made every collection read
-              like the same generic to-do screen.
-            */}
-            {open.length > 0 ? (
-              <Reveal index={2}>
-                <SectionLabel>{collMeta.sectionLabel}</SectionLabel>
-                <View style={{ gap: spacing.sm, marginBottom: spacing.xxl - 2 }}>
-                  {open.map((entity) => (
-                    <EntityRow
-                      key={entity.entityKey}
-                      entity={entity}
-                      type={type}
-                      onPress={() => setSelectedKey(entity.entityKey)}
-                    />
-                  ))}
-                </View>
-              </Reveal>
-            ) : null}
-
-            {done.length > 0 ? (
-              <Reveal index={3}>
-                <SectionLabel>{collMeta.doneNoun[0].toUpperCase() + collMeta.doneNoun.slice(1)}</SectionLabel>
-                <View style={{ gap: spacing.sm }}>
-                  {done.map((entity) => (
-                    <EntityRow
-                      key={entity.entityKey}
-                      entity={entity}
-                      type={type}
-                      onPress={() => setSelectedKey(entity.entityKey)}
-                    />
-                  ))}
-                </View>
-              </Reveal>
-            ) : null}
+            <Reveal index={1}>
+              <SectionLabel>{capitalise(collMeta.groupNoun(subgroups.length, depth))}</SectionLabel>
+              <View style={{ gap: spacing.sm, marginBottom: spacing.xxl - 2 }}>
+                {subgroups.map((child) => (
+                  <SubgroupRow
+                    key={child.id}
+                    node={child}
+                    type={type}
+                    onPress={() => router.push({ pathname: '/collection/[type]', params: { type: child.id } })}
+                  />
+                ))}
+              </View>
+            </Reveal>
+            {/* Entities the folders did not claim still need somewhere to be —
+                otherwise a place whose destination was too rare to earn a
+                folder would vanish from the collection entirely. */}
+            {entityList}
           </>
+        ) : activeTab === 'sources' ? (
+          sourceList
+        ) : activeTab === 'overview' ? (
+          <>
+            {sourceOutlines}
+            <Reveal index={2} style={{ marginTop: spacing.xxl - 2 }}>
+              <SectionLabel>{`All ${nodeEntityNoun(type, nodeId, entityCount)}`}</SectionLabel>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+                {shown.map((entity) => (
+                  <Touchable
+                    key={entity.entityKey}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${entity.name}, open`}
+                    onPress={() => setSelectedKey(entity.entityKey)}
+                    haptic="selection"
+                    style={{
+                      paddingVertical: 6,
+                      paddingHorizontal: spacing.smd,
+                      borderRadius: 100,
+                      borderWidth: 1,
+                      borderColor: palette.border,
+                      backgroundColor: palette.surface,
+                    }}
+                  >
+                    <AppText variant="caption">
+                      {entity.name}
+                      {entity.sourceCount > 1 ? ` · ${entity.sourceCount}` : ''}
+                    </AppText>
+                  </Touchable>
+                ))}
+              </View>
+            </Reveal>
+          </>
+        ) : (
+          entityList
         )}
       </Screen>
 
@@ -582,6 +848,7 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
           type={type}
           sourceTitles={sourceTitles}
           onClose={() => setSelectedKey(null)}
+          onCycleStatus={() => cycleStatus(selected)}
           onToggleDone={() => toggleDone(selected)}
           onRate={(rating) => rate(selected, rating)}
           onTogglePin={() => togglePin(selected)}

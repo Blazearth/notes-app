@@ -94,6 +94,11 @@ function Routes() {
             leaves (their detail is the in-screen sheet, not another route),
             so there is nothing to push onto itself. */}
         <Stack.Screen name="collection/[type]" options={{ animation: 'slide_from_right' }} />
+        {/* Running a collection's merged exercises — "Start workout" on a
+            training split. Its own route rather than a modal on the collection
+            screen, so the back gesture ends the session cleanly with the
+            collection still underneath. */}
+        <Stack.Screen name="session/[nodeId]" options={{ animation: 'slide_from_right' }} />
         {/* K5: the local-compute alternative to AI workout synthesis — a
             side-by-side compare, reached by multi-select from the workout
             group screen. */}

@@ -38,7 +38,28 @@ export interface CollectionTypeMeta {
    * extraction structure leaking into the interface for no benefit.
    */
   showsKind: boolean;
+  /**
+   * Which tabs a *leaf* node of this type offers, in order. The entity list
+   * is always one of them; `overview` and `sources` are opt-in.
+   *
+   * Per type because the answer genuinely differs. A destination's overview
+   * is the trips that reach it — "why are these seven places together?" is
+   * the question a bare place list cannot answer. A watchlist has no such
+   * question: the titles *are* the content, and an overview tab would be an
+   * empty ceremony in front of them.
+   *
+   * Only leaves get tabs. A node with folders shows its folders — putting a
+   * tab strip above them would offer two competing ways down at once.
+   */
+  tabs: CollectionTab[];
+  /** Heading for the sources tab — "Your itineraries" reads better than "Sources". */
+  sourcesLabel: string;
+  /** Label for the node's primary action, when it has one. */
+  action?: { label: string; kind: 'workoutSession' };
 }
+
+/** `entities` is the merged list; the other two are the node's provenance and its summary. */
+export type CollectionTab = 'overview' | 'entities' | 'sources';
 
 const plural = (singular: string, pluralForm?: string) => (n: number) =>
   n === 1 ? singular : (pluralForm ?? `${singular}s`);
@@ -51,6 +72,10 @@ const META: Record<string, CollectionTypeMeta> = {
     sectionLabel: 'Watchlist',
     groupNoun: (n, depth) => (depth === 0 ? plural('category', 'categories')(n) : plural('genre')(n)),
     showsKind: true,
+    // No overview: the titles are the content. A summary tab in front of a
+    // watchlist is a screen you tap through, not one you read.
+    tabs: ['entities', 'sources'],
+    sourcesLabel: 'Recommended by',
   },
   checklist: {
     entityNoun: plural('task'),
@@ -59,6 +84,8 @@ const META: Record<string, CollectionTypeMeta> = {
     sectionLabel: 'Tasks',
     groupNoun: plural('category', 'categories'),
     showsKind: false,
+    tabs: ['entities', 'sources'],
+    sourcesLabel: 'Lists',
   },
   itinerary: {
     entityNoun: plural('place'),
@@ -67,6 +94,11 @@ const META: Record<string, CollectionTypeMeta> = {
     sectionLabel: 'Places',
     groupNoun: plural('destination'),
     showsKind: true,
+    // "Why are these seven places together?" is the question a bare place
+    // list cannot answer, and the trips that reach this destination are the
+    // answer — so a destination leads with them.
+    tabs: ['overview', 'entities', 'sources'],
+    sourcesLabel: 'Your itineraries',
   },
   workout: {
     entityNoun: plural('exercise'),
@@ -75,6 +107,9 @@ const META: Record<string, CollectionTypeMeta> = {
     sectionLabel: 'Exercises',
     groupNoun: plural('split'),
     showsKind: false,
+    tabs: ['entities', 'sources'],
+    sourcesLabel: 'Routines',
+    action: { label: 'Start workout', kind: 'workoutSession' },
   },
 };
 
@@ -85,6 +120,8 @@ const FALLBACK: CollectionTypeMeta = {
   sectionLabel: 'Items',
   groupNoun: plural('group'),
   showsKind: true,
+  tabs: ['entities', 'sources'],
+  sourcesLabel: 'Sources',
 };
 
 export function collectionTypeMeta(type: string): CollectionTypeMeta {
