@@ -432,13 +432,14 @@ export function CaptureSheet() {
         {
           httpMethod: 'POST',
           uploadType: FileSystemUploadType.MULTIPART,
-          fieldName: 'file',
+          fieldName: 'image',
           mimeType: 'image/jpeg',
           headers: { Authorization: `Bearer ${token}` },
         },
       );
 
       if (uploadResult.status < 200 || uploadResult.status >= 300) {
+        console.warn('[screenshot] upload failed:', uploadResult.status, uploadResult.body);
         throw new Error(`Upload failed (${uploadResult.status}): ${uploadResult.body}`);
       }
 
