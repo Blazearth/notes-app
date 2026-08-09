@@ -777,7 +777,12 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
   },
 
   async addComment(entry) {
-    await repo.addComment(entry.payload.saveId, entry.payload.body);
+    // The entry's own key, minted once at enqueue and carried through every
+    // retry. This is the only queued op that *creates* a row — every other one
+    // is an absolute set, so replaying it is a no-op by construction — which
+    // makes it the only one where a lost response could post the same thing
+    // twice. `V16__idempotency.sql` is what the key finally reaches.
+    await repo.addComment(entry.payload.saveId, entry.payload.body, entry.idempotencyKey);
   },
 
   async deleteComment(entry) {

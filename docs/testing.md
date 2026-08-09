@@ -108,6 +108,24 @@ empty store — poll `location.origin` until it is the app's before touching it,
 check `location.href` is not `chrome-error://chromewebdata/` when a navigation
 mysteriously produces nothing (that one means Metro is not running).
 
+**Assert inside the window that belongs to the code under test.** L5's search
+screen answers locally first and merges the server's reply in ~350ms later, and
+the first attempt to check "a schema key matches nothing" waited for the merged
+list — which passed the *mock* server's crude
+`JSON.stringify(structuredData).includes(q)` straight through and failed the
+assertion against code that was correct. Sampling at 180ms, before the debounce
+elapses, made the check about the local index again. Whenever two producers write
+to one surface, the timing of the read is part of the assertion.
+
+**To exercise a failure path, patch the fixture and diff it back.** There is no
+way to make `mockRepository` reject from inside the page, so the technique is:
+back the file up, edit the one method to throw the `ApiError` kind you want, let
+Metro reload, run the probe with a flag that enables the extra checks, then
+restore and `diff -q` against the backup. That is how "local results survive a
+failed server search" was checked, and how L3's retry and terminal paths were.
+The `diff -q` is not optional — a fixture left patched is a silent, realistic lie
+in every later run.
+
 The Yoga caveat above still applies. This drives a **browser**; it sees more of
 the app than a static screenshot, and still nothing platform-native.
 
@@ -178,11 +196,11 @@ repair, and the fast English model is ~2 MB against ~15 MB for the accurate one.
 
 ```bash
 cd api
-./mvnw test           # 184 tests, ~30s, NO database or .env needed (5 skip: see below)
+./mvnw test           # 416 tests, ~30s, NO database or .env needed (6 skip: see below)
 ./mvnw clean verify   # the above plus packaging
 ```
 
-Five tests skip by default, in two opt-in groups. Both are gated rather than
+Six tests skip by default, in three opt-in groups. All are gated rather than
 deleted because a red build caused by a third party rate-limiting us is worse
 than no signal — but an ungated *absence* of the check is worse than either.
 
@@ -201,6 +219,16 @@ the cheapest way to prove the toolchain is actually installed:
 WEAVR_LIVE_OCR=1 ./mvnw test -Dtest=OcrLiveTest
 ```
 
+`KnowledgeTypeRegistrySchemaLiveTest` (1) posts the real production request —
+the whole `anyOf` schema and system prompt — to the real Gemini API, and so
+**costs one of the 500 daily requests**. Run it after adding a knowledge type or
+a field, which is exactly when a schema too large or too deeply nested would
+first fail:
+
+```bash
+WEAVR_LIVE_GEMINI=1 ./mvnw test -Dtest=KnowledgeTypeRegistrySchemaLiveTest
+```
+
 Run the yt-dlp pair after touching anything under `pipeline/ytdlp/` and expect
 an occasional 429 that is not your fault; run the OCR trio after touching
 anything under `pipeline/ocr/`, and especially after changing the ffmpeg filter
@@ -208,8 +236,8 @@ graph or the tesseract flags, neither of which any mocked test can judge.
 
 The default suite needs no configuration at all — there is no `@SpringBootTest`,
 so no context loads and nothing reads `.env`. The only environment variables any
-test consults are `WEAVR_LIVE_YTDLP` and `WEAVR_LIVE_OCR`, whose sole effect is
-to enable the live groups above. If a test ever starts needing database or
+test consults are `WEAVR_LIVE_YTDLP`, `WEAVR_LIVE_OCR` and `WEAVR_LIVE_GEMINI`,
+whose sole effect is to enable the live groups above. If a test ever starts needing database or
 Supabase credentials, that is a signal it has become an integration test and
 should be named — and gated — like one.
 
@@ -381,7 +409,7 @@ Run it with the **session pooler** URL (`WEAVR_FLYWAY_URL`), not the transaction
 pooler — same reason Flyway itself needs it. Then `java -cp <pg-driver>.jar
 Probe.java` (single-file source, no build).
 
-Three things worth asserting beyond "it parsed":
+Four things worth asserting beyond "it parsed":
 
 - **That the objects exist**, via `information_schema.tables/columns`,
   `pg_indexes`, `pg_trigger`, `pg_policies` — a script can parse and still create
@@ -392,6 +420,12 @@ Three things worth asserting beyond "it parsed":
   `saves_user_updated_idx` because V1's index is on `created_at`; the plan says
   `Index Scan using saves_user_updated_idx`, which is the difference between an
   index and a comment claiming there is one.
+- **That the constraint the feature *is* actually constrains.** V16 exists so a
+  repeated `Idempotency-Key` cannot create a second Space, so the probe runs the
+  claim insert twice and asserts the second affects **zero** rows. Asserting the
+  table exists would have passed against a migration that forgot the primary key
+  — the mechanism has to be exercised, not inventoried. Same trip, `rollback()`
+  discards both inserts.
 
 **This does not work for `create index concurrently`** — that cannot run in a
 transaction, which is a reason to prefer the plain form in a migration unless the

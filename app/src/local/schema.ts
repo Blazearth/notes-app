@@ -37,6 +37,14 @@ export type StoreTable = (typeof STORE_TABLES)[number];
  * the bump there is no outbox in the field to lose, and every future bump has to
  * weigh it again rather than assume the "everything here is a cache" rule still
  * holds. It no longer does.
+ *
+ * **L5 added `saves_fts` and deliberately did *not* bump this**, which is that
+ * warning being taken seriously the first time it applied. A bump would have
+ * dropped a real outbox to install an index whose entire contents are derivable
+ * from the `saves` rows already on disk — so the index is *rebuilt* instead (see
+ * `sqliteStore.open`), and nothing is lost or re-fetched. The rule that falls
+ * out: bump only for a change the local data cannot survive, never for one it
+ * can recompute.
  */
 export const SCHEMA_VERSION = 2;
 
@@ -146,6 +154,44 @@ create table if not exists kv (
   value text not null
 );
 `;
+
+/**
+ * The search index, executed **separately** from {@link SCHEMA_SQL} and allowed
+ * to fail.
+ *
+ * FTS5 is a compile-time SQLite option. `expo-sqlite`'s config plugin enables it
+ * by default and `app.json` now asks for it explicitly, but if a build ever
+ * ships without it, `create virtual table` throws — and if that statement were
+ * part of the main schema batch it would take the whole store down with it, so
+ * `openStore()` would fall back to the memory shim and a device would silently
+ * lose its entire local database to a missing search index. Kept apart and
+ * wrapped in its own `try`, the worst case is that `searchLocal` falls back to
+ * the same linear scan the web build uses.
+ *
+ * `save_id` is `unindexed` because it is a key, not text: indexing a uuid puts
+ * its hex fragments in the term dictionary where they can only ever be noise.
+ * The two indexed columns mirror `search_tsv`'s weights A and C — see
+ * `searchText` in `store.ts` for why the body carries values and never keys.
+ */
+export const FTS_SQL = `
+create virtual table if not exists saves_fts using fts5(
+  save_id unindexed, title, body, tokenize='unicode61'
+);
+`;
+
+/**
+ * bm25 weights, one per column of {@link FTS_SQL} in declaration order.
+ *
+ * Title over body by 4:1, the same intent as `search_tsv`'s A-over-C weighting
+ * (ts_rank's defaults are A=1.0, C=0.2). `save_id` gets 0 — it is `unindexed`
+ * and can never contribute a match, but bm25 still expects a weight per column
+ * and a missing one would silently shift every weight after it onto the wrong
+ * column.
+ *
+ * bm25 returns *negative* scores where more negative is better, so callers
+ * order ascending.
+ */
+export const FTS_BM25 = 'bm25(saves_fts, 0.0, 4.0, 1.0)';
 
 /**
  * Keys in the `kv` table. Single-row server responses that have no interesting

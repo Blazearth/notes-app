@@ -151,6 +151,23 @@ export interface LocalStore {
   updateOutbox(id: number, changes: Partial<OutboxEntry>): Promise<void>;
   removeOutbox(id: number): Promise<void>;
 
+  // --------------------------------------------------------------- search
+  /**
+   * Full-text search over the local library, ranked, best first.
+   *
+   * FTS5 `MATCH` on native and a linear scan on web — the same signature and
+   * the same *match set* either way, because both are built from the pure
+   * helpers below. Only the ranking differs (bm25 against a hand-rolled score),
+   * which is a difference in ordering rather than in what is findable.
+   *
+   * Mirrors the server's corpus deliberately: `ready` saves only, archived
+   * included. `GET /v1/saves/search` filters on `status = 'ready'` and says
+   * nothing about `archived`, and the two halves are merged into one list — a
+   * local half that answered a different question would show results appearing
+   * and disappearing as the server's reply landed.
+   */
+  searchLocal(query: string, limit?: number): Promise<SaveResponse[]>;
+
   // ------------------------------------------------------------------- kv
   putKv(key: string, value: unknown): Promise<void>;
   readKv<T>(key: string): Promise<T | null>;
@@ -277,6 +294,125 @@ export function compareSaves(a: SaveResponse, b: SaveResponse, orderBy: 'created
 export function splitTombstoneId(id: string): [string, string] {
   const at = id.indexOf('|');
   return at < 0 ? [id, ''] : [id.slice(0, at), id.slice(at + 1)];
+}
+
+// ------------------------------------------------------------ local search
+//
+// The indexed text, and the query that runs against it. Pure, and shared by
+// both store implementations so "what is findable" has exactly one definition
+// — the FTS5 half and the linear-scan half differ only in how they rank.
+
+/**
+ * The text of a save, as two fields, following V11's rule exactly.
+ *
+ * **Scalar leaves only, keys never.** V4 indexed `jsonb_path_query_array(data,
+ * '$.*')::text`, which serialises an object array *with its keys* — so "name",
+ * "ingredients", "sets" and "rest" became terms every save of that type shared,
+ * and "rest" is a plausible real query. V11 replaced it with a walk that keeps
+ * scalars at any depth; this is that walk, in TypeScript.
+ *
+ * **`[unclear]` is stripped** (V4's own reason: the sentinel appears in most
+ * saves, so indexing it makes a term nearly all of them match), and the title
+ * is `coalesce(title, name)` — the `place` trap that has now broken
+ * `saveTitle()`, `search_tsv` and `SpaceService` in turn.
+ *
+ * One honest gap against the server: weight B includes `raw_caption`, which
+ * `SaveResponse` does not carry, so a phrase that appears only in the original
+ * caption is findable on the server and not locally. The merge in
+ * `SearchScreen` is what covers it.
+ */
+export function searchText(save: SaveResponse): { title: string; body: string } {
+  const values: string[] = [];
+  collectScalars(save.structuredData, values, 0);
+  return { title: deriveTitle(save) ?? '', body: values.join(' ') };
+}
+
+/** Guards against a pathological structure, not against real data. */
+const MAX_SEARCH_DEPTH = 12;
+
+function collectScalars(value: unknown, out: string[], depth: number): void {
+  if (value === null || value === undefined || depth > MAX_SEARCH_DEPTH) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectScalars(item, out, depth + 1);
+    return;
+  }
+  if (typeof value === 'object') {
+    // Values only — the keys are the schema's vocabulary, not the save's.
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      collectScalars(item, out, depth + 1);
+    }
+    return;
+  }
+  if (typeof value === 'string') {
+    if (usable(value)) out.push(value.trim());
+    return;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') out.push(String(value));
+}
+
+/**
+ * A query into comparable terms: lower-cased, accent-preserving, split on
+ * anything that is not a letter, digit or hyphen.
+ *
+ * The same sanitising the server applies to a `to_tsquery` fragment, for the
+ * same reason — a user typing `"` or `*` must not be able to produce a syntax
+ * error out of an FTS5 `MATCH` expression.
+ */
+export function searchTerms(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}-]+/u)
+    .map((term) => term.replace(/^-+|-+$/g, ''))
+    .filter((term) => term.length > 0);
+}
+
+/**
+ * The FTS5 `MATCH` expression: every term, each as a prefix.
+ *
+ * Quoted because a bare term can be an FTS5 keyword (`OR`, `NEAR`) or contain a
+ * hyphen, which the parser reads as an operator. Terms are already stripped to
+ * letters, digits and hyphens by {@link searchTerms}, so no quote can appear
+ * inside one and no escaping is needed.
+ */
+export function ftsMatchQuery(terms: readonly string[]): string {
+  return terms.map((term) => `"${term}"*`).join(' ');
+}
+
+/**
+ * Whether one save matches, and how well — the linear-scan half.
+ *
+ * **Every term is a prefix, including the ones the server matches whole.**
+ * `fullTextCandidates` prefixes only the last word, because extending every
+ * term in a `tsquery` would widen a server-side scan; locally the cost is a
+ * string comparison, and matching `chick past` against "chicken pasta" while
+ * the user is still typing is the entire reason this half exists. So the local
+ * result set is a superset of the server's, never a different one.
+ *
+ * @returns 0 when any term is unmatched — the terms are ANDed, as on the server
+ */
+export function scoreSearch(title: string, body: string, terms: readonly string[]): number {
+  if (terms.length === 0) return 0;
+  const titleWords = tokenize(title);
+  const bodyWords = tokenize(body);
+  let score = 0;
+  for (const term of terms) {
+    // Title matches weigh more, the same intent as `search_tsv`'s A/C weights.
+    const inTitle = titleWords.some((word) => word.startsWith(term));
+    const inBody = bodyWords.some((word) => word.startsWith(term));
+    if (!inTitle && !inBody) return 0;
+    if (inTitle) score += titleWords.includes(term) ? 5 : 4;
+    if (inBody) score += bodyWords.includes(term) ? 2 : 1;
+  }
+  return score;
+}
+
+function tokenize(text: string): string[] {
+  return text.toLowerCase().split(/[^\p{L}\p{N}-]+/u).filter((word) => word.length > 0);
+}
+
+/** The server's corpus, mirrored — see {@link LocalStore.searchLocal}. */
+export function isSearchable(save: SaveResponse): boolean {
+  return save.status === 'ready';
 }
 
 export function matchesQuery(save: SaveResponse, query: FeedQuery): boolean {

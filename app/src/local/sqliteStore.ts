@@ -23,8 +23,19 @@ import type {
   SpaceMember,
 } from '@/api/types';
 import { isLocalId, type OutboxEntry, type OutboxOp, type OutboxPayloads } from './outbox';
-import { KV, SCHEMA_SQL, SCHEMA_VERSION, type StoreTable } from './schema';
-import { ChangeBus, fromRow, toRow, type FeedQuery, type LocalStore } from './store';
+import { FTS_BM25, FTS_SQL, KV, SCHEMA_SQL, SCHEMA_VERSION, type StoreTable } from './schema';
+import {
+  ChangeBus,
+  fromRow,
+  ftsMatchQuery,
+  isSearchable,
+  scoreSearch,
+  searchTerms,
+  searchText,
+  toRow,
+  type FeedQuery,
+  type LocalStore,
+} from './store';
 
 const DATABASE_NAME = 'weavr.db';
 
@@ -35,6 +46,14 @@ const ALL_TABLES = [
 ] as const;
 
 const CLEAR_ALL_SQL = ALL_TABLES.map((table) => `delete from ${table};`).join(' ');
+
+/**
+ * A ceiling on one FTS rebuild. It bounds a startup cost, so it is deliberately
+ * far above any library this app will hold for a long time — the same reasoning
+ * as `sync.ts`'s `MAX_PAGES`, and the same honest failure if it is ever reached:
+ * the newest N saves are searchable locally, the rest only through the server.
+ */
+const REBUILD_LIMIT = 20000;
 
 interface JsonRow {
   json: string;
@@ -71,6 +90,12 @@ function toOutboxEntry(row: OutboxRow): OutboxEntry {
 export function createSqliteStore(): LocalStore {
   const bus = new ChangeBus();
   let db: SQLite.SQLiteDatabase | null = null;
+  /**
+   * Whether `saves_fts` exists. False means this build's SQLite has no FTS5, in
+   * which case `searchLocal` runs the same linear scan the web store does —
+   * slower, and identical in what it finds.
+   */
+  let fts = false;
 
   function handle(): SQLite.SQLiteDatabase {
     if (!db) throw new Error('Local store used before open()');
@@ -103,6 +128,88 @@ export function createSqliteStore(): LocalStore {
     return out;
   }
 
+  /**
+   * Keeps `saves_fts` in step with one save row.
+   *
+   * Delete-then-insert rather than an `update`: an FTS5 table has no rowid to
+   * upsert on from here (`save_id` is `unindexed`, so it is content rather than
+   * a key), and two rows for one save would return it twice from a `MATCH`.
+   *
+   * A save with nothing to index — still `processing`, so no `structuredData`
+   * yet — is deleted and not re-inserted, which is also how a save that later
+   * *fails* stops being findable without any separate cleanup.
+   */
+  async function writeFts(save: SaveResponse) {
+    if (!fts) return;
+    await handle().runAsync('delete from saves_fts where save_id = ?', save.id);
+    if (!isSearchable(save)) return;
+    const { title, body } = searchText(save);
+    if (!title && !body) return;
+    await handle().runAsync(
+      'insert into saves_fts (save_id, title, body) values (?, ?, ?)',
+      save.id,
+      title,
+      body,
+    );
+  }
+
+  /**
+   * Fills `saves_fts` from rows the store already holds, when the two disagree.
+   *
+   * This is what an FTS index costs *instead of* a `SCHEMA_VERSION` bump. A bump
+   * drops every table, including the outbox — writes the server has never seen —
+   * to install something whose entire contents are a pure function of the
+   * `saves` rows sitting next to it. Recomputing is strictly cheaper and loses
+   * nothing.
+   *
+   * The trigger is a count mismatch rather than a "have I done this" flag: it
+   * covers the first run after an upgrade, a store whose FTS table failed to
+   * build once, and any future drift, with one comparison of two integers. It
+   * is deliberately not exact — a save with no indexable text at all is
+   * legitimately absent from `saves_fts`, so a mismatch can persist and cost one
+   * rebuild per launch. Bounded by `REBUILD_LIMIT` for exactly that reason.
+   */
+  async function rebuildFtsIfStale() {
+    const indexed = await handle().getFirstAsync<{ n: number }>('select count(*) as n from saves_fts');
+    const total = await handle().getFirstAsync<{ n: number }>(
+      "select count(*) as n from saves where status = 'ready'",
+    );
+    if ((indexed?.n ?? 0) === (total?.n ?? 0)) return;
+
+    const rows = await handle().getAllAsync<JsonRow>(
+      `select json from saves where status = 'ready' limit ${REBUILD_LIMIT}`,
+    );
+    await handle().withTransactionAsync(async () => {
+      await handle().runAsync('delete from saves_fts');
+      for (const row of rows) await writeFts(fromRow(row));
+    });
+  }
+
+  /**
+   * The no-FTS path: read every ready save and score it in JS.
+   *
+   * Reached when this build's SQLite has no FTS5, or when a `MATCH` fails to
+   * parse. It is the same function the web store runs, so the two agree on what
+   * is findable — only the ordering differs from bm25's.
+   */
+  async function scanSearch(terms: readonly string[], limit: number): Promise<SaveResponse[]> {
+    const rows = await handle().getAllAsync<JsonRow>("select json from saves where status = 'ready'");
+    const scored: { save: SaveResponse; score: number }[] = [];
+    for (const row of rows) {
+      const save = fromRow(row);
+      const { title, body } = searchText(save);
+      const score = scoreSearch(title, body, terms);
+      if (score > 0) scored.push({ save, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, limit).map((hit) => hit.save);
+    const states = await itemStatesFor(top.map((s) => s.id));
+    return top.map((save) => {
+      const bucket = states.get(save.id);
+      return bucket ? { ...save, itemStates: bucket } : save;
+    });
+  }
+
   async function writeSave(save: SaveResponse) {
     const row = toRow(save);
     await handle().runAsync(
@@ -132,6 +239,7 @@ export function createSqliteStore(): LocalStore {
       row.title,
       row.json,
     );
+    await writeFts(save);
     if (save.itemStates) await writeItemStates(save.id, save.itemStates);
   }
 
@@ -168,6 +276,17 @@ export function createSqliteStore(): LocalStore {
           JSON.stringify(SCHEMA_VERSION),
         );
       }
+
+      // Separately, and allowed to fail — see FTS_SQL. A build without FTS5
+      // must lose search, not the database.
+      try {
+        await db.execAsync(FTS_SQL);
+        fts = true;
+      } catch (error) {
+        console.warn('[local] FTS5 unavailable; local search will scan instead', error);
+        fts = false;
+      }
+      if (fts) await rebuildFtsIfStale();
     },
 
     async wipe() {
@@ -175,6 +294,10 @@ export function createSqliteStore(): LocalStore {
       // previous user*, and replaying them under a new session would attribute
       // one person's edits to another.
       await handle().execAsync(CLEAR_ALL_SQL);
+      // Not in ALL_TABLES: `saves_fts` is a derived index, not one of the
+      // store's tables, and nothing subscribes to it — but it holds the previous
+      // user's titles, so it goes with everything else.
+      if (fts) await handle().runAsync('delete from saves_fts');
       await handle().runAsync(
         'insert or replace into kv (key, value) values (?, ?)',
         KV.schemaVersion,
@@ -198,6 +321,7 @@ export function createSqliteStore(): LocalStore {
             if (!keep.has(row.id) && !isLocalId(row.id)) {
               await handle().runAsync('delete from saves where id = ?', row.id);
               await handle().runAsync('delete from item_states where save_id = ?', row.id);
+              if (fts) await handle().runAsync('delete from saves_fts where save_id = ?', row.id);
             }
           }
         }
@@ -222,6 +346,7 @@ export function createSqliteStore(): LocalStore {
       await handle().withTransactionAsync(async () => {
         await handle().runAsync('delete from saves where id = ?', id);
         await handle().runAsync('delete from item_states where save_id = ?', id);
+        if (fts) await handle().runAsync('delete from saves_fts where save_id = ?', id);
       });
       touched('saves', 'item_states');
     },
@@ -318,6 +443,7 @@ export function createSqliteStore(): LocalStore {
           localId,
         );
         await handle().runAsync('delete from saves where id = ?', localId);
+        if (fts) await handle().runAsync('delete from saves_fts where save_id = ?', localId);
         await writeSave(real);
         await handle().runAsync('update saves set pending = 0 where id = ?', real.id);
         // The outbox rewrite is textual for the same reason `rewriteLocalId` is:
@@ -641,6 +767,41 @@ export function createSqliteStore(): LocalStore {
     async removeOutbox(id) {
       await handle().runAsync('delete from outbox where id = ?', id);
       touched('outbox');
+    },
+
+    // -------------------------------------------------------------- search
+
+    async searchLocal(query, limit = 25) {
+      const terms = searchTerms(query);
+      if (terms.length === 0) return [];
+
+      if (fts) {
+        try {
+          const rows = await handle().getAllAsync<JsonRow>(
+            `select s.json from saves_fts f
+               join saves s on s.id = f.save_id
+              where saves_fts match ?
+              order by ${FTS_BM25}
+              limit ?`,
+            ftsMatchQuery(terms),
+            limit,
+          );
+          const saves = rows.map((row) => fromRow(row));
+          const states = await itemStatesFor(saves.map((s) => s.id));
+          return saves.map((save) => {
+            const bucket = states.get(save.id);
+            return bucket ? { ...save, itemStates: bucket } : save;
+          });
+        } catch (error) {
+          // FTS5 rejects a `MATCH` it cannot parse. Every term is quoted and
+          // pre-sanitised so this should be unreachable, but a search box is the
+          // last place to surface a SQL error at the user: fall through to the
+          // scan, which has no syntax to get wrong.
+          console.warn('[local] FTS query failed; falling back to a scan', error);
+        }
+      }
+
+      return scanSearch(terms, limit);
     },
 
     // ---------------------------------------------------------------- kv

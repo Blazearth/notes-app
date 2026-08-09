@@ -1,9 +1,30 @@
+import { Image } from 'expo-image';
 import React, { useState } from 'react';
-import { Image, View } from 'react-native';
+import { View } from 'react-native';
 
 import type { GlyphName } from './Glyph';
 import { Glyph } from './Glyph';
 import { HatchThumb } from './HatchThumb';
+
+/**
+ * Thumbnails are the one remaining thing every screen fetches over the network
+ * on every launch — `expo-image`'s disk cache is what finishes the local-first
+ * story for them.
+ *
+ * React Native's own `Image` caches in memory only on Android, so scrolling the
+ * feed after a cold start re-downloaded every thumbnail even though the saves
+ * themselves came from the local store. `'memory-disk'` makes the second launch
+ * paint from disk, which is the same promise the rest of L1–L4 makes about data.
+ */
+const CACHE_POLICY = 'memory-disk';
+
+/**
+ * A cross-fade rather than a pop-in. 160ms is short enough not to feel like a
+ * loading state and long enough to hide the swap from the placeholder — which
+ * matters most in exactly the case the cache creates, where the image is
+ * available almost immediately.
+ */
+const TRANSITION_MS = 160;
 
 interface SaveThumbProps {
   thumbnailUrl?: string | null;
@@ -39,7 +60,11 @@ export function SaveThumb({ thumbnailUrl, width = 40, height, radius, tint, glyp
         <Image
           source={{ uri: thumbnailUrl }}
           style={{ width, height, borderRadius: radius ?? 6 }}
-          resizeMode="cover"
+          // `contentFit`, not `resizeMode` — expo-image's own prop; the RN name
+          // is silently ignored, which would leave every thumbnail stretched.
+          contentFit="cover"
+          cachePolicy={CACHE_POLICY}
+          transition={TRANSITION_MS}
           onError={() => setFailed(true)}
         />
       ) : glyph && tint ? (

@@ -90,7 +90,13 @@ export interface Repository {
   // Spaces
   listSpaces(): Promise<Space[]>;
   getSpace(id: string): Promise<Space>;
-  createSpace(name: string, type?: string): Promise<Space>;
+  /**
+   * @param idempotencyKey a repeated key replays the first attempt's Space
+   *                       instead of minting a second one (V16). Stable across
+   *                       the retries that mean one Space, new for a genuinely
+   *                       new one — see `CreateSpaceSheet`.
+   */
+  createSpace(name: string, type?: string, idempotencyKey?: string): Promise<Space>;
   renameSpace(id: string, name: string): Promise<Space>;
   deleteSpace(id: string): Promise<void>;
   listSpaceSaves(id: string, page?: number, size?: number): Promise<SaveResponse[]>;
@@ -100,6 +106,7 @@ export interface Repository {
   createInvite(
     id: string,
     options?: { role?: SpaceRole; expiresInHours?: number; maxUses?: number },
+    idempotencyKey?: string,
   ): Promise<SpaceInvite>;
   listInvites(id: string): Promise<SpaceInvite[]>;
   revokeInvite(id: string, inviteId: string): Promise<void>;
@@ -112,7 +119,13 @@ export interface Repository {
 
   // Discussion
   listComments(saveId: string): Promise<SaveComment[]>;
-  addComment(saveId: string, body: string): Promise<SaveComment>;
+  /**
+   * @param idempotencyKey the outbox entry's own key, carried through every
+   *                       retry — this is the one queued write that creates a
+   *                       row, so a lost response would otherwise post the
+   *                       comment twice.
+   */
+  addComment(saveId: string, body: string, idempotencyKey?: string): Promise<SaveComment>;
   deleteComment(saveId: string, commentId: string): Promise<void>;
   setVote(saveId: string, value: 1 | -1 | 0): Promise<{ score: number }>;
 

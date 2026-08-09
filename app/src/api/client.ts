@@ -373,10 +373,26 @@ export function getSpace(id: string): Promise<Space> {
   return request<Space>(`/v1/spaces/${id}`);
 }
 
-export function createSpace(name: string, type = 'general'): Promise<Space> {
+/**
+ * `POST /v1/spaces`.
+ *
+ * Idempotent on a repeated `Idempotency-Key` since V16 — the server replays the
+ * first attempt's Space rather than minting a second. Load-bearing wherever the
+ * same request can be sent twice: this mints a new Space on every call, so a
+ * response lost in transit and then retried leaves the user with two
+ * identically-named Spaces and no way to tell which one anybody joined.
+ */
+export function createSpace(
+  name: string,
+  type = 'general',
+  idempotencyKey?: string,
+): Promise<Space> {
   return request<Space>('/v1/spaces', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
     body: JSON.stringify({ name, type }),
   });
 }
@@ -423,14 +439,26 @@ export function removeMember(id: string, memberId: string): Promise<void> {
  * link". Omitting `expiresInHours` means it never expires — worth choosing
  * deliberately, since an unbounded link posted in a group chat is exactly what
  * revocation exists for.
+ *
+ * `Idempotency-Key` is accepted (V16) and **no caller sends one yet**, which is
+ * a decision rather than an oversight. A replay has to return the *same code*,
+ * so the key has to be stable across the two sends that mean one invite — and
+ * two taps of "Invite" are genuinely ambiguous between "the first one did not
+ * register" and "I want a second link for somebody else". The server-side half
+ * is in place for the day this write is queued, where the queue makes the
+ * answer unambiguous: one entry, one key, however many attempts.
  */
 export function createInvite(
   id: string,
   options: { role?: SpaceRole; expiresInHours?: number; maxUses?: number } = {},
+  idempotencyKey?: string,
 ): Promise<SpaceInvite> {
   return request<SpaceInvite>(`/v1/spaces/${id}/invites`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
     body: JSON.stringify({ role: options.role ?? 'editor', ...options }),
   });
 }
@@ -488,10 +516,26 @@ export function listComments(saveId: string): Promise<SaveComment[]> {
   return request<SaveComment[]>(`/v1/saves/${saveId}/comments`);
 }
 
-export function addComment(saveId: string, body: string): Promise<SaveComment> {
+/**
+ * `POST /v1/saves/{id}/comments`.
+ *
+ * The one queued write in `@/local/outbox` that *creates* a row rather than
+ * setting a value, which is what makes it the only one a retry could duplicate
+ * — every other op is an absolute set, and replaying one of those is a no-op by
+ * construction. Idempotent on a repeated key since V16, and the outbox has
+ * always generated one per entry; before L5 it simply had nowhere to send it.
+ */
+export function addComment(
+  saveId: string,
+  body: string,
+  idempotencyKey?: string,
+): Promise<SaveComment> {
   return request<SaveComment>(`/v1/saves/${saveId}/comments`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
     body: JSON.stringify({ body }),
   });
 }

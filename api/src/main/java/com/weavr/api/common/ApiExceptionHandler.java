@@ -33,6 +33,25 @@ class ApiExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, e.getMessage());
     }
 
+    @ExceptionHandler(BadRequestException.class)
+    ProblemDetail handleBadRequest(BadRequestException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+    }
+
+    /**
+     * Two requests carrying one {@code Idempotency-Key} are racing, so the
+     * answer is not knowable yet.
+     *
+     * <p>409 rather than a 4xx the client would treat as terminal: this resolves
+     * by asking again, and the app's outbox retries a 409 (it classifies
+     * anything outside its known 4xx set as {@code server}, which backs off and
+     * retries) where it would surface a 400 to the user.
+     */
+    @ExceptionHandler(IdempotencyService.ConflictException.class)
+    ProblemDetail handleIdempotencyConflict(IdempotencyService.ConflictException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+    }
+
     /**
      * A cap the user can escape by upgrading. 402 rather than 403 so the client
      * can key the paywall off the status alone; {@code entitlement} and

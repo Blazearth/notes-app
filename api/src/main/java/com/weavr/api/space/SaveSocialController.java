@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.weavr.api.auth.CurrentUser;
+import com.weavr.api.common.IdempotencyService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -28,9 +30,11 @@ import org.springframework.web.bind.annotation.RestController;
 class SaveSocialController {
 
     private final SaveSocialService social;
+    private final IdempotencyService idempotency;
 
-    SaveSocialController(SaveSocialService social) {
+    SaveSocialController(SaveSocialService social, IdempotencyService idempotency) {
         this.social = social;
+        this.idempotency = idempotency;
     }
 
     record CommentRequest(
@@ -48,11 +52,21 @@ class SaveSocialController {
         return social.comments(userId, id);
     }
 
+    /**
+     * {@code Idempotency-Key} is optional here and always sent by the app: this
+     * is the one queued write in {@code app/src/local/outbox.ts} that creates a
+     * row rather than setting a value, so a retry after a lost response is the
+     * difference between one comment and two identical ones.
+     */
     @PostMapping("/v1/saves/{id}/comments")
     ResponseEntity<SaveSocialService.Comment> comment(@CurrentUser UUID userId,
                                                       @PathVariable UUID id,
-                                                      @Valid @RequestBody CommentRequest request) {
-        return ResponseEntity.ok(social.addComment(userId, id, request.body()));
+                                                      @Valid @RequestBody CommentRequest request,
+                                                      @RequestHeader(value = "Idempotency-Key", required = false)
+                                                      String idempotencyKey) {
+        return ResponseEntity.ok(idempotency.execute(
+                userId, idempotencyKey, "POST /v1/saves/{id}/comments", SaveSocialService.Comment.class,
+                () -> social.addComment(userId, id, request.body())));
     }
 
     @DeleteMapping("/v1/saves/{id}/comments/{commentId}")

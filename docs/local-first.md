@@ -22,12 +22,12 @@ today:    UI ──► Server
 target:   Server ──► Sync engine ──► Local DB ──► UI
 ```
 
-> **Status: L1–L4 landed 2026-08-09.** Every read screen reads the local store
-> through `useLive`; groups and collections are derived on-device; every write
-> lands locally and drains from an outbox; and reads are a windowed
-> `GET /v1/sync` rather than a full fetch-and-replace. `@/local/sync` is the only
-> consumer of `repo` in both directions. **L5 remains as written below** —
-> generalised idempotency (`V16`), local FTS search, and `expo-image`.
+> **Status: L1–L5 landed 2026-08-09. The plan is complete.** Every read screen
+> reads the local store through `useLive`; groups and collections are derived
+> on-device; every write lands locally and drains from an outbox; reads are a
+> windowed `GET /v1/sync` rather than a full fetch-and-replace; and search,
+> the last read path that could only answer from the network, answers from the
+> device first. `@/local/sync` is the only consumer of `repo` in both directions.
 
 ---
 
@@ -355,7 +355,7 @@ GET /v1/sync?since=<iso8601>&sinceId=<uuid>&limit=200
 | `space_activity`, `space_invites`, `save_votes`, `save_duplicates`, `digests` | **no** | no `updated_at`; all low-tier, on-demand reads. Adding one to each is a bigger migration than these screens are worth |
 | `save_comments` | has `updated_at`, but **left out** | scoping "comments on saves I can see" is a join across spaces; comments are a detail-screen read, medium tier |
 
-### Generalised idempotency (`V16__idempotency.sql`)
+### Generalised idempotency (`V16__idempotency.sql`) ✅ *landed 2026-08-09*
 
 Three writes are not replay-safe — `POST /v1/spaces`, `POST /v1/spaces/{id}/invites`,
 `POST /v1/saves/{id}/comments` — and an offline queue that retries them creates
@@ -373,15 +373,64 @@ create table idempotency_keys (
 );
 ```
 
-`IdempotencyService.execute(userId, key, endpoint, Supplier<T>)`: insert a claim
-row; on conflict, return the stored response if present, else `409` (the request
-is still in flight — the outbox will retry). Applied to the three endpoints
-above via the existing `@RequestHeader("Idempotency-Key")` pattern.
+`IdempotencyService.execute(userId, key, endpoint, Class<T>, Supplier<T>)`:
+insert a claim row; on conflict, return the stored response if present, else
+`409` (the request is still in flight — the outbox will retry). Applied to the
+three endpoints above via the existing `@RequestHeader("Idempotency-Key")`
+pattern.
 
 **`POST /v1/saves` keeps its existing column-based mechanism.** It is live-verified,
 backed by a partial unique index (V2), and migrating it to the new table is
 schema risk for no behavioural gain. The inconsistency is deliberate and is
 recorded here so the next reader does not "fix" it.
+
+**Three things the sketch left open, decided while building it:**
+
+- **The claim, the work and the response write are all in the caller's
+  transaction**, not a `REQUIRES_NEW` claim followed by the work. That is what
+  makes a failure clean: the work rolls back and so does the claim, so a retry
+  genuinely retries instead of being told forever that a request which never
+  happened is in flight. The concurrency this produces is *better* than the
+  alternative rather than a cost of it — a second request carrying the same key
+  blocks inside `on conflict do nothing`, and when the first commits its insert
+  affects no rows and its follow-up `select` (READ COMMITTED takes a fresh
+  snapshot per statement) sees the stored response and replays it. When the
+  first rolls back, the second's insert succeeds and it does the work. Both are
+  the right answer, with no polling and no retry loop. The upshot is that the
+  planned **409 is now unreachable through the ordinary flow** — it is kept for
+  a claim row with no response, which is what a hand-inserted row or a future
+  `REQUIRES_NEW` claim would produce.
+- **The stored response is the deliverable, not the avoided write.** Recording
+  only that a key was seen and answering `204` would leave a retried invite
+  creation "successful" and the caller still without the code the request exists
+  to produce.
+- **`endpoint` is stored but is not part of the key.** A key reused across two
+  endpoints is a client bug, and it is reported as one (`400`, which the outbox
+  treats as terminal and surfaces) rather than quietly running both — without
+  the column the mistake would instead deserialise one endpoint's stored body
+  into another's record and fail somewhere far from the cause.
+
+**Client side, only `addComment` sends a key so far, and that asymmetry is
+deliberate.** It is the one queued op that *creates* a row — every other one is
+an absolute set, so replaying it is a no-op by construction — and the outbox has
+generated a key per entry since L3 with nowhere to send it. `createSpace` sends
+one too, minted per *subject* rather than per sheet: `CreateSpaceSheet` stays
+open on failure so the user can tap Create again, which is exactly the
+lost-response case, but a key stable for the whole sheet would replay the old
+attempt after the user edited the name and hand back a Space called something
+else. `createInvite` deliberately sends none: two taps of "Invite" are genuinely
+ambiguous between "the first did not register" and "I want a second link", and
+the server-side half is in place for the day that write is queued, where one
+entry with one key makes the answer unambiguous.
+
+✅ **`V16__idempotency.sql` executed against the live schema inside a transaction
+and rolled back**, same technique as V15 and for the same reason — 20 checks:
+every column and its type, the composite primary key, RLS and its policy, the FK
+cascading from `profiles`, all three statements `IdempotencyService` issues
+accepted against the new shape (including a repeated claim affecting **zero**
+rows, which is the entire mechanism), the stored body round-tripping as JSON
+text, and `explain` confirming the replay read uses `idempotency_keys_pkey`.
+Then rolled back, and confirmed afterwards that the table does not exist.
 
 ---
 
@@ -678,12 +727,12 @@ Postgres and its windowing is unit-tested, but the endpoint has not been exercis
 by a throwaway-user round trip the way K1/K2 were, and no device has run any of
 this.
 
-### L5 — idempotency, local search, images
+### L5 — idempotency, local search, images ✅ *landed 2026-08-09*
 
 **Build:** `V16__idempotency.sql` + `IdempotencyService` + the three endpoints;
 `searchLocal(q)` over FTS5 with a web linear-scan fallback; swap
 `SaveThumb.tsx`'s React Native `Image` for `expo-image` (`cachePolicy:
-'memory-disk'`, `placeholder`, `transition`).
+'memory-disk'`, `transition`).
 
 **Search design:** local FTS returns instantly as `match: 'text'`; the server
 call fires in parallel and merges, its semantic-only hits marked
@@ -693,6 +742,88 @@ follow V11's rule exactly — **scalar leaves only, never JSON keys** ("name" an
 "ingredients" would otherwise match every save), `[unclear]` stripped, title
 from `coalesce(title, name)` (the `place` trap that has now broken `saveTitle()`,
 `search_tsv` and `SpaceService` in turn).
+
+**What actually landed**, plus seven things the plan did not spell out:
+
+- **The search index cost no `SCHEMA_VERSION` bump, and refusing one is the
+  decision.** L4 left a warning — `outbox` is the first local table holding
+  writes the server has never seen, so a bump is no longer free — and this was
+  the first change to meet it. Bumping would have dropped a real outbox to
+  install a table whose entire contents are a pure function of the `saves` rows
+  sitting next to it, so `saves_fts` is **rebuilt** at open instead, triggered by
+  a count mismatch. The rule that falls out and is now written in `schema.ts`:
+  bump only for a change the local data cannot survive, never for one it can
+  recompute.
+- **The FTS table is created outside `SCHEMA_SQL` and allowed to fail.** FTS5 is
+  a compile-time SQLite option; had `create virtual table` been part of the main
+  schema batch, a build without it would have taken the whole store down, so
+  `openStore()` would fall back to the memory shim and a device would silently
+  lose its **entire local database to a missing search index**. Kept apart, the
+  worst case is that `searchLocal` runs the same linear scan the web build does.
+  `app.json` now asks for `enableFTS` explicitly — L1 left it unset on the
+  grounds that "a config-plugin option with no reader is a thing to forget", and
+  it has a reader now.
+- **What is findable is one definition, shared by both implementations.**
+  `searchText` / `searchTerms` / `scoreSearch` / `ftsMatchQuery` live in
+  `store.ts` and are pure, so the FTS5 half and the scan half differ only in
+  *ranking* (bm25 against a hand-rolled score), never in what they match. That is
+  also what let the whole rule set be executed under node rather than only
+  typechecked.
+- **Every local term is a prefix, where the server prefixes only the last.**
+  `fullTextCandidates` extends one term because widening a server-side `tsquery`
+  costs a scan; locally it costs a string comparison, and matching `chick past`
+  against "chicken pasta" *while the user is still typing* is the entire reason
+  the local half exists. The local result set is therefore a superset of the
+  server's, never a different one — which is what makes appending local-only
+  hits safe.
+- **The local half is not debounced at all.** The 350ms wait exists because a
+  server search spends an embedding call; an index read on the device has
+  nothing to be economical with, so making it wait would give away the only
+  advantage it has. Measured through CDP: a hit renders inside 180ms, before the
+  server has been asked.
+- **A failed server search leaves the local results on screen and says so.** The
+  old screen replaced everything with an error card, which offline meant "you
+  have nothing" — the exact failure this layer exists to remove. The error card
+  now appears only when there is genuinely nothing to show; otherwise a line
+  above the list says the semantic half is missing and offers a retry. The
+  merge's rule is the same one in code: a server response must never *remove* a
+  result the user could already see.
+- **One honest gap against the server, stated rather than papered over:** weight
+  B of `search_tsv` includes `raw_caption`, which `SaveResponse` does not carry,
+  so a phrase that appears only in the original caption is findable on the
+  server and not on the device. The merge is what covers it.
+
+**Verified:** backend suite green (**416/416**, 6 opt-in skipped — 8 new
+`IdempotencyServiceTest` cases covering no-key passthrough, the claim/store path,
+a replay that returns the *first* answer and never re-runs the work, both
+conflict shapes, the reused-key rejection, and a failed work unit storing
+nothing). App: `tsc --noEmit` clean including under `--noUnusedLocals` (only the
+pre-existing unused-`React` imports), `expo export` clean for web and android,
+and the web bundle still contains no `openDatabaseAsync`, no `expo-sqlite`, no
+`enableChangeListener` — L1's guarantee survived L5 adding a SQL-only feature.
+**39 node-standalone assertions** over `store.ts`'s search half and
+`search/merge.ts`, driven with real registry shapes: keys never indexed for
+`recipe`/`workout` (`quantity`, `sets`, `rest`), `[unclear]` stripped, `place`
+titled from `name`, FTS5 operators unable to survive `searchTerms`, terms ANDed,
+and the merge's three rules including "no local hit is lost".
+
+**And driven end to end** through headless Chrome on `expo start --web` with
+`USE_MOCK_DATA` flipped on locally (never committed — the pre-commit hook forces
+it back): **23 checks**, including a local hit rendered inside the pre-debounce
+window, a prefix match, a value nested inside an object array, a schema key
+matching nothing locally, an FTS5-operator query not erroring, and — against
+`mockRepository.searchSaves` patched to reject with a `network` error — local
+results surviving the failure, the fallback line stated rather than silent, no
+error card replacing a usable list, and the error still shown when there is
+nothing local either. The patch was reverted and the file confirmed
+byte-identical to its backup afterwards.
+
+**Unverified, and it is the same gap as everywhere else:** `sqliteStore.ts` has
+still never run, so the FTS5 `MATCH`, the bm25 ordering and the rebuild-on-count-
+mismatch are typechecked and reasoned about, not executed — web resolves the
+memory shim and there is no device here. `expo-image`'s disk cache is in the same
+position: it is a native module doing native caching, and nothing here can watch
+it work.
 
 ---
 
@@ -743,3 +874,16 @@ from `coalesce(title, name)` (the `place` trap that has now broken `saveTitle()`
 5. **Is the outbox's `MAX_DRAIN_STEPS = 100` per drain the right bound?** It exists
    so a queue that keeps refilling cannot spin forever. Untested against a real
    backlog, because there has never been one.
+6. **Does the FTS rebuild's count-mismatch trigger ever fire on every launch?** It
+   compares `count(*)` over `saves_fts` against ready `saves`, and a ready save
+   with no indexable text at all — every field `[unclear]`, no title — is
+   legitimately absent from the index, so the two would disagree permanently and
+   the rebuild would run once per open. Bounded by `REBUILD_LIMIT` and cheap at
+   these sizes, but it wants a device to measure on before it is called fine. An
+   exact answer (store the indexed count in `kv`) is one line; it is not written
+   because a count that can drift from reality is exactly what the comparison
+   exists to catch.
+7. **Is `expo-image`'s disk cache actually doing anything?** It is a native module
+   doing native caching and nothing in this environment can watch it work. The
+   claim to check on a device is the second cold start: thumbnails should paint
+   with no network at all.
