@@ -19,6 +19,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError } from '@/api/client';
+import { API_BASE_URL } from '@/api/config';
 import { repo } from '@/data';
 import { AppText } from '@/components/AppText';
 import { Glyph } from '@/components/Glyph';
@@ -29,7 +30,6 @@ import { useSaves } from '@/saves/SavesProvider';
 import { Spring, staggerDelay } from '@/theme/motion';
 import { useTheme } from '@/theme/ThemeProvider';
 import { supabase } from '@/auth/supabase';
-import { SUPABASE_URL } from '@/api/config';
 
 const COLUMNS = 4;
 
@@ -379,14 +379,15 @@ export function CaptureSheet() {
   }, []);
 
   /**
-   * Opens the system image picker (gallery), uploads the selected image to
-   * Supabase Storage, then creates an IMAGE save that Gemini will analyse.
+   * Opens the system image picker, compresses the image, and POSTs it as
+   * multipart/form-data to POST /v1/saves/image on the backend.
    *
-   * Flow:
-   *   1. Request media library permission (auto-granted on first share).
-   *   2. Let user pick one image from the gallery.
-   *   3. Upload to `screenshots` bucket as `{userId}/{uuid}.jpg`.
-   *   4. POST /v1/saves with sourceType=image + sourceUrl = public URL.
+   * The backend handles:
+   *   1. Uploading to Supabase Storage (using the service key — bypasses RLS)
+   *   2. Creating the save record
+   *   3. Enqueuing Gemini vision classification
+   *
+   * This avoids any client-side Supabase Storage RLS issues.
    */
   const handleOpenScreenshot = useCallback(async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -405,40 +406,49 @@ export function CaptureSheet() {
     if (result.canceled || result.assets.length === 0) return;
 
     const asset = result.assets[0];
-    const fileName = `${Date.now()}.jpg`;
+    setBusyId('screenshot');
+    setError(null);
 
-    // Read the file as a Blob for Supabase Storage upload
-    const response = await fetch(asset.uri);
-    const blob = await response.blob();
+    try {
+      // Get the auth token so the backend can identify the user
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) {
+        setError('Sign in to save screenshots.');
+        setBusyId(null);
+        return;
+      }
 
-    const { data: session } = await supabase.auth.getSession();
-    const userId = session?.session?.user?.id ?? 'anonymous';
-    const storagePath = `${userId}/${fileName}`;
+      // Build multipart form — React Native's fetch handles the boundary automatically
+      const form = new FormData();
+      form.append('file', {
+        uri: asset.uri,
+        name: `screenshot_${Date.now()}.jpg`,
+        type: 'image/jpeg',
+      } as unknown as Blob);
 
-    const { error: uploadError } = await supabase.storage
-      .from('screenshots')
-      .upload(storagePath, blob, { contentType: 'image/jpeg', upsert: true });
-
-    if (uploadError) {
-      haptic('error');
-      setError('Upload failed. Try again.');
-      console.warn('[screenshot] upload error:', uploadError.message);
-      return;
-    }
-
-    const supabaseBase = SUPABASE_URL.replace(/\/$/, '');
-    const publicUrl = `${supabaseBase}/storage/v1/object/public/screenshots/${storagePath}`;
-
-    haptic('success');
-    dismiss();
-
-    void repo
-      .createSave({ sourceType: 'image', sourceUrl: publicUrl })
-      .then(prepend)
-      .catch((e: unknown) => {
-        haptic('error');
-        console.warn('[screenshot] save failed:', e instanceof ApiError ? e.message : e);
+      const response = await fetch(`${API_BASE_URL}/v1/saves/image`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
       });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => response.status.toString());
+        throw new Error(`Upload failed (${response.status}): ${text}`);
+      }
+
+      const saved = await response.json() as import('@/api/types').SaveResponse;
+      haptic('success');
+      prepend(saved);
+      dismiss();
+    } catch (e) {
+      haptic('error');
+      setError('Screenshot upload failed. Try again.');
+      console.warn('[screenshot] upload error:', e instanceof Error ? e.message : e);
+    } finally {
+      setBusyId(null);
+    }
   }, [dismiss, haptic, prepend]);
 
   const handleOpenScreenshotPress = useCallback(
