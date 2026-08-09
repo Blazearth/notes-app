@@ -4,6 +4,7 @@ import { ActivityIndicator, TextInput, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
+import { getStore } from '@/local';
 import { AppText } from '@/components/AppText';
 import { Glyph } from '@/components/Glyph';
 import { Sheet } from '@/components/Sheet';
@@ -38,6 +39,10 @@ export function CreateSpaceSheet() {
       setError(null);
       try {
         const space = await repo.createSpace(trimmed, selected ?? undefined);
+        // Straight into the store, so the Spaces list behind this sheet has the
+        // new card before the dismiss animation finishes — the background
+        // re-sync on focus then reconciles it like any other row.
+        await getStore().putSpaces([space]);
         dismiss();
         // Wait for the sheet dismiss animation to complete before navigating,
         // otherwise the simultaneous animation + navigation freezes the screen.

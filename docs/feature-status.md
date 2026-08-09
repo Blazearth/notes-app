@@ -173,6 +173,42 @@ renders that screen correctly whether the fix is right or not.
 
 ---
 
+## Data layer — how the app reads and writes
+
+The plan is [docs/local-first.md](local-first.md). **L1 and L2 landed
+2026-08-09; L3–L5 have not.**
+
+| Feature | Status | Where it stands today |
+|---|---|---|
+| Local database | ✅ Built (L1) | `app/src/local/` — a typed store with a table-scoped change bus, `sqliteStore` on native and an AsyncStorage-snapshot `memoryStore` on web (Metro platform extension, so the web bundle contains no `expo-sqlite` at all). `itemStates` is normalised into its own table so a `/search` or `/related` payload cannot erase a ticked checkbox |
+| Render-from-cache startup | ✅ Built (L1) | `SavesProvider` reads the store through `useLive` and holds the **whole** library, not page 0. Confirmed over CDP: a second load paints the feed, Continue rail, groups grid and Spaces strip within 2.5s with no spinner |
+| Reads served locally | ✅ Built (L2) | Home, Library, Spaces, Space detail, Save detail, Collection detail, Group detail, Shopping list, Settings and Workout compare all read the store. `SpacesScreen`'s per-focus N+1 is gone — members come from the store, fetched by the sync engine off the render path |
+| Groups / collections derived on-device | ✅ Built (L2) | `app/src/groups/tree.ts` + `app/src/knowledge/facets.ts` port `GroupService`/`KnowledgeFacets`; `@/collections/merge` already ported `CollectionService`. `GET /v1/groups` and `GET /v1/collections` are no longer called (both stay implemented, for `mockRepository` parity) |
+| Offline writes | ⛔ Not built (L3) | Optimistic updates now write through the store rather than component state, so they survive navigation — but they are still not durable: a crash between the local flip and the server echo loses the write, with no queue and no retry |
+| Delta sync (`GET /v1/sync?since=`) | ⛔ Not built (L4) | Sync is a full fetch-and-replace. The API still has **zero** sync primitives: no `since`, no cursor, no ETag, no tombstones, and no `saves (user_id, updated_at)` index |
+| Tombstones | ⛔ Not built (L4) | Seven hard-delete call sites leave no record. A deleted Space would live forever in any client that cached it |
+| Local search | ⛔ Not built (L5) | Search is server-only (FTS + pgvector RRF), debounced per keystroke. `enableFTS` is deliberately still unset on the `expo-sqlite` plugin until there is a consumer |
+| Image disk cache | ⛔ Not built (L5) | `SaveThumb` uses React Native's `Image`; no explicit cache policy |
+| Generalised idempotency | ⛔ Not built (L5) | `Idempotency-Key` is read by exactly one endpoint (`POST /v1/saves`, V2), and the app has never sent it. `POST /v1/spaces`, `/invites` and `/comments` each duplicate on retry |
+
+Two traps that shaped the built layer, and still bind anything added to it:
+
+- **`SaveResponse.itemStates` is populated by only three endpoints.**
+  `/search`, `/related`, `/spaces/{id}/saves` and `/groups/{id}/saves` use the
+  1-arg `SaveResponse.from` and omit it. Any cache that writes one of those
+  responses over a stored save erases every ticked checkbox. Solved by
+  normalisation rather than a merge rule: `putSaves` strips the field before
+  writing and only ever *adds* to `item_states`, so no call site has to
+  remember anything.
+- **expo-sqlite's web support is alpha** and needs Metro WASM config plus
+  COOP/COEP headers for `SharedArrayBuffer` — i.e. adopting it naively would
+  break headless Chrome on expo-web, which is this project's entire visual and
+  interaction test harness. Hence two store implementations split by a Metro
+  platform extension; the built web bundle contains no `expo-sqlite` symbols
+  at all.
+
+---
+
 ## Infrastructure
 
 | Feature | Status | What's missing |
@@ -197,6 +233,9 @@ renders that screen correctly whether the fix is right or not.
 | ~~`WEAVR_DB_POOL_MAX=3` saturates under light concurrent traffic~~ | **Fixed 2026-08-05.** Bumped to 5; not load-tested against real concurrent-save volume |
 | Android share worker can hold a stale access token | A silently dropped share, after the user already saw "Saved" |
 | Capture failure after dismissal has no surface | Warns to console; the save never appears. Needs a toast |
+| ~~Every screen refetches from zero on mount~~ | **Fixed 2026-08-09** by L1/L2 of [docs/local-first.md](local-first.md). Reads are served from the local store; `SpacesScreen`'s per-focus N+1 is gone. Writes are still network-first |
+| `sqliteStore.ts` has never run | Web resolves the memory shim and there is no device or emulator here, so the store *contract* is verified and its SQL is not |
+| No optimistic write survives a crash | The optimistic sites now write through the store, so a change survives navigation — but not a kill between the local flip and the server echo. Needs L3's outbox. `LifecycleStrip` additionally never reconciles into the store, so the feed's copy of that save goes stale |
 
 ---
 

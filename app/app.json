@@ -49,7 +49,8 @@
           }
         }
       ],
-      "./plugins/withAndroidShareReceiver"
+      "./plugins/withAndroidShareReceiver",
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true

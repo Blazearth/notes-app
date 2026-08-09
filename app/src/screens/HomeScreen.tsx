@@ -1,9 +1,11 @@
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
-import { MOCK_CATEGORIES, MOCK_SOURCE_LABELS, repo, type KnowledgeGroup } from '@/data';
+import { MOCK_CATEGORIES, MOCK_SOURCE_LABELS, type KnowledgeGroup } from '@/data';
 import type { DigestResponse, SaveResponse, Space } from '@/api/types';
+import { KV, useLiveValue } from '@/local';
+import { DERIVED_TABLES, readContinueSaves, readGroups } from '@/local/derived';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -42,6 +44,12 @@ function fallbackName(email: string | null | undefined): string {
  * quietly turns the home screen into the library.
  */
 const RECENT_LIMIT = 5;
+
+// Stable identities for the "store has nothing yet" case. A fresh `[]` each
+// render would re-run every memo below it for no change.
+const EMPTY_SAVES: SaveResponse[] = [];
+const EMPTY_SPACES: Space[] = [];
+const EMPTY_GROUPS: KnowledgeGroup[] = [];
 
 function greetingForHour(hour: number): string {
   if (hour < 12) return 'Good morning';
@@ -359,43 +367,23 @@ export function HomeScreen() {
   // only correct at the moment of the tap.
   const settingsAnchor = useRef<View | null>(null);
 
-  // Its own request rather than a filter over the feed: the rail wants what
-  // was last *touched*, which the server orders by `updated_at`, and the feed
-  // is ordered by `created_at` and paged. Filtering the first page client-side
-  // would miss anything older than 25 saves.
-  const [continueSaves, setContinueSaves] = useState<SaveResponse[]>([]);
-  const [spaces, setSpaces] = useState<Space[]>([]);
-  const [groups, setGroups] = useState<KnowledgeGroup[]>([]);
-  const [digest, setDigest] = useState<DigestResponse | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    // All four sections hide themselves when there is nothing to show, so a
-    // failure here degrades to absence rather than to an error card sitting
-    // above the feed. `allSettled` so one failing does not blank the others.
-    void Promise.allSettled([
-      repo.listSavesByLifecycle(['planned', 'started']),
-      repo.listSpaces(),
-      repo.listGroups(),
-      repo.getWeeklyDigest(),
-    ]).then(([rail, mySpaces, myGroups, weeklyDigest]) => {
-      if (cancelled) return;
-      if (rail.status === 'fulfilled') setContinueSaves(rail.value);
-      if (mySpaces.status === 'fulfilled') setSpaces(mySpaces.value);
-      if (myGroups.status === 'fulfilled') setGroups(myGroups.value);
-      // 'pending' means the server just enqueued the Gemini call this request
-      // triggered — nothing to show yet, so it renders the same as absent
-      // rather than a loading state nobody would wait around for.
-      if (weeklyDigest.status === 'fulfilled' && weeklyDigest.value.status === 'ready') {
-        setDigest(weeklyDigest.value);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-    // `refreshing` flips on every pull-to-refresh, which is also when the
-    // user expects this to be current.
-  }, [refreshing]);
+  // All four sections read the local store, and all four hide themselves when
+  // there is nothing in it — so the first frame of a warm start has the rail,
+  // the Spaces strip and the groups grid already on it, and a sync failure
+  // degrades to "slightly stale" rather than to an error card above the feed.
+  //
+  // Two of them used to be their own requests and are now derived (see
+  // `@/local/derived`): the Continue rail was `GET /v1/saves/lifecycle`
+  // because the feed was paged and filtering page 0 would miss anything older,
+  // and the groups grid was `GET /v1/groups`. With the whole library local,
+  // neither is a request any more.
+  const continueSaves = useLiveValue<SaveResponse[]>(['saves'], readContinueSaves, EMPTY_SAVES);
+  const spaces = useLiveValue<Space[]>(['spaces'], (store) => store.readSpaces(), EMPTY_SPACES);
+  const groups = useLiveValue<KnowledgeGroup[]>(DERIVED_TABLES, readGroups, EMPTY_GROUPS);
+  // `pending` is never stored (see `sync.syncDigest`), so anything here is a
+  // finished digest; `null` renders as absent rather than as a loading state
+  // nobody would wait around for.
+  const digest = useLiveValue<DigestResponse | null>(['kv'], (store) => store.readKv<DigestResponse>(KV.digest), null);
 
   return (
     <Screen
@@ -535,7 +523,7 @@ export function HomeScreen() {
       {/* Hidden until a real digest exists — 'pending' and 'empty' both
           render as absent rather than as a loading or error state, since
           nobody is waiting on this tile the way they wait on the feed. */}
-      {digest ? (
+      {digest?.status === 'ready' ? (
         <Reveal index={4}>
           <Card variant="accent" padding={spacing.lg} style={{ marginBottom: spacing.xxl - 2 }}>
             {/* On the accent container, not the page — so the label uses the

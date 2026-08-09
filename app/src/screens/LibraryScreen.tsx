@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import type { CollectionNodeResponse, SaveResponse } from '@/api/types';
@@ -14,6 +14,8 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { repo } from '@/data';
+import { useLiveValue } from '@/local';
+import { DERIVED_TABLES, readCollections } from '@/local/derived';
 import { saveTitle, STATUS_LABELS } from '@/saves/format';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { useSaves } from '@/saves/SavesProvider';
@@ -24,6 +26,9 @@ const FAVORITES = 'Favorites';
 const ARCHIVED = 'Archived';
 
 type SortKey = 'recent' | 'alphabetical';
+
+/** Stable identity for the "nothing derived yet" case — see `useLiveValue`. */
+const EMPTY_COLLECTIONS: CollectionNodeResponse[] = [];
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'recent', label: 'Recently added' },
@@ -134,23 +139,17 @@ export function LibraryScreen() {
 
   // K3: the Library's top level for entity-bearing types (recommendation_list,
   // itinerary, checklist) renders collections, not save rows — see
-  // docs/knowledge-collections.md. Fetched independently of `useSaves()`
-  // because it is a different derived view of the same saves, not a list of
-  // saves itself.
-  const [collections, setCollections] = useState<CollectionNodeResponse[]>([]);
-  const loadCollections = useCallback(() => {
-    repo
-      .listCollections()
-      .then(setCollections)
-      .catch(() => setCollections([]));
-  }, []);
-  useEffect(() => {
-    loadCollections();
-  }, [loadCollections]);
+  // docs/knowledge-collections.md.
+  //
+  // No longer `GET /v1/collections`. It is a *different derived view of the
+  // same saves*, and both the saves and the K2 entity state that gives it
+  // `doneCount` are already local — so it is computed from them, by the same
+  // merge core the server runs (`@/collections/merge`), and updates the instant
+  // a save or an entity state changes rather than on the next refetch.
+  const collections = useLiveValue<CollectionNodeResponse[]>(DERIVED_TABLES, readCollections, EMPTY_COLLECTIONS);
   const onRefresh = useCallback(() => {
     void refresh();
-    loadCollections();
-  }, [refresh, loadCollections]);
+  }, [refresh]);
 
   // A type only leaves the ordinary flat list once it actually produced a
   // collection — a recommendation_list save with no usable items (all
