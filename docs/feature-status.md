@@ -108,6 +108,9 @@ motion blur and stylised fonts are exactly where tesseract fails hard.
 | Spaces — CRUD, roles, invites | ✅ Done | Authorisation verified live, including 404-vs-403 |
 | Spaces — comments, votes, activity | ✅ Done | Verified live |
 | Spaces — duplicate detection | 🟠 Unverified | The 0.15 threshold is a guess; no two real saves compared |
+| Spaces — knowledge-first IA (S0) | 🟠 Unverified | [docs/knowledge-spaces.md](knowledge-spaces.md). Saves→Sources rename, an Overview tab leading the strip, and default-tab-by-whether-the-Space-merges. App-only: the collections are derived from the local store by the same merge core the server runs, so S0 needed no endpoint. Driven through headless Chrome against mock data (26 checks) plus 29 node-standalone assertions; never run on a device |
+| Spaces — space-scoped collections (S1) | ⛔ Not built | `CollectionService` needs a scope parameter and two `/v1/spaces/{id}/collections` endpoints. The client already derives this locally; what only the server can add is `addedBy` — a save's owner is not on `SaveResponse` |
+| Spaces — shared progress + merged list (S2) | ⛔ Not built | The batched all-members `entity_states` read, per-member rollups, and the discussion block. Blocks the Overview from showing a watchlist or any done count — with only the viewer's own global state, "1 watched" reads as a claim about the group. Carries an undecided disclosure question (see the doc) |
 | Spaces — live two-device sync | ⛔ Not built | Phase 6 exit criterion. No Realtime |
 | Lifecycle (saved → completed) | ✅ Done | Backend verified live; the mobile strip has never run on a device |
 

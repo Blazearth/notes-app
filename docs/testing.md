@@ -97,6 +97,22 @@ that says `UNSENT CHANGES`. Match case-insensitively (`/unsent changes/i.test`) 
 the assertion tests the stylesheet. Worth knowing in both directions: an assertion
 that something is *absent* passes for the wrong reason here.
 
+**`document.body.innerText` is the whole shell, not the screen under test.**
+`app/index.tsx` keeps Home, Library and Spaces mounted as panes — so a check run
+on the Spaces tab also sees Library's "12 saves" and its collection cards'
+"3 titles · 2 sources". The first pass of the knowledge-spaces S0 probe both
+passed and failed against strings belonging to a different pane, which is worse
+than failing: it reads as a bug in the feature. Scope every read — navigate
+straight to a screen that owns its own route (`/space/{id}` gives a clean
+document), and query list items by their `aria-label` rather than by body text.
+
+**React Native Web does not emit `aria-selected`.** `accessibilityState={{
+selected }}` on a `Pressable` — what `Segmented` uses for its tabs — produces
+`role="tab"` with no `aria-selected` attribute at all, so every tab reads
+`null` and a "which tab is open" assertion silently checks nothing. Assert on
+the rendered *content* of the open tab instead; it is what the user sees, and
+it also catches a tab that is selected but renders the wrong body.
+
 **Three things a CDP run can check that a screenshot cannot, and they are where
 the bugs are:** `localStorage` (the local-first store's snapshot is a plain JSON
 blob — every claim about what was persisted, and what was deliberately *not*,

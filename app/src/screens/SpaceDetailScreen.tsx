@@ -1,11 +1,11 @@
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, RefreshControl, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
-import { useLiveValue } from '@/local';
+import { useLive, useLiveValue } from '@/local';
 import { sync } from '@/local/sync';
 import type {
   ActivityEntry,
@@ -24,11 +24,21 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Segmented } from '@/components/Segmented';
 import { Touchable } from '@/components/Touchable';
+import { collectionTypeMeta } from '@/collections/collectionMeta';
 import { relativeTime } from '@/saves/format';
+import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { spaceIdentity } from '@/spaces/spaceMeta';
+import { buildSpaceOverview, spaceDefaultTab, type SpaceOverview } from '@/spaces/spaceOverview';
 import { useTheme } from '@/theme/ThemeProvider';
 
-type TabValue = 'saves' | 'people' | 'activity';
+/**
+ * S0 of `docs/knowledge-spaces.md`: Overview leads, and **Saves is renamed
+ * Sources everywhere it shows**. The rename is the mental-model statement, not
+ * a label tweak — a Space's saves are the evidence behind its knowledge, not
+ * the product. App copy only: `/v1/saves` and every payload field keep their
+ * names, since a breaking rename buys nothing.
+ */
+type TabValue = 'overview' | 'sources' | 'people' | 'activity';
 
 /** Stable identities for the "store has nothing yet" case — see `useLiveValue`. */
 const EMPTY_SAVES: SaveResponse[] = [];
@@ -133,11 +143,98 @@ function DuplicateCard({
   );
 }
 
+/** One number and what it counts. Deliberately flat — a Space is not a dashboard. */
+function StatTile({ value, label }: { value: number; label: string }) {
+  const { radius, spacing } = useTheme();
+  return (
+    <Card radius={radius.md} padding={spacing.md} style={{ flex: 1, minWidth: 84 }}>
+      <AppText variant="title">{value}</AppText>
+      <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 1 }}>
+        {label}
+      </AppText>
+    </Card>
+  );
+}
+
+/**
+ * A derived collection, as a summary row.
+ *
+ * **Not tappable, on purpose.** The merged entity list behind this row is S2,
+ * and the existing `/collection/[type]` screen renders the *viewer's whole
+ * library*, not this Space — sending a Space's row there would show a
+ * different set of entities under the Space's heading. A row that goes nowhere
+ * is better than one that goes somewhere wrong; it becomes tappable when the
+ * Space-scoped list exists to receive it.
+ */
+function CollectionSummaryRow({ summary }: { summary: SpaceOverview['collections'][number] }) {
+  const { radius, spacing } = useTheme();
+  const typeMeta = saveTypeMeta(summary.type);
+  const collMeta = collectionTypeMeta(summary.type);
+  const counts = [
+    `${summary.entityCount} ${collMeta.entityNoun(summary.entityCount)}`,
+    `${summary.sourceCount} ${summary.sourceCount === 1 ? 'source' : 'sources'}`,
+  ].join(' · ');
+
+  return (
+    <Card radius={radius.md}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
+        <View
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: radius.sm,
+            backgroundColor: `${typeMeta.color}26`,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Glyph name={typeMeta.glyph} size={16} weight={2} color={typeMeta.color} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <AppText variant="cardTitle" numberOfLines={1}>
+            {summary.name}
+          </AppText>
+          <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
+            {counts}
+          </AppText>
+        </View>
+      </View>
+    </Card>
+  );
+}
+
+/** What the Space actually holds, by knowledge type — the honest line for content that does not merge. */
+function TypeChip({ type, count }: { type: string; count: number }) {
+  const { palette, radius, spacing } = useTheme();
+  const meta = saveTypeMeta(type);
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.xs,
+        paddingVertical: spacing.xs,
+        paddingHorizontal: spacing.smd,
+        borderRadius: radius.pill,
+        backgroundColor: palette.surfaceVariant,
+      }}
+    >
+      <Glyph name={meta.glyph} size={12} weight={2} color={meta.color} />
+      <AppText variant="caption" tone="muted" style={{ fontSize: 11.5 }}>
+        {meta.label} · {count}
+      </AppText>
+    </View>
+  );
+}
+
 export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   const { palette, radius, spacing } = useTheme();
   const router = useRouter();
 
-  const [tab, setTab] = useState<TabValue>('saves');
+  // `null` means "nobody has chosen", which is what lets the default below be a
+  // computed opinion rather than a value written into state once at mount and
+  // then wrong. A tap pins it for the rest of the visit.
+  const [picked, setPicked] = useState<TabValue | null>(null);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [duplicates, setDuplicates] = useState<DuplicateSuggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -148,12 +245,16 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   // The Space, its saves and its members read the local store, so arriving here
   // from the Spaces list paints the header and the saves tab on the first frame.
   const space = useLiveValue<Space | null>(['spaces'], (store) => store.readSpace(spaceId), null, [spaceId]);
-  const saves = useLiveValue<SaveResponse[]>(
+  // `useLive` rather than `useLiveValue` here alone: the default tab is a
+  // function of these saves, so it has to wait for the first read to resolve.
+  // Deciding against an empty list and re-deciding a frame later would move the
+  // tab strip under the user's thumb.
+  const { data: savesData, loading: savesLoading } = useLive<SaveResponse[]>(
     ['saves'],
     (store) => store.readFeed({ spaceId }),
-    EMPTY_SAVES,
     [spaceId],
   );
+  const saves = savesData ?? EMPTY_SAVES;
   const members = useLiveValue<SpaceMember[]>(
     ['space_members'],
     (store) => store.readSpaceMembers(spaceId),
@@ -197,6 +298,21 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   }, [load]);
 
   const canEdit = space?.myRole === 'owner' || space?.myRole === 'editor';
+
+  // Derived from saves already in the store — no request, no AI. See
+  // `@/spaces/spaceOverview` for what S0 deliberately stops short of.
+  const overview = useMemo(
+    () => buildSpaceOverview({ saves, memberCount: space?.memberCount ?? 0 }),
+    [saves, space?.memberCount],
+  );
+  const tab: TabValue = picked ?? spaceDefaultTab(overview);
+  /** "Titles" reads better than "Items" when there is exactly one collection to name. */
+  const entityLabel =
+    overview.collections.length === 1
+      ? collectionTypeMeta(overview.collections[0].type).entityNoun(overview.entityCount)
+      : overview.entityCount === 1
+        ? 'item'
+        : 'items';
 
   const onInvite = useCallback(async () => {
     try {
@@ -247,7 +363,10 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
     );
   }
 
-  if (!space) {
+  // `savesLoading` is a *local* read, not a network one, so this gate costs a
+  // frame at most — and it is what makes the default tab decided once rather
+  // than corrected in front of the user.
+  if (!space || savesLoading) {
     return (
       <Screen>
         <View style={{ paddingVertical: spacing.xxl, alignItems: 'center' }}>
@@ -297,7 +416,7 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
           <View style={{ flex: 1 }}>
             <AppText variant="title">{space.name}</AppText>
             <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
-              {space.saveCount} {space.saveCount === 1 ? 'save' : 'saves'} · {space.memberCount}{' '}
+              {space.saveCount} {space.saveCount === 1 ? 'source' : 'sources'} · {space.memberCount}{' '}
               {space.memberCount === 1 ? 'member' : 'members'} · you are {space.myRole}
             </AppText>
           </View>
@@ -321,17 +440,85 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       <Reveal index={3} style={{ marginBottom: spacing.xl }}>
         <Segmented
           options={[
-            { value: 'saves', label: 'Saves' },
+            { value: 'overview', label: 'Overview' },
+            { value: 'sources', label: 'Sources' },
             { value: 'people', label: 'People' },
             { value: 'activity', label: 'Activity' },
           ]}
           value={tab}
-          onChange={setTab}
+          onChange={setPicked}
         />
       </Reveal>
 
-      {tab === 'saves' ? (
-        <Reveal key="saves">
+      {tab === 'overview' ? (
+        <Reveal key="overview">
+          {overview.sourceCount === 0 ? (
+            <Card>
+              <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
+                Nothing to build on yet
+              </AppText>
+              <AppText variant="caption" tone="muted">
+                {canEdit
+                  ? 'Everything anyone saves in here gets pulled together on this tab.'
+                  : 'Once an editor adds something, what the group is collecting shows up here.'}
+              </AppText>
+            </Card>
+          ) : (
+            <>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+                {overview.entityCount > 0 ? (
+                  <StatTile value={overview.entityCount} label={entityLabel} />
+                ) : null}
+                <StatTile
+                  value={overview.sourceCount}
+                  label={overview.sourceCount === 1 ? 'source' : 'sources'}
+                />
+                <StatTile
+                  value={overview.memberCount}
+                  label={overview.memberCount === 1 ? 'person' : 'people'}
+                />
+                {overview.workingCount > 0 ? (
+                  <StatTile value={overview.workingCount} label="processing" />
+                ) : null}
+              </View>
+
+              {overview.collections.length > 0 ? (
+                <View style={{ marginTop: spacing.xl }}>
+                  <SectionLabel>What the group is collecting</SectionLabel>
+                  <View style={{ gap: spacing.sm }}>
+                    {overview.collections.map((summary) => (
+                      <CollectionSummaryRow key={summary.type} summary={summary} />
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+
+              {overview.types.length > 0 ? (
+                <View style={{ marginTop: spacing.xl }}>
+                  <SectionLabel>What&rsquo;s in here</SectionLabel>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+                    {overview.types.map((entry) => (
+                      <TypeChip key={entry.type} type={entry.type} count={entry.count} />
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+
+              {/* Honest about the one thing the counts above can't be: a save
+                  that failed contributed nothing to any of them. */}
+              {overview.failedCount > 0 ? (
+                <AppText variant="caption" tone="muted" style={{ marginTop: spacing.lg }}>
+                  {overview.failedCount} {overview.failedCount === 1 ? 'source' : 'sources'} could not
+                  be read — see the Sources tab.
+                </AppText>
+              ) : null}
+            </>
+          )}
+        </Reveal>
+      ) : null}
+
+      {tab === 'sources' ? (
+        <Reveal key="sources">
           {saves.length === 0 ? (
             <Card>
               <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
@@ -340,7 +527,7 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
               <AppText variant="caption" tone="muted">
                 {canEdit
                   ? 'Save something into this Space from the Capture sheet.'
-                  : 'You can read and comment here. An editor can add saves.'}
+                  : 'You can read and comment here. An editor can add sources.'}
               </AppText>
             </Card>
           ) : (

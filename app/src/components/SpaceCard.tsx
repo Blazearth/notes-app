@@ -36,7 +36,7 @@ function RoleBadge({ role }: { role: Space['myRole'] }) {
 export interface SpaceCardProps {
   space: Space;
   members?: SpaceMember[];
-  /** Most recent saves, newest first — omitted while still loading. */
+  /** Most recent sources, newest first — omitted while still loading. */
   recentSaves?: SaveResponse[];
   onPress: () => void;
 }
@@ -46,14 +46,17 @@ export interface SpaceCardProps {
  * this replaces. One card communicates what the previous list needed a tap to
  * find out: what it's about (icon + colour, from `spaceIdentity`), who's in it
  * (avatar stack), how alive it is (last activity), and what's actually inside
- * (the two most recent saves).
+ * (the two most recent sources).
  */
 export function SpaceCard({ space, members, recentSaves, onPress }: SpaceCardProps) {
   const { palette, radius, spacing, layout } = useTheme();
   const identity = spaceIdentity(space);
 
+  // "Sources", not "saves" — see `SpaceDetailScreen`'s `TabValue`. Inside a
+  // Space a save is evidence behind the group's knowledge, and the vocabulary
+  // has to agree with the tab the card opens onto.
   const counts = [
-    `${space.saveCount} ${space.saveCount === 1 ? 'save' : 'saves'}`,
+    `${space.saveCount} ${space.saveCount === 1 ? 'source' : 'sources'}`,
     `${space.memberCount} ${space.memberCount === 1 ? 'member' : 'members'}`,
   ].join(' · ');
 

@@ -217,7 +217,7 @@ Overview loses two lines of garnish.
 ## Phases
 
 ```
-S0  rename + tab scaffold            (app only, no server change)
+S0  rename + tab scaffold            ✅ landed 2026-08-09 (app only, no server change)
 S1  space-scoped collections         (depends: collections K1)
 S2  Overview v1: merged list + states + stats + discussion-from-comments
                                      (depends: S1, collections K2)
@@ -227,14 +227,80 @@ S5  from-your-library suggestions    (depends: K1 personal + S1)
 S6  AI summary + novel suggestions   (budget line first, or not at all)
 ```
 
-- **S0 — rename and scaffold.** Sources tab label + copy sweep, Overview tab
-  added rendering only what needs no new server work: stats over the saves
-  the Space screen already fetches, and the recent-comments block if the
-  detail payload already carries comments (else it waits for S2). Ship the
-  frame early so the IA change gets real use before the heavy sections land.
-  Verification: headless Chrome, `USE_MOCK_DATA`, the CDP click-through
-  recipe (docs/testing.md) — tab switching, default-tab logic for empty
-  Spaces.
+- **S0 — rename and scaffold. ✅ Landed 2026-08-09.** Sources tab label + copy
+  sweep, Overview tab added rendering only what needs no new server work:
+  stats over the saves the Space screen already fetches, and the
+  recent-comments block if the detail payload already carries comments (else
+  it waits for S2). Ship the frame early so the IA change gets real use before
+  the heavy sections land. Verification: headless Chrome, `USE_MOCK_DATA`, the
+  CDP click-through recipe (docs/testing.md) — tab switching, default-tab
+  logic for empty Spaces.
+
+  **What shipped, and the four calls made while building it:**
+
+  - **The Space's collections are derived client-side, not fetched.** The app
+    has been deriving `GET /v1/collections` locally since L2 (`@/local/derived`
+    over `@/collections/merge`), so a Space-scoped collection is the same pure
+    merge over a different save set — no request, no AI, no server change,
+    which is exactly S0's constraint. S1 does not replace this so much as give
+    the *server* the same capability (and with it `addedBy`, which the client
+    cannot derive because a save's owner is not on `SaveResponse`).
+    `@/spaces/spaceOverview.ts` is the model, following S2's own naming note
+    and the `detailModel` convention.
+  - **The recent-comments block waited for S2, per the doc's own condition.**
+    The Space detail payload carries no comments — `listComments` is per-save,
+    so surfacing "recent discussion" at S0 would have meant one request per
+    save in the Space. Left out rather than approximated from the `commented`
+    rows in the activity feed.
+  - **No done counts on the Overview.** `entity_states` is per
+    `(user_id, entity_key)` and global, so the only count available without
+    S2's batched all-members read is the *viewer's own* — and "1 watched" on a
+    group's Overview reads as a claim about the group. Pinned by a CDP
+    assertion that the word "watched" does not appear.
+  - **The collection summary row is deliberately not tappable.** The merged
+    entity list is S2's, and the existing `/collection/[type]` screen renders
+    the viewer's *whole library*, so routing a Space's row there would show a
+    different set of entities under the Space's heading. An affordance that
+    goes somewhere wrong is worse than none; it becomes tappable when the
+    Space-scoped list exists to receive it.
+
+  **A mock-fixture bug found on the way, worth carrying forward:** no
+  `MOCK_SAVES` entry carried a `spaceId`, while `mockRepository` held a
+  separate `spaceSaves` map declaring which saves were in which Space. Every
+  screen reading the local store (`readFeed({ spaceId })`, which filters on the
+  save's own field) therefore saw every Space as empty — a shape the pipeline
+  cannot produce, and a second source of truth that was silently wrong in one
+  direction. Fixed by putting `spaceId` on the saves and deleting the map, so
+  `listSpaceSaves` filters exactly like `SaveService` does. `sp-anime` was
+  added as the fixture for a Space whose sources *merge* (the two overlapping
+  `recommendation_list` saves, "Blue Box" in both), which is what makes both
+  sides of the default-tab rule testable at all; `MOCK_SPACES`' `saveCount`s
+  were corrected to match the fixtures rather than claiming 12 over a list of 2.
+
+  **Verified:** app typechecks (including `--noUnusedLocals`, no new findings),
+  `expo export --platform web` bundles clean, **29 node-standalone assertions**
+  over `spaceOverview.ts` (compiled alone and executed, this repo's technique
+  for logic with no test runner — covering the merge-not-sum count, distinctness
+  across types, a nested collection whose entities all sit in a subgroup, both
+  sides of `spaceDefaultTab`, and status filtering), and **26 CDP checks**
+  driving the real app on `expo start --web` with `USE_MOCK_DATA` flipped on
+  locally (restored to `false` afterwards): the rename on the list and the
+  header, the four tabs in order, Overview opening by default on the merging
+  Space and Sources on the two that don't, "3 titles · 2 sources" against 4
+  items over 2 saves, tab switching in both directions, and the singular copy on
+  a one-source Space. **Not run on a device**, same standing caveat as the rest
+  of the app's UI work.
+
+  **One probe finding worth reusing:** React Native Web does **not** map
+  `accessibilityState={{ selected }}` on a `Pressable` to `aria-selected` —
+  every `role="tab"` reports `null`, so "which tab is open" has to be asserted
+  from rendered content, never the attribute. And the shell (`app/index.tsx`)
+  keeps Home, Library and Spaces mounted as panes, so `document.body.innerText`
+  on the Spaces tab also contains Library's "12 saves" and its collection
+  cards' "3 titles · 2 sources" — the first pass of this probe passed *and*
+  failed for reasons that had nothing to do with the screen under test. Scope
+  every read: navigate straight to `/space/{id}` (its own route, clean
+  document), and query list cards by their `aria-label`.
 - **S1 — server merge.** The `CollectionService` scope parameter, two
   endpoints, `addedBy` attribution. Tests mirror `GroupServiceTest` plus one
   pinned regression: two members saving Reels that share an entity produce

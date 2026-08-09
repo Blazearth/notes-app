@@ -24,7 +24,7 @@ export interface SegmentedProps<T extends string> {
 }
 
 /**
- * The Spaces tab strip (Saves / Chat / Tasks / Calendar), reused in Settings.
+ * The Spaces tab strip (Overview / Sources / People / Activity), reused in Settings.
  *
  * The selected fill is a single thumb that *travels* to the tapped segment
  * rather than a background that switches on whichever segment is active. That

@@ -94,7 +94,6 @@ const activity: Record<string, ActivityEntry[]> = copy(MOCK_ACTIVITY);
 const comments: Record<string, SaveComment[]> = copy(MOCK_COMMENTS);
 const shoppingList: ShoppingListResponse = copy(MOCK_SHOPPING_LIST);
 const votes: Record<string, number> = {};
-const spaceSaves: Record<string, string[]> = { 'sp-japan': ['sv-02', 'sv-06'], 'sp-book': ['sv-10'] };
 /** K2 entity state, keyed by `Entities.key`'s output — mirrors `entity_states`. */
 const entityStates: Record<string, Record<string, unknown>> = {};
 
@@ -440,7 +439,6 @@ export const mockRepository: Repository = {
     spaces.push(space);
     members[space.id] = [{ userId: MOCK_USER_ID, displayName: 'Maya', role: 'owner', joinedAt: now() }];
     activity[space.id] = [];
-    spaceSaves[space.id] = [];
     return delay(copy(space));
   },
 
@@ -457,9 +455,15 @@ export const mockRepository: Repository = {
     return delay(undefined);
   },
 
+  /**
+   * Filtered on the save's own `spaceId`, exactly like `SaveService`'s
+   * `findBySpaceId` — not a side table mapping space → save ids. A second
+   * source of truth here was silently wrong in one direction: the map said a
+   * save was in a Space while the save itself did not, and the local store
+   * (which filters on the save) therefore showed the Space as empty.
+   */
   listSpaceSaves(id: string, page = 0, size = 25): Promise<SaveResponse[]> {
-    const ids = spaceSaves[id] ?? [];
-    const inSpace = saves.filter((s) => ids.includes(s.id));
+    const inSpace = saves.filter((s) => s.spaceId === id);
     return delay(copy(inSpace.slice(page * size, page * size + size)));
   },
 

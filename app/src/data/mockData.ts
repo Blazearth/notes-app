@@ -188,6 +188,11 @@ export const MOCK_SAVES: SaveResponse[] = [
     id: 'sv-02',
     sourceType: 'url',
     sourceUrl: 'https://kyotofoodie.com/matcha-cafes',
+    // A save carries its own `spaceId` server-side, which is what
+    // `readFeed({ spaceId })` filters on — a save that is in a Space but does
+    // not say so is a shape the pipeline cannot produce, and it left every
+    // Space's Sources tab empty in mock mode.
+    spaceId: 'sp-japan',
     status: 'ready',
     favorite: true,
     archived: false,
@@ -291,6 +296,7 @@ export const MOCK_SAVES: SaveResponse[] = [
     id: 'sv-06',
     sourceType: 'url',
     sourceUrl: 'https://www.nytimes.com/interactive/kyoto-walks',
+    spaceId: 'sp-japan',
     status: 'ready',
     favorite: false,
     archived: false,
@@ -348,6 +354,7 @@ export const MOCK_SAVES: SaveResponse[] = [
     id: 'sv-10',
     sourceType: 'url',
     sourceUrl: 'https://www.goodreads.com/book/pachinko',
+    spaceId: 'sp-book',
     status: 'ready',
     favorite: false,
     archived: false,
@@ -368,6 +375,12 @@ export const MOCK_SAVES: SaveResponse[] = [
     id: 'sv-11',
     sourceType: 'url',
     sourceUrl: 'https://www.tiktok.com/@anime/video/romance-top-5',
+    // Both overlapping-entity saves live in `sp-anime`, which makes that Space
+    // the S0 fixture for a Space whose sources *merge*: two members' Reels, one
+    // watchlist, "Blue Box" appearing once with two sources. Its counterpart
+    // `sp-japan` holds only unmergeable types, so between them the two Spaces
+    // cover both sides of `spaceDefaultTab`.
+    spaceId: 'sp-anime',
     status: 'ready',
     favorite: false,
     archived: false,
@@ -409,6 +422,7 @@ export const MOCK_SAVES: SaveResponse[] = [
     id: 'sv-12',
     sourceType: 'url',
     sourceUrl: 'https://www.instagram.com/reel/anime-watchlist-2026',
+    spaceId: 'sp-anime',
     status: 'ready',
     favorite: false,
     archived: false,
@@ -476,7 +490,24 @@ export const MOCK_CATEGORIES: Record<string, string> = {
   'sv-12': 'Watchlist',
 };
 
+/**
+ * `saveCount` and `memberCount` match the fixtures that actually exist below —
+ * a Space claiming 12 sources over a list of 2 is the same kind of lie
+ * `itemCount` is derived to avoid, and it makes the Overview's stat tiles
+ * disagree with the Sources tab beside them.
+ */
 export const MOCK_SPACES: Space[] = [
+  {
+    id: 'sp-anime',
+    name: 'Anime Night',
+    type: 'movies',
+    ownerId: 'mock-user-sam',
+    myRole: 'editor',
+    memberCount: 3,
+    saveCount: 2,
+    createdAt: daysAgo(14),
+    lastActivityAt: hoursAgo(6),
+  },
   {
     id: 'sp-japan',
     name: 'Japan Trip',
@@ -484,7 +515,7 @@ export const MOCK_SPACES: Space[] = [
     ownerId: MOCK_USER_ID,
     myRole: 'owner',
     memberCount: 4,
-    saveCount: 12,
+    saveCount: 2,
     createdAt: daysAgo(21),
     lastActivityAt: hoursAgo(4),
   },
@@ -494,14 +525,19 @@ export const MOCK_SPACES: Space[] = [
     type: 'general',
     ownerId: 'mock-user-sam',
     myRole: 'editor',
-    memberCount: 6,
-    saveCount: 9,
+    memberCount: 2,
+    saveCount: 1,
     createdAt: daysAgo(40),
     lastActivityAt: daysAgo(9),
   },
 ];
 
 export const MOCK_MEMBERS: Record<string, SpaceMember[]> = {
+  'sp-anime': [
+    { userId: 'mock-user-sam', displayName: 'Sam', role: 'owner', joinedAt: daysAgo(14) },
+    { userId: MOCK_USER_ID, displayName: 'Maya', role: 'editor', joinedAt: daysAgo(13) },
+    { userId: 'mock-user-ana', displayName: 'Ana', role: 'editor', joinedAt: daysAgo(5) },
+  ],
   'sp-japan': [
     { userId: MOCK_USER_ID, displayName: 'Maya', role: 'owner', joinedAt: daysAgo(21) },
     { userId: 'mock-user-sam', displayName: 'Sam', role: 'editor', joinedAt: daysAgo(20) },
@@ -515,6 +551,11 @@ export const MOCK_MEMBERS: Record<string, SpaceMember[]> = {
 };
 
 export const MOCK_ACTIVITY: Record<string, ActivityEntry[]> = {
+  'sp-anime': [
+    { id: 'ac-5', userId: MOCK_USER_ID, displayName: 'Maya', saveId: 'sv-12', saveTitle: 'Underrated Romance Anime Nobody Talks About', type: 'save_added', createdAt: hoursAgo(6) },
+    { id: 'ac-6', userId: 'mock-user-sam', displayName: 'Sam', saveId: 'sv-11', saveTitle: 'Top 5 Romance Anime This Season', type: 'save_added', createdAt: daysAgo(1) },
+    { id: 'ac-7', userId: 'mock-user-ana', displayName: 'Ana', type: 'member_joined', createdAt: daysAgo(5) },
+  ],
   'sp-japan': [
     { id: 'ac-1', userId: 'mock-user-sam', displayName: 'Sam', saveId: 'sv-02', saveTitle: 'Kyoto Cafe List', type: 'save_added', createdAt: hoursAgo(4) },
     { id: 'ac-2', userId: 'mock-user-ana', displayName: 'Ana', saveId: 'sv-06', saveTitle: 'Three Walks Through Kyoto', type: 'save_completed', createdAt: daysAgo(1) },
