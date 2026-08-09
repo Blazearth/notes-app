@@ -1,5 +1,6 @@
 package com.weavr.api.save;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -50,6 +51,29 @@ public interface SaveRepository extends JpaRepository<Save, UUID> {
      * misreport work still in progress as a finished category.
      */
     List<Save> findByUserIdAndStatusOrderByCreatedAtDesc(UUID userId, SaveStatus status);
+
+    /**
+     * The delta window for {@code GET /v1/sync}, ascending so the last row is
+     * the page's cursor. Served by {@code saves_user_updated_idx} (V15) — V1's
+     * index is on {@code created_at} and cannot serve this.
+     *
+     * <p>Strictly {@code >}, because the caller's cursor is a timestamp the
+     * server itself handed out and a row exactly at it has already been
+     * delivered. One extra row past the page size is fetched to detect overflow
+     * — see {@link com.weavr.api.sync.SyncWindow}.
+     */
+    List<Save> findByUserIdAndUpdatedAtGreaterThanOrderByUpdatedAtAsc(
+            UUID userId, Instant since, Pageable pageable);
+
+    /**
+     * The same window, closed on a whole-timestamp boundary and unpaged.
+     *
+     * <p>Unpaged deliberately: the bound is inclusive so that every row sharing
+     * the boundary timestamp is delivered together, and a limit here would put
+     * back exactly the mid-group split the boundary exists to avoid.
+     */
+    List<Save> findByUserIdAndUpdatedAtGreaterThanAndUpdatedAtLessThanEqualOrderByUpdatedAtAsc(
+            UUID userId, Instant since, Instant until);
 
     /**
      * A specific set of the caller's saves, for the group tree's item lists.

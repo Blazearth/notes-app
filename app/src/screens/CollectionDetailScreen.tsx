@@ -3,9 +3,9 @@ import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Image, Modal, ScrollView, View } from 'react-native';
 
 import type { CollectionEntityResponse, CollectionNodeResponse } from '@/api/types';
-import { getStore, useLiveValue } from '@/local';
+import { useLiveValue } from '@/local';
 import { DERIVED_TABLES, readCollectionEntities, readCollections } from '@/local/derived';
-import { sync } from '@/local/sync';
+import { writeEntityState } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -14,7 +14,6 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { collectionTypeMeta } from '@/collections/collectionMeta';
-import { repo } from '@/data';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -279,26 +278,16 @@ export function CollectionDetailScreen({ type }: { type: string }) {
    * save's own detail screen all read `entity_states`, so one write updates
    * every one of them without any of them knowing about the others.
    */
-  const writeEntityState = useCallback((entity: CollectionEntityResponse, nextState: Record<string, unknown>) => {
-    const previous = entity.state;
-    void getStore().putEntityStates({ [entity.entityKey]: nextState });
-    repo.setEntityState(entity.entityKey, nextState).then(
-      (echoed) => void getStore().putEntityStates({ [entity.entityKey]: echoed }),
-      () => {
-        // Full replace both ways (`EntityStateService`'s own contract), so
-        // putting the previous value back is exact rather than a guess.
-        if (previous) void getStore().putEntityStates({ [entity.entityKey]: previous });
-        else void sync.syncEntityStates();
-      },
-    );
+  const setEntityState = useCallback((entity: CollectionEntityResponse, nextState: Record<string, unknown>) => {
+    writeEntityState(entity.entityKey, nextState);
   }, []);
   const toggleDone = useCallback(
-    (entity: CollectionEntityResponse) => writeEntityState(entity, { ...entity.state, done: entity.state?.done !== true }),
-    [writeEntityState],
+    (entity: CollectionEntityResponse) => setEntityState(entity, { ...entity.state, done: entity.state?.done !== true }),
+    [setEntityState],
   );
   const rate = useCallback(
-    (entity: CollectionEntityResponse, rating: number) => writeEntityState(entity, { ...entity.state, rating }),
-    [writeEntityState],
+    (entity: CollectionEntityResponse, rating: number) => setEntityState(entity, { ...entity.state, rating }),
+    [setEntityState],
   );
   /**
    * K4: pinning rides `entity_states`' existing `state` jsonb (`state.pinned`)
@@ -308,8 +297,8 @@ export function CollectionDetailScreen({ type }: { type: string }) {
    */
   const togglePin = useCallback(
     (entity: CollectionEntityResponse) =>
-      writeEntityState(entity, { ...entity.state, pinned: entity.state?.pinned !== true }),
-    [writeEntityState],
+      setEntityState(entity, { ...entity.state, pinned: entity.state?.pinned !== true }),
+    [setEntityState],
   );
 
   // No error branch any more: reading a derived view of local data cannot

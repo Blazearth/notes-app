@@ -189,7 +189,7 @@ export function SpacesScreen() {
     EMPTY_RECENT,
   );
 
-  const task = useTaskStatus('spaces', (spaces?.length ?? 0) > 0);
+  const task = useTaskStatus('delta', (spaces?.length ?? 0) > 0);
   const error = task.error && !spaces?.length ? task.error.message : null;
 
   // Still re-synced on focus, and still for the original reason: creating or

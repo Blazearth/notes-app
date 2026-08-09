@@ -17,14 +17,12 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ApiError } from '@/api/client';
-import { repo } from '@/data';
+import { writeCreateSave } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { Glyph } from '@/components/Glyph';
 import { Touchable } from '@/components/Touchable';
 import { CAPTURE_OPTIONS, CAPTURE_SUBTITLE, type CaptureOption } from '@/data/sampleContent';
 import { useHaptic } from '@/motion/haptics';
-import { useSaves } from '@/saves/SavesProvider';
 import { Spring, staggerDelay } from '@/theme/motion';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -199,7 +197,6 @@ export function CaptureSheet() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const router = useRouter();
-  const { prepend } = useSaves();
   const haptic = useHaptic();
 
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -350,18 +347,18 @@ export function CaptureSheet() {
     setBusyId(null);
     dismiss();
 
-    void repo
-      .createSave({ sourceType: 'url', sourceUrl: clipboard })
-      .then(prepend)
-      .catch((e: unknown) => {
-        // The sheet is gone, so this cannot be shown where it was raised. The
-        // save simply never appears in the feed, which understates the problem
-        // — a transient surface for post-dismissal failures is the missing
-        // piece here, and it does not exist yet.
-        haptic('error');
-        console.warn('[capture] save failed:', e instanceof ApiError ? e.message : e);
-      });
-  }, [dismiss, haptic, prepend]);
+    // Local first: the card is in the feed before this function returns, with a
+    // `local:` id and `status: 'processing'` — which is honest either way, since
+    // the server's own 202 says exactly that. The POST is queued and retried
+    // until it lands, at which point the store moves the row onto the real id.
+    //
+    // This also closes the gap the old version documented and could not fix: a
+    // failure after dismissal had no surface to report on, so a save that failed
+    // simply never appeared. Nothing is lost now — a queued write survives a
+    // dead connection and even an app restart, and the only thing that can stop
+    // it is the server rejecting it outright, which `useOutbox` reports.
+    writeCreateSave({ sourceType: 'url', sourceUrl: clipboard });
+  }, [dismiss, haptic]);
 
   // `pasteLink` has to be stable too, or this changes every render and the
   // `React.memo` on the tiles is decorative.

@@ -39,6 +39,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     }
 
     setReady(false);
+    let stop: (() => void) | null = null;
     void sync
       .bootstrap(userId)
       .catch(() => {
@@ -47,6 +48,11 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       .then(() => {
         if (cancelled) return;
         setReady(true);
+        // The triggers: foregrounding and connectivity coming back. Registered
+        // here rather than inside the engine's constructor because they are
+        // per-signed-in-session — a listener that outlived a sign-out would sync
+        // as nobody.
+        stop = sync.start();
         // Fire-and-forget: every task writes to the store, and every screen is
         // already subscribed to what it reads.
         void sync.syncAll();
@@ -54,8 +60,24 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       cancelled = true;
+      stop?.();
     };
   }, [userId]);
+
+  /**
+   * A refreshed token un-pauses the outbox.
+   *
+   * The queue pauses rather than failing on a 401 because nothing in it can
+   * succeed until the session is valid again, and spending each entry's retry
+   * budget discovering that would empty the budget for reasons that have nothing
+   * to do with the entries. This is the other half of that: the moment the token
+   * changes, the queue is worth trying again. `accessToken` rather than the
+   * session object because Supabase hands back a new object on events that did
+   * not change the credential.
+   */
+  useEffect(() => {
+    if (session?.access_token) sync.resumeOutbox();
+  }, [session?.access_token]);
 
   return <BootstrapContext.Provider value={ready}>{children}</BootstrapContext.Provider>;
 }

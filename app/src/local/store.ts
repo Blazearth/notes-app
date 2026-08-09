@@ -34,6 +34,7 @@ import type {
   Space,
   SpaceMember,
 } from '@/api/types';
+import type { OutboxDraft, OutboxEntry } from './outbox';
 import type { StoreTable } from './schema';
 
 export type { StoreTable } from './schema';
@@ -65,6 +66,11 @@ export interface LocalStore {
    * written — see the note at the top of this file. `replaceAll` deletes rows
    * this batch does not mention, which is what a full library sync wants and
    * what a partial page (a space's saves, a search result) must never do.
+   *
+   * **`replaceAll` never reaps a `local:` row.** A save created offline exists
+   * only here until its POST lands, so a full pull cannot possibly mention it —
+   * and reaping it would delete the user's save and leave the outbox entry that
+   * creates it pointing at nothing.
    */
   putSaves(saves: SaveResponse[], options?: { replaceAll?: boolean }): Promise<void>;
   /** Optimistic local edit. Merges, unlike `putSaves`, which replaces the row. */
@@ -82,6 +88,24 @@ export interface LocalStore {
   countByType(): Promise<[string, number][]>;
   /** Full replace of one save's item states — the server's own contract. */
   putItemStates(saveId: string, states: Record<string, Record<string, unknown>>): Promise<void>;
+  /**
+   * One item's state, upserted. What a delta row carries — unlike
+   * {@link putItemStates}, this leaves every other path on the save alone,
+   * because the delta says what changed rather than what the set now is.
+   */
+  putItemState(saveId: string, itemPath: string, state: Record<string, unknown>): Promise<void>;
+  removeItemState(saveId: string, itemPath: string): Promise<void>;
+
+  /**
+   * Moves an offline-created save onto its real server id, in one write.
+   *
+   * Four things have to move together or the save is visibly broken: the row
+   * itself, the item states keyed on the old id, the outbox entries that still
+   * reference it, and the `pending` flag. Doing them separately leaves a window
+   * where a screen reads a save whose ticks belong to an id that no longer
+   * exists.
+   */
+  reconcileSaveId(localId: string, real: SaveResponse): Promise<void>;
 
   // -------------------------------------------------------- entity state (K2)
   putEntityStates(
@@ -89,6 +113,17 @@ export interface LocalStore {
     options?: { replaceAll?: boolean },
   ): Promise<void>;
   readEntityStates(): Promise<Record<string, Record<string, unknown>>>;
+  removeEntityState(entityKey: string): Promise<void>;
+
+  // ------------------------------------------------- collection overrides (K4)
+  putOverrides(
+    rows: { overrideType: string; subjectKey: string; payload: Record<string, unknown> }[],
+    options?: { replaceAll?: boolean },
+  ): Promise<void>;
+  readOverrides(): Promise<
+    { overrideType: string; subjectKey: string; payload: Record<string, unknown> }[]
+  >;
+  removeOverride(overrideType: string, subjectKey: string): Promise<void>;
 
   // --------------------------------------------------------------- spaces
   putSpaces(spaces: Space[], options?: { replaceAll?: boolean }): Promise<void>;
@@ -96,6 +131,7 @@ export interface LocalStore {
   readSpaces(): Promise<Space[]>;
   readSpace(id: string): Promise<Space | null>;
   putSpaceMembers(spaceId: string, members: SpaceMember[]): Promise<void>;
+  removeSpaceMember(spaceId: string, userId: string): Promise<void>;
   readSpaceMembers(spaceId: string): Promise<SpaceMember[]>;
   /** Every space's members in one read — what the Spaces list needs, minus the N+1. */
   readAllSpaceMembers(): Promise<Record<string, SpaceMember[]>>;
@@ -106,6 +142,14 @@ export interface LocalStore {
   removeShoppingItems(ids: string[]): Promise<void>;
   /** `items` in the server's aisle-then-name order, `categories` as sent. */
   readShoppingList(): Promise<ShoppingListResponse>;
+
+  // --------------------------------------------------------------- outbox
+  /** Assigns the id, which is also the queue's order. */
+  enqueueOutbox(draft: OutboxDraft): Promise<OutboxEntry>;
+  /** Every entry, `failed` ones included, in id order. */
+  readOutbox(): Promise<OutboxEntry[]>;
+  updateOutbox(id: number, changes: Partial<OutboxEntry>): Promise<void>;
+  removeOutbox(id: number): Promise<void>;
 
   // ------------------------------------------------------------------- kv
   putKv(key: string, value: unknown): Promise<void>;
@@ -218,6 +262,21 @@ export function compareSaves(a: SaveResponse, b: SaveResponse, orderBy: 'created
   const right = orderBy === 'updated' ? b.updatedAt : b.createdAt;
   if (left === right) return a.id < b.id ? 1 : -1;
   return left < right ? 1 : -1;
+}
+
+/**
+ * Splits a tombstone's `entity_id` into the composite key the store is keyed on.
+ *
+ * Two of the server's six tombstone types carry two values joined by `|` (see
+ * `TombstoneService`): `space_member` is `"<spaceId>|<userId>"` and
+ * `collection_override` is `"<overrideType>|<subjectKey>"`. **On the first
+ * separator only** — a collection override's subject key is an entity key, which
+ * is arbitrary user-derived text (`"screen:blue box"`), so splitting on every
+ * separator would truncate it. The scalar types come back as `[id, '']`.
+ */
+export function splitTombstoneId(id: string): [string, string] {
+  const at = id.indexOf('|');
+  return at < 0 ? [id, ''] : [id.slice(0, at), id.slice(at + 1)];
 }
 
 export function matchesQuery(save: SaveResponse, query: FeedQuery): boolean {

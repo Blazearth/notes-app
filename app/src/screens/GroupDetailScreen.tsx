@@ -127,7 +127,7 @@ export function GroupDetailScreen({ id }: { id: string }) {
   // A group is a view over saves, so "not found" and "not synced yet" are the
   // same shape locally. Only the first is an error, and only once the store has
   // had a chance to be filled.
-  const savesTask = useTaskStatus('saves', true);
+  const savesTask = useTaskStatus('delta', true);
   const error = !loading && group == null && savesTask.completed ? 'That group no longer exists.' : null;
 
   const isWorkoutGroup = id === 'workout' || id.startsWith('workout~');

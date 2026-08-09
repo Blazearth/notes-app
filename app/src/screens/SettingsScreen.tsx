@@ -9,6 +9,7 @@ import { useSession } from '@/auth/SessionProvider';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
+import { PendingWrites } from '@/components/PendingWrites';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { SettingLink, SettingSwitch } from '@/components/SettingRow';
@@ -226,6 +227,11 @@ export function SettingsScreen() {
       </Card>
 
       <PlanCard me={me} />
+
+      {/* Renders nothing unless the outbox has something to report — see
+          `PendingWrites` for why a rejected write is shown rather than
+          silently rolled back. */}
+      <PendingWrites />
 
       <SectionLabel>Preferences</SectionLabel>
       <View style={{ marginBottom: spacing.xxl }}>

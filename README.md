@@ -11,7 +11,7 @@ Built for the RevenueCat Shipaton 2026 (Aug 1 – Sep 30, 2026).
 - [CLAUDE.md](CLAUDE.md) — architecture and the constraints that drive it
 - [docs/implementation-plan.md](docs/implementation-plan.md) — the phase plan
 - [docs/testing.md](docs/testing.md) — how to check work, and what each check does not prove
-- [docs/local-first.md](docs/local-first.md) — the local store / sync / offline-writes plan (**L1–L2 landed 2026-08-09**; L3 outbox, L4 delta sync, L5 local search still to come)
+- [docs/local-first.md](docs/local-first.md) — the local store / sync / offline-writes plan (**L1–L4 landed 2026-08-09**: reads come from a local store, writes drain from a durable outbox, and sync is a windowed `GET /v1/sync`. L5 — generalised idempotency, local FTS search, `expo-image` — still to come)
 - [docs/competitive-analysis.md](docs/competitive-analysis.md) — teardown and steal list
 - [save-anything-app-spec.md](save-anything-app-spec.md) — original product spec (partly superseded)
 

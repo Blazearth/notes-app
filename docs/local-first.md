@@ -22,10 +22,12 @@ today:    UI ──► Server
 target:   Server ──► Sync engine ──► Local DB ──► UI
 ```
 
-> **Status: L1 and L2 landed 2026-08-09.** Every read screen now reads the local
-> store through `useLive`, groups and collections are derived on-device, and
-> `@/local/sync` is the only consumer of `repo`. L3 (the outbox), L4 (delta
-> sync + the server's `V15__sync.sql`) and L5 remain as written below.
+> **Status: L1–L4 landed 2026-08-09.** Every read screen reads the local store
+> through `useLive`; groups and collections are derived on-device; every write
+> lands locally and drains from an outbox; and reads are a windowed
+> `GET /v1/sync` rather than a full fetch-and-replace. `@/local/sync` is the only
+> consumer of `repo` in both directions. **L5 remains as written below** —
+> generalised idempotency (`V16`), local FTS search, and `expo-image`.
 
 ---
 
@@ -56,16 +58,20 @@ Constraints earned from this codebase and this environment, not guessed.
    with custom server headers trades the harness for a feature. **The storage
    seam is therefore at the store level, not the SQL level** — see below.
 
-5. **The server has zero sync primitives.** A grep across `api/src` for
+5. ~~**The server has zero sync primitives.**~~ **It has them as of L4.** This was
+   true when the plan was written — a grep across `api/src` for
    `since|updatedAfter|ETag|If-None-Match|Last-Modified|cursor|deleted_at|tombstone|@Version`
-   returns no production hits. No `saves (user_id, updated_at)` index either —
-   a `where updated_at > ?` scan is unindexed today. Delta sync is a migration,
-   not a query-param.
+   returned no production hits, and a `where updated_at > ?` scan was unindexed. The
+   constraint it implied still holds and is worth keeping in mind: **delta sync was
+   a migration, not a query-param**, which is why L1/L2 shipped honest full pulls
+   rather than pretending.
 
-6. **There are no tombstones, and seven hard-delete paths.** A deleted Space
-   simply vanishes from the server with no record, so a client that has it
-   cached would keep it forever. Deletes are the part of sync that cannot be
-   inferred.
+6. ~~**There are no tombstones, and seven hard-delete paths.**~~ **Six of the seven
+   write one now** (`V15`); the seventh is not a delete at all —
+   `DuplicateDetector`'s `update saves set space_id = null` rides the ordinary
+   delta, confirmed by probe. The reasoning survives: **deletes are the part of sync
+   that cannot be inferred**, and the audience has to be read *before* the delete or
+   there is nobody left to address.
 
 7. **`SaveResponse.itemStates` is populated by only three endpoints.**
    `GET /v1/saves`, `GET /v1/saves/{id}` and `PATCH .../item-state` use the
@@ -242,6 +248,18 @@ create index tombstones_user_deleted_idx on tombstones (user_id, deleted_at, id)
 
 `set_updated_at()` already exists (`V1__init.sql:22-28`) and is reused.
 
+**Two changes from that sketch in what shipped, both stated in the migration:**
+
+- **The trailing `id` on `saves_user_updated_idx` is gone**, because the cursor is
+  a timestamp — see the `GET /v1/sync` section below for why the keyset could not
+  survive contact with seven tables. An index column nothing orders by is a thing
+  to wonder about later.
+- **Three indexes the sketch missed:** `spaces (updated_at)` and
+  `shopping_list_items (list_id, updated_at)` (both scoped through a join rather
+  than by `user_id`), and `space_members (space_id, updated_at)` — the client asks
+  for "every member of every Space I am in", which walks by space, where the
+  sketch's per-user index serves only "my own membership row".
+
 ### Tombstone write sites (all of them)
 
 | Call site | Tombstone written |
@@ -257,12 +275,21 @@ Not a delete, and deliberately not tombstoned: `DuplicateDetector.java:205`
 (`update saves set space_id = null`) — the `saves` trigger bumps `updated_at`,
 so the ordinary delta already carries it.
 
-⚠️ **One thing to probe, not assume:** `saves.space_id` is
-`on delete set null`, so deleting a Space updates save rows via FK cascade.
-Postgres *should* fire the row-level `BEFORE UPDATE` trigger for cascaded
-updates, which would mean those saves appear in the delta for free. Confirm
-with a read-only JDBC probe before relying on it; if it does not fire, the
-space-delete path must bump those rows explicitly.
+✅ **Probed, not assumed — and the answer is yes.** `saves.space_id` is
+`on delete set null`, so deleting a Space updates save rows via FK cascade, and
+the question was whether that cascaded UPDATE reaches the row-level
+`BEFORE UPDATE` trigger. Measured against the live database with a throwaway
+user, space and save: deleting the Space moved the save's `updated_at` from
+`13:25:41.403104+00` to `13:25:43.307199+00` and set its `space_id` to null. So
+**deleting a Space carries its saves in the ordinary delta for free** and the
+space-delete path does not need to bump them. Recorded as a comment on
+`DuplicateDetector.merge` too, which relies on the same behaviour for its own
+`update saves set space_id = null`. Everything the probe created was torn down
+(0 saves, 0 spaces, 0 profiles left for that user id).
+
+This could not have been answered by reading the catalog: the trigger exists
+either way, and the only question was whether Postgres routes a cascade through
+it.
 
 ### `GET /v1/sync`
 
@@ -287,18 +314,35 @@ GET /v1/sync?since=<iso8601>&sinceId=<uuid>&limit=200
 
 **Watermark semantics, and why each choice:**
 
-- **The client never uses its own clock.** It stores `until`/`untilId` from the
-  response and sends them back. Device clock skew is otherwise a silent
-  data-loss bug.
+- **The client never uses its own clock.** It stores `until` from the response and
+  sends it back. Device clock skew is otherwise a silent data-loss bug.
 - **`until` is the cursor of the last row actually included, not wall-clock
   `now()`.** When a page is capped, wall-clock would skip every row that did
   not fit.
-- **Keyset on `(updated_at, id)`.** Two rows written in the same transaction
-  share a timestamp to the microsecond; a timestamp-only cursor either loops
-  forever or drops one.
-- **Apply is upsert-by-id inside one transaction, and the watermark advances
-  only on success.** A replayed window is therefore harmless, which is what
-  makes a deliberate overlap safe.
+- ~~**Keyset on `(updated_at, id)`.**~~ **This is the one thing in the plan that
+  could not be built, and the reason is worth reading.** A keyset is the right
+  shape for paging *one* table. This endpoint pages **seven** against one shared
+  cursor, and four of them have no scalar `id` to break a tie on:
+  `save_item_states` is keyed on (save, user, item path), `entity_states` on
+  (user, entity key), `collection_overrides` on (user, type, subject) and
+  `space_members` on (space, user). A single `untilId` handed back to all seven
+  would be meaningless in six of them, and "id > that" would *skip* rows rather
+  than resume after them.
+
+  So the cursor is `updated_at` alone, and the hazard it was there to prevent —
+  two rows written in one transaction sharing a timestamp to the microsecond — is
+  handled by never ending a page *inside* such a group. `SyncWindow` fetches
+  `limit + 1` rows per type, and if any type overflows it pulls `until` back to
+  the smallest of the overflowing types' `limit`-th timestamps and re-reads every
+  type with an inclusive `<= until` bound and no limit. A capped page can
+  therefore exceed `limit` by the size of one timestamp group, which is a handful
+  of rows from one transaction — and `until > since` strictly, so a client always
+  makes progress even in the degenerate case where a single group is larger than
+  the page size. `untilId` is **not** in the response: a field that is always null
+  is a thing to forget rather than a thing to build on.
+- **Apply is upsert-by-id and the watermark advances only on success.** A
+  replayed window is therefore harmless, which is what makes the deliberate
+  inclusiveness above safe.
 - **First sync** is the same endpoint with no `since` — it pages until
   `hasMore` is false. There is no separate bootstrap path to keep correct.
 
@@ -454,7 +498,7 @@ SQLite implementation itself has never run — web resolves the memory shim, and
 there is no device or emulator here. Everything above proves the *store
 contract* and the screens on top of it, not `sqliteStore.ts`'s SQL.
 
-### L3 — the outbox
+### L3 — the outbox ✅ *landed 2026-08-09*
 
 **Build:** `app/src/local/outbox.ts` + drain loop in `sync.ts`. Every existing
 optimistic-update site (the ~11 in `LibraryScreen`, `SaveDetailScreen`,
@@ -475,12 +519,67 @@ transaction deletes the local row, inserts the real `SaveResponse`, and rewrites
 `item_states.save_id` plus any outbox `entity_id`/`payload` referencing the
 local id.
 
-**Verify:** node-standalone on the outbox reducer (ordering, backoff,
-terminal-vs-retryable classification, id rewrite) — this is the highest-risk
-pure logic in the project and it is fully testable without a device.
-**Unverified:** real airplane-mode behaviour.
+**What actually landed**, plus six things the plan did not spell out:
 
-### L4 — delta sync
+- **`outbox.ts` has no runtime imports at all**, deliberately. The ordering, the
+  backoff, the terminal-vs-retryable split and the id rewrite are the highest-risk
+  logic in this layer, and keeping the module pure is what lets it be *executed*
+  rather than only typechecked. The store-facing half is `sync.ts` (queue and
+  drain) and `writes.ts` (what screens call).
+- **Screens call `@/local/writes`, not the outbox.** One function per action, each
+  doing exactly two things — write the new value to the store, queue the request —
+  and **no revert branch anywhere**. That absence is the deliverable: a tick undone
+  by a failed request is indistinguishable from a tap the app never registered, so
+  the old rollback was actively worse than doing nothing.
+- **A `failed` write is *surfaced*, and discarding it re-reads the server.**
+  `useOutbox` + `PendingWrites` (on Settings) report rejected writes with a retry
+  and a discard. Retry clears the terminal status and keeps the entry's position
+  *and its idempotency key*; discard drops the row **and** pulls the affected save
+  (or re-harvests entity state, or re-fetches the shopping list), because dropping
+  alone leaves the store showing a value nobody will ever agree with.
+- **Ordering is per entity, not global.** `selectNext` skips `failed` rows
+  entirely and lets a backed-off entry block only later entries with the *same*
+  `entityId`. Two flag changes to one save must land in order; a tick on a
+  different save must not wait out the first one's backoff. A `createSave` that
+  fails terminally cascade-fails its dependents, since a save that will never exist
+  server-side cannot be flagged or filed there either.
+- **`putSaves({ replaceAll: true })` must never reap a `local:` row**, in both
+  store implementations. The server has never heard of such a save, so a full pull
+  cannot mention it — reaping it would delete the user's save *and* orphan the
+  outbox entry that creates it. This is the sharpest interaction between L3 and the
+  reaping refresh, and it is silent if got wrong.
+- **`SavesProvider`'s processing-poll is now feed-driven, and `prepend` is gone.**
+  The old timer started inside `prepend`, so only the screen that created a save
+  ever watched it: a save still processing when the app closed sat at
+  "Processing…" forever, and a save made on another device never advanced at all.
+  Reading the condition off the store covers every case with less code — and
+  `local:` saves are excluded, becoming pollable the moment the outbox reconciles
+  them onto a real id.
+- **Two writes deliberately stayed off the queue:** `createSpace` and
+  `acceptInvite`. Both hand back a Space the user is immediately navigated into, so
+  there is nothing useful to do with them offline — and both are exactly what L5's
+  `V16__idempotency.sql` exists for. Queueing them before that migration lands is
+  the one way to create duplicate Spaces.
+
+**Verified:** 45 node-standalone assertions over `outbox.ts` and `store.ts`'s pure
+halves — every disposition, the backoff curve and its cap, `selectNext`'s
+skip-failed and block-same-entity rules, the wake timer, local-id shape, the
+two-halves id rewrite (including a no-op returning the *same object*), and the
+tombstone composite-id split against an entity key containing both `:` and `|`.
+Then driven for real through headless Chrome with `USE_MOCK_DATA` on: **11 checks
+on the retry path** against a mock patched to fail twice with a `network` error —
+the local value changed at once, the entry stayed queued with `attempts=1` and a
+scheduled backoff, the third attempt succeeded, the queue drained, and the
+idempotency key was never regenerated — and **11 checks on the terminal path**
+against a mock returning 403: not rolled back, marked `failed` with no
+`nextAttemptAt`, the server's own message kept, reported on Settings with both
+actions, and Discard re-converging the store on the server's value and then hiding
+the section. Both mock patches were reverted and the file confirmed byte-identical
+to its backup afterwards.
+**Unverified:** real airplane-mode behaviour, and the `expo-network` listener
+(there is no device here to change networks on).
+
+### L4 — delta sync ✅ *landed 2026-08-09*
 
 **Build:** `V15__sync.sql`, tombstone writes at the six call sites,
 `api/.../sync/SyncController.java` + `SyncService`, and the client's watermark
@@ -495,14 +594,89 @@ app start, `AppState` → active, connectivity regained (`expo-network`'s
 on `expo-*`), after any outbox drain, and pull-to-refresh (which forces a full
 pull, not a delta).
 
-**Verify:** `./mvnw test` with new `SyncServiceTest` (keyset paging, tie
-handling, tombstone inclusion) and tombstone assertions in `SpaceServiceTest`.
-Live: read-only JDBC probe for the new indexes and the FK-cascade trigger
-question above, then a throwaway-user round trip against real Supabase —
-seed saves, `GET /v1/sync`, mutate, `GET /v1/sync?since=`, assert only the
-changed row returns; delete a space, assert the tombstone. Throwaway users are
-inserted directly into `auth.users`/`auth.identities` — **never** via
-`/auth/v1/signup`, which emails a fake address.
+**What actually landed**, and where it diverges:
+
+- **The risky part is pure and the queries are not.** The plan's split ("assembles
+  the response as a pure function… the controller runs the queries") turned out to
+  be the wrong seam: assembling is trivial, and *where a page ends* is the only
+  thing that can silently lose a row. So `SyncWindow.cap` is static, dependency-
+  free and fully unit-tested, `SyncService` runs the queries and calls it, and the
+  controller does nothing but parse `since`.
+- **The high tier collapsed into one request.** The plan's "saves → spaces →
+  item/entity states" ordering is moot: they arrive together. `syncAll` is now
+  *drain the outbox, then one delta*, plus the three medium/low tasks. The drain
+  goes first on purpose — a queued write must reach the server before a pull tells
+  the app what the server currently thinks, or the pull overwrites the local value
+  with a stale one and the drain then puts it back, visible as a flicker.
+- **Three requests per sync disappeared with it.** `syncEntityStates` existed only
+  because entity state had no read path but the collection endpoint; the delta
+  carries it directly. The task stays for the reaping refresh and the discard path.
+- **`spaceMembers` sends a Space's *whole* member list**, not the changed rows,
+  whenever any member row changed. One changed role is rare and a member list is
+  small — and it lets the client apply it with the replace-per-space write it
+  already had, instead of a merge rule with a new store method behind it.
+- **`saves` is scoped to `user_id` only**, exactly what `GET /v1/saves` returns —
+  not "own plus every Space I am in". A delta that widened visibility would not be
+  a drop-in replacement for the full pull it stands in for, and it would need a
+  tombstone for "this save left a Space you share" that this endpoint does not
+  write. Space saves keep arriving from `GET /v1/spaces/{id}/saves` on demand.
+- **The shopping list stayed a full pull, for ordering rather than cost.** The
+  client stores it in the server's aisle-then-name order so a shopper walks the
+  shop once, and a stream of item rows carries no position to rebuild that from.
+  Its *deletions* do ride the tombstone list — the half a full pull handles worst.
+- **`comment` and `vote` tombstones are written with no consumer**, deliberately
+  and stated at both ends. Neither table is cached client-side, and `applyDeletion`
+  ignores types it does not know — which is also what keeps an older client working
+  against a newer server. The alternative was a deletion record that is complete
+  for five of seven paths, which is worse than one that is complete and partly
+  unused.
+- **K4's collection overrides are now local**, reversing L2's note. That note gave
+  a reason — "there is no endpoint that reads them back" — and `GET /v1/sync` is
+  that endpoint, so the local tree can finally agree with the server's about a
+  renamed or manually merged entity. Chains are resolved server-side before
+  sending, so what arrives is already `A -> C`.
+- **`SCHEMA_VERSION` went to 2, and the bump is no longer free.** Every earlier
+  table was a cache of something the server can re-send; `outbox` is the first that
+  holds writes the server has never seen. Dropping it is accepted once (there is no
+  outbox in the field at the moment of the bump) and every future bump has to weigh
+  it rather than assume the old rule still holds.
+
+**Verified:** full backend suite green, **408/408, 6 opt-in skipped** — 15 new
+tests: `SyncWindowTest` (8, including the earliest-boundary rule and the
+all-one-timestamp degenerate case), `TombstoneServiceTest` (3), and
+`SpaceServiceTombstoneTest` (4, one of which pins the *ordering* — the audience
+must be read before the delete, because `space_members` cascades away with the
+Space and a tombstone written afterwards has nobody to address). App: `tsc
+--noEmit` clean including under `--noUnusedLocals`, `expo export` clean for web and
+android, and the web bundle still contains no `openDatabaseAsync`, no
+`expo-sqlite`, no `enableChangeListener` — L1's guarantee survived L3/L4 touching
+every write path.
+
+**Live against the real database**, two probes, both cleaning up after themselves:
+
+- **The FK-cascade question above, answered** (see that section).
+- **The whole of `V15__sync.sql` executed against the live schema inside a
+  transaction and rolled back** — because the SQL had never run, and a migration
+  that fails halfway leaves Flyway needing manual repair. All 14 objects came into
+  being (table, column, trigger, 8 indexes, RLS, policy), all 9 queries
+  `SyncService` actually issues were accepted against the new shape, and `explain`
+  confirmed the new index is *used* (`Index Scan using saves_user_updated_idx`)
+  rather than decoration. Then rolled back, so Flyway applies it for real on the
+  next boot with nothing already half-there.
+
+**And driven end to end** through headless Chrome on `expo start --web`: **17
+checks** covering a cold start filling the store from the delta rather than the
+paged walk (`synced_at:delta` set, `synced_at:saves` absent), the watermark being a
+server timestamp, the schema bump, no stored save row carrying `itemStates`, a
+second load painting inside 2.5s with **no spinner**, a real tap writing through
+the queue and drained clean, and the value surviving a cold start undisturbed by
+the delta that runs on it.
+
+**Not verified, and it is the same gap as everywhere else:** `GET /v1/sync` has
+never been called over HTTP. `SyncService`'s queries are proven to be accepted by
+Postgres and its windowing is unit-tested, but the endpoint has not been exercised
+by a throwaway-user round trip the way K1/K2 were, and no device has run any of
+this.
 
 ### L5 — idempotency, local search, images
 
@@ -549,13 +723,23 @@ from `coalesce(title, name)` (the `place` trap that has now broken `saveTitle()`
 
 ## Open questions (answer by measuring, not by fiat)
 
-1. **Does a Postgres FK `on delete set null` cascade fire the row-level
-   `BEFORE UPDATE` trigger?** Decides whether deleting a Space carries its saves
-   in the delta for free. One read-only probe answers it.
+1. ~~**Does a Postgres FK `on delete set null` cascade fire the row-level
+   `BEFORE UPDATE` trigger?**~~ **Answered 2026-08-09: yes.** Measured against the
+   live database — see the tombstone section. Deleting a Space carries its saves in
+   the ordinary delta for free.
 2. **How long does `expo-sqlite` take to open on a real mid-range Android
-   device?** It is being added to `SplashGate`'s blocking set; if it is not the
-   cheapest of the four gates, it must move off the critical path.
-3. **At what library size does walking `GET /v1/saves` to exhaustion on first
-   run stop being acceptable?** Measure once there is a user with more than a
-   few hundred saves; the answer decides whether first sync needs its own
-   progressive UI.
+   device?** It is in `SplashGate`'s blocking set; if it is not the cheapest of the
+   four gates, it must move off the critical path.
+3. **At what library size does walking `GET /v1/saves` to exhaustion stop being
+   acceptable?** Less pressing than it was — the ordinary path is now the delta, and
+   the walk only runs on pull-to-refresh. The number still matters for the *first*
+   sync, which pages `GET /v1/sync` to exhaustion instead; measure once there is a
+   user with more than a few hundred saves.
+4. **Does the tombstone table need a retention policy, and what is it?** Nothing
+   prunes it. Growth is slow (deletes are rare, and there is no delete-a-save path
+   at all), but the answer depends on how long a client may stay offline and still
+   be trusted to hold a consistent cache — a decision, not a measurement, and one
+   that has to be made before the table is big enough to matter.
+5. **Is the outbox's `MAX_DRAIN_STEPS = 100` per drain the right bound?** It exists
+   so a queue that keeps refilling cannot spin forever. Untested against a real
+   backlog, because there has never been one.

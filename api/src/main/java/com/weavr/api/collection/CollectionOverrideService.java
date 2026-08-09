@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import com.weavr.api.sync.TombstoneService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -39,10 +40,13 @@ public class CollectionOverrideService {
 
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
+    private final TombstoneService tombstones;
 
-    CollectionOverrideService(JdbcClient jdbc, ObjectMapper objectMapper) {
+    CollectionOverrideService(JdbcClient jdbc, ObjectMapper objectMapper,
+                             TombstoneService tombstones) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
+        this.tombstones = tombstones;
     }
 
     /**
@@ -65,6 +69,11 @@ public class CollectionOverrideService {
     @Transactional
     public void unmerge(UUID userId, String fromKey) {
         delete(userId, MERGE, fromKey);
+        // The one override path that removes a row rather than upserting one,
+        // so the only one a delta cannot carry. `entity_id` is the composite
+        // (override_type, subject_key) the client's own table is keyed on.
+        tombstones.record(userId, TombstoneService.COLLECTION_OVERRIDE,
+                MERGE + TombstoneService.KEY_SEPARATOR + fromKey);
         log.info("Merge of entity '{}' undone by user {}", fromKey, userId);
     }
 

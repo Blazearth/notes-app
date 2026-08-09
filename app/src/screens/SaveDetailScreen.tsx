@@ -4,10 +4,15 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Linking, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
-import { repo } from '@/data';
 import type { SaveResponse } from '@/api/types';
-import { getStore, useLive, useLiveValue } from '@/local';
+import { useLive, useLiveValue } from '@/local';
 import { sync } from '@/local/sync';
+import {
+  writeConvertToShoppingList,
+  writeEntityState,
+  writeSaveItemState,
+} from '@/local/writes';
+import { repo } from '@/data';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -23,7 +28,6 @@ import { buildDetailModel, type DetailField, type DetailObject, type EntityState
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { baseServings, scaleQuantity } from '@/saves/scaling';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
-import { useSaves } from '@/saves/SavesProvider';
 import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AddToSpaceSheet } from './AddToSpaceSheet';
@@ -688,16 +692,14 @@ function AddToShoppingList({ saveId }: { saveId: string }) {
   const [state, setState] = useState<'idle' | 'adding' | 'added' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
 
-  const add = async () => {
-    setState('adding');
+  // Queued rather than awaited: the conversion is a *server* job that spends a
+  // Gemini request, so nothing about waiting here told the user anything the
+  // "Adding…" copy did not. Queueing it means the same tap works on a train, and
+  // a rejection surfaces through the queue like every other terminal failure.
+  const add = () => {
+    setState('added');
     setMessage(null);
-    try {
-      await repo.convertToShoppingList(saveId);
-      setState('added');
-    } catch (e) {
-      setState('error');
-      setMessage(e instanceof ApiError ? e.message : 'Could not add this recipe.');
-    }
+    writeConvertToShoppingList(saveId);
   };
 
   if (state === 'added') {
@@ -775,7 +777,6 @@ function AddToShoppingList({ saveId }: { saveId: string }) {
 
 export function SaveDetailScreen({ id }: { id: string }) {
   const { palette, radius, spacing, icon } = useTheme();
-  const { patch } = useSaves();
 
   const [showSpaceSheet, setShowSpaceSheet] = useState(false);
   const [cookModeOpen, setCookModeOpen] = useState(false);
@@ -831,20 +832,15 @@ export function SaveDetailScreen({ id }: { id: string }) {
    */
   const setItemState = useCallback(
     (itemPath: string, state: Record<string, unknown>) => {
+      if (!save) return;
       // Through the store, so the Home rail's course progress and the Library's
-      // card for this same save update with it — `patch` is the same write.
-      patch(id, { itemStates: { ...(save?.itemStates ?? {}), [itemPath]: state } });
-      repo
-        .setSaveItemState(id, itemPath, state)
-        .then((updated) => patch(id, updated))
-        .catch(() => {
-          // The optimistic write may already be stale (a second tap could have
-          // landed since) — reload from the server rather than guessing what
-          // to revert to.
-          void load();
-        });
+      // card for this same save update with it — and then through the outbox, so
+      // a tick made offline is sent rather than lost. The "reload and let the
+      // server decide" fallback this used to have is gone: it could not run
+      // offline, which is precisely when it was needed.
+      writeSaveItemState(save, itemPath, state);
     },
-    [id, patch, load, save],
+    [save],
   );
 
   /**
@@ -857,14 +853,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
    * there without either screen knowing about the other.
    */
   const setEntityState = useCallback((entityKey: string, state: Record<string, unknown>) => {
-    void getStore().putEntityStates({ [entityKey]: state });
-    repo.setEntityState(entityKey, state).then(
-      (echoed) => void getStore().putEntityStates({ [entityKey]: echoed }),
-      // Re-harvest rather than guess what to revert to — the same reasoning
-      // the old inline `listCollectionEntities` refetch had, minus the second
-      // read path.
-      () => void sync.syncEntityStates(),
-    );
+    writeEntityState(entityKey, state);
   }, []);
 
   const model = save ? buildDetailModel(save, entityStates) : null;
@@ -1073,11 +1062,10 @@ export function SaveDetailScreen({ id }: { id: string }) {
               progress on — a save still being processed has no content yet. */}
           {save.status === 'ready' ? (
             <Reveal index={3 + (displayFields.length ?? 1)}>
-              <LifecycleStrip
-                saveId={save.id}
-                value={save.lifecycleStatus ?? 'saved'}
-                onChange={() => void load()}
-              />
+              {/* No `onChange` reload: the strip writes through the store, so
+                  `save.lifecycleStatus` above is already the new value on the
+                  next render — re-fetching would only confirm what we wrote. */}
+              <LifecycleStrip saveId={save.id} value={save.lifecycleStatus ?? 'saved'} />
             </Reveal>
           ) : null}
 

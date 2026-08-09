@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.weavr.api.sync.TombstoneService;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import tools.jackson.databind.json.JsonMapper;
@@ -26,12 +27,14 @@ import static org.mockito.Mockito.when;
 class CollectionOverrideServiceTest {
 
     private JdbcClient jdbc;
+    private TombstoneService tombstones;
     private CollectionOverrideService service;
 
     @BeforeEach
     void setUp() {
         jdbc = mock(JdbcClient.class);
-        service = new CollectionOverrideService(jdbc, JsonMapper.builder().build());
+        tombstones = mock(TombstoneService.class);
+        service = new CollectionOverrideService(jdbc, JsonMapper.builder().build(), tombstones);
     }
 
     /** {@code {overrideType, subjectKey, payloadJson}} — mirrors the production row shape (see {@code CollectionOverrideService.loadFor}). */
@@ -75,9 +78,15 @@ class CollectionOverrideServiceTest {
         when(delete.param(any())).thenReturn(delete);
         when(delete.update()).thenReturn(1);
 
-        service.unmerge(UUID.randomUUID(), "screen:shingeki no kyojin");
+        UUID userId = UUID.randomUUID();
+        service.unmerge(userId, "screen:shingeki no kyojin");
 
         verify(delete).update();
+        // The one override path that removes a row, so the only one a delta
+        // cannot carry — a client that was offline learns about it here or not
+        // at all. `entity_id` is the composite key the client's own table uses.
+        verify(tombstones).record(userId, TombstoneService.COLLECTION_OVERRIDE,
+                "entity_merge|screen:shingeki no kyojin");
     }
 
     @Test

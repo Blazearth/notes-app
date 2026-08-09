@@ -10,6 +10,8 @@
 import { useSyncExternalStore } from 'react';
 
 import type { ApiError } from '@/api/client';
+import { useLiveValue } from './useLive';
+import type { OutboxEntry } from './outbox';
 import { sync, type SyncStatus, type SyncTask } from './sync';
 
 export function useSyncStatus(): SyncStatus {
@@ -40,5 +42,49 @@ export function useTaskStatus(task: SyncTask, hasLocalData = false): TaskStatus 
     completed,
     error,
     firstLoad: !hasLocalData && !completed && error == null,
+  };
+}
+
+/** Stable identity for the (overwhelmingly common) empty queue. */
+const NO_ENTRIES: OutboxEntry[] = [];
+
+export interface OutboxView {
+  /** On their way, or waiting out a backoff. Usually empty. */
+  pending: OutboxEntry[];
+  /**
+   * The server said no, and will say no again — a 400, a 403, a 404, or a cap
+   * the user has to act on.
+   *
+   * This list is the whole reason `@/local/writes` has no revert logic. A
+   * terminal failure is not rolled back behind the user's back, because rolling
+   * back is indistinguishable from "your change never happened" and the app has
+   * already shown them that it did. It is shown, with the two things they can
+   * actually do about it.
+   */
+  failed: OutboxEntry[];
+  /** Holding until the session refreshes. Not a failure — nothing was rejected. */
+  paused: boolean;
+  /** Clears the terminal status and tries again, keeping the idempotency key. */
+  retry: (id: number) => void;
+  /** Drops the write **and** re-reads the server's truth for what it was about. */
+  discard: (id: number) => void;
+}
+
+/**
+ * The queue, for the one screen that reports on it.
+ *
+ * A hook rather than a subscription on the sync engine's status, because the
+ * outbox lives in the store: `useLive` already re-runs this when the drain writes
+ * to it, so there is no second notification mechanism to keep in step.
+ */
+export function useOutbox(): OutboxView {
+  const entries = useLiveValue(['outbox'], (store) => store.readOutbox(), NO_ENTRIES);
+  const status = useSyncStatus();
+  return {
+    pending: entries.filter((entry) => entry.status === 'pending'),
+    failed: entries.filter((entry) => entry.status === 'failed'),
+    paused: status.outboxPaused,
+    retry: (id) => void sync.retryOutbox(id),
+    discard: (id) => void sync.discardOutbox(id),
   };
 }

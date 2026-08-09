@@ -3,6 +3,7 @@ import { TextInput, View } from 'react-native';
 
 import { repo } from '@/data';
 import type { SaveComment } from '@/api/types';
+import { writeComment, writeDeleteComment, writeVote } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { SectionLabel } from '@/components/SectionLabel';
@@ -24,7 +25,6 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
   const [draft, setDraft] = useState('');
   const [score, setScore] = useState<number | null>(null);
   const [myVote, setMyVote] = useState<1 | -1 | 0>(0);
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -40,48 +40,53 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
   }, [spaceId, load]);
 
   const onVote = useCallback(
-    async (value: 1 | -1) => {
+    (value: 1 | -1) => {
       // Tapping the vote you already hold clears it — the standard toggle, and
       // the server takes 0 for exactly this.
       const next: 1 | -1 | 0 = myVote === value ? 0 : value;
-      const previous = myVote;
       setMyVote(next);
-      try {
-        const result = await repo.setVote(saveId, next);
-        setScore(result.score);
-      } catch {
-        setMyVote(previous);
-      }
+      // The score is the sum of *everyone's* votes, so this can only guess at
+      // the delta its own vote makes — which it can do exactly, because a vote
+      // is a value the user sets rather than an increment (see `setVote`'s note
+      // on why the server stores a row per voter and not a tally).
+      setScore((current) => (current ?? 0) - myVote + next);
+      writeVote(saveId, next);
     },
     [saveId, myVote],
   );
 
-  const onSend = useCallback(async () => {
+  const onSend = useCallback(() => {
     const body = draft.trim();
-    if (!body || busy) return;
-    setBusy(true);
-    try {
-      const created = await repo.addComment(saveId, body);
-      setComments((current) => [...current, created]);
-      setDraft('');
-    } catch {
-      // Keep the draft. Losing what someone typed because a request failed is
-      // the one outcome worth going out of the way to prevent.
-    } finally {
-      setBusy(false);
-    }
-  }, [saveId, draft, busy]);
+    if (!body) return;
+    // Shown immediately and queued for delivery. The old version awaited the
+    // POST and kept the draft on failure, which was the best it could do without
+    // a queue — but "the request failed, here is your text back" still loses a
+    // comment typed on a train. `pendingId` marks it as not-yet-confirmed; the
+    // next successful load replaces it with the server's own copy.
+    setComments((current) => [
+      ...current,
+      {
+        id: `pending:${Date.now()}`,
+        userId: 'me',
+        displayName: 'You',
+        body,
+        createdAt: new Date().toISOString(),
+        mine: true,
+      },
+    ]);
+    setDraft('');
+    writeComment(saveId, body);
+  }, [saveId, draft]);
 
   const onDelete = useCallback(
-    async (commentId: string) => {
+    (commentId: string) => {
       setComments((current) => current.filter((c) => c.id !== commentId));
-      try {
-        await repo.deleteComment(saveId, commentId);
-      } catch {
-        await load();
-      }
+      // A comment that never reached the server has nothing to delete there, so
+      // dropping it locally is the whole operation.
+      if (commentId.startsWith('pending:')) return;
+      writeDeleteComment(saveId, commentId);
     },
-    [saveId, load],
+    [saveId],
   );
 
   if (!spaceId) return null;
@@ -93,7 +98,7 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
         accessibilityRole="button"
         accessibilityLabel={value === 1 ? 'Upvote' : 'Downvote'}
         accessibilityState={{ selected: active }}
-        onPress={() => void onVote(value)}
+        onPress={() => onVote(value)}
         haptic="selection"
         style={{
           paddingVertical: spacing.xs + 2,
@@ -155,7 +160,7 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
               <Touchable
                 accessibilityRole="button"
                 accessibilityLabel="Delete comment"
-                onPress={() => void onDelete(comment.id)}
+                onPress={() => onDelete(comment.id)}
                 haptic="medium"
                 style={{ alignSelf: 'flex-start', marginTop: spacing.xs }}
               >

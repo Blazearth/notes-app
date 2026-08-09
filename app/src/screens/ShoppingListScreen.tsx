@@ -2,9 +2,9 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect } from 'react';
 import { ActivityIndicator, RefreshControl, View } from 'react-native';
 
-import { repo } from '@/data';
 import type { ShoppingListItem, ShoppingListResponse } from '@/api/types';
-import { getStore, useLiveValue } from '@/local';
+import { useLiveValue } from '@/local';
+import { writeClearCheckedShoppingItems, writeShoppingItemChecked } from '@/local/writes';
 import { sync } from '@/local/sync';
 import { useTaskStatus } from '@/local/useSync';
 import { AppText } from '@/components/AppText';
@@ -124,37 +124,22 @@ export function ShoppingListScreen() {
   }, []);
 
   /**
-   * Optimistic, and deliberately so: ticking things off is the one interaction
-   * that happens repeatedly while standing in a shop, often on a bad
-   * connection. Waiting for a round trip per tap would make the list feel
-   * broken. On failure the tick is rolled back rather than left lying.
+   * The interaction this whole layer exists for: repeated taps, standing in a
+   * shop, on the worst connection the app ever sees.
    *
-   * The optimistic write goes through the store rather than component state,
-   * so a tick survives navigating away and back — which, on a shopping list,
-   * is the difference between a tool and a toy.
+   * The rollback that used to be here is gone, and its absence is the
+   * improvement. A tick undone by a failed request looks exactly like a tap the
+   * app never registered — so you tap again, and again. The tick now stands, the
+   * request is retried until it lands, and the only thing that can undo it is
+   * the server actually rejecting it.
    */
-  const toggle = useCallback(async (item: ShoppingListItem) => {
-    const next = !item.checked;
-    const store = getStore();
-    await store.patchShoppingItem(item.id, { checked: next });
-    try {
-      await repo.setShoppingItemChecked(item.id, next);
-    } catch {
-      await store.patchShoppingItem(item.id, { checked: !next });
-    }
+  const toggle = useCallback((item: ShoppingListItem) => {
+    writeShoppingItemChecked(item.id, !item.checked);
   }, []);
 
-  const clearChecked = useCallback(async () => {
-    const removed = items.filter((i) => i.checked);
-    const store = getStore();
-    await store.removeShoppingItems(removed.map((i) => i.id));
-    try {
-      await repo.clearCheckedShoppingItems();
-    } catch {
-      // Put them back exactly as they were, in their original aisle order.
-      await store.putShoppingList({ items, categories });
-    }
-  }, [items, categories]);
+  const clearChecked = useCallback(() => {
+    writeClearCheckedShoppingItems(items);
+  }, [items]);
 
   const checkedCount = items.filter((i) => i.checked).length;
   // Server order is already aisle-then-name, so grouping only has to preserve
@@ -252,7 +237,7 @@ export function ShoppingListScreen() {
                 {items
                   .filter((i) => i.category === category)
                   .map((item) => (
-                    <ItemRow key={item.id} item={item} onToggle={(i) => void toggle(i)} />
+                    <ItemRow key={item.id} item={item} onToggle={toggle} />
                   ))}
               </View>
             </Reveal>
@@ -263,7 +248,7 @@ export function ShoppingListScreen() {
               <Touchable
                 accessibilityRole="button"
                 accessibilityLabel={`Clear ${checkedCount} checked items`}
-                onPress={() => void clearChecked()}
+                onPress={clearChecked}
                 haptic="medium"
                 style={{
                   alignItems: 'center',

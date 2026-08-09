@@ -3,6 +3,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import type { ApiError } from '@/api/client';
 import type { SaveResponse } from '@/api/types';
 import { getStore, useLive } from '@/local';
+import { isLocalId } from '@/local/outbox';
 import { useStoreReady } from '@/local/SyncProvider';
 import { sync } from '@/local/sync';
 import { useTaskStatus } from '@/local/useSync';
@@ -16,14 +17,13 @@ interface SavesContextValue {
   /** Manual reload. `refreshing` distinguishes it from the first load. */
   refresh: () => Promise<void>;
   refreshing: boolean;
-  /** Put a just-created save at the top and start polling until it is ready. */
-  prepend: (save: SaveResponse) => void;
   /**
-   * Merges a partial update into one save by id — the Library's swipe
-   * actions use this for an optimistic flip, then call again with the
-   * server's echoed response. The write lands in the local store, so a
-   * favorite toggled in the Library is already reflected anywhere else the
-   * same save renders, whether or not that screen went through this provider.
+   * Merges a partial update into one save by id.
+   *
+   * Kept for reads-shaped-as-writes — a screen correcting its own cached copy of
+   * something the server just told it. **Not** the way to change a save: that is
+   * `@/local/writes`, which also queues the request. A `patch` alone is a change
+   * the server will never hear about.
    */
   patch: (id: string, changes: Partial<SaveResponse>) => void;
 }
@@ -37,7 +37,7 @@ const POLL_TIMEOUT = 10 * 60 * 1000; // give up after 10 min
 const EMPTY: SaveResponse[] = [];
 
 /**
- * The feed — now a *view of the local store*, not a fetch.
+ * The feed — a *view of the local store*, not a fetch.
  *
  * It used to `await repo.listSaves()` on every sign-in and show a spinner while
  * it did. It now reads whatever the store already holds (instantly, on the
@@ -56,7 +56,6 @@ const EMPTY: SaveResponse[] = [];
  */
 export function SavesProvider({ children }: { children: React.ReactNode }) {
   const storeReady = useStoreReady();
-  const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // `includeArchived` because the Library computes its archived count and its
   // `Archived` chip from this same list — the filtering is a presentation
@@ -68,49 +67,52 @@ export function SavesProvider({ children }: { children: React.ReactNode }) {
   );
   const saves = data ?? EMPTY;
 
-  const task = useTaskStatus('saves', saves.length > 0);
+  // `delta`, not `saves`: `GET /v1/sync` is what fills the feed now, and the
+  // paged `GET /v1/saves` walk only runs on pull-to-refresh. Watching the wrong
+  // task here would leave a genuinely-empty first run showing a spinner forever.
+  const task = useTaskStatus('delta', saves.length > 0);
 
-  // Cancel all timers on unmount
+  /**
+   * Polls whatever is still `processing`, driven by the feed rather than by
+   * whoever created the save.
+   *
+   * That difference matters more than it looks. The old version started a timer
+   * inside `prepend`, so only the screen that created a save ever watched it —
+   * a save that was still processing when the app was closed sat at
+   * "Processing…" until something else refetched it, and a save made on another
+   * device never advanced at all. Reading the condition off the store instead
+   * covers every case with less code.
+   *
+   * `local:` saves are excluded: they exist nowhere but here, so there is
+   * nothing to poll. They become pollable the moment the outbox reconciles them
+   * onto a real id, which lands in this same store and re-runs this effect.
+   */
+  const startedAt = useRef<Map<string, number>>(new Map());
+  const processing = saves
+    .filter((save) => save.status === 'processing' && !isLocalId(save.id))
+    .map((save) => save.id)
+    .join(',');
+
   useEffect(() => {
-    return () => {
-      pollTimers.current.forEach((t) => clearTimeout(t));
-    };
-  }, []);
+    if (!processing) return;
+    const ids = processing.split(',');
+    const now = Date.now();
+    for (const id of ids) if (!startedAt.current.has(id)) startedAt.current.set(id, now);
 
-  const refresh = useCallback(() => sync.refreshAll(), []);
-
-  /** Poll `GET /saves/:id` every 2s until ready/failed or timeout. */
-  const startPolling = useCallback((saveId: string, startedAt: number) => {
-    // Already polling this save — don't double-schedule
-    if (pollTimers.current.has(saveId)) return;
-
-    const timer = setTimeout(async () => {
-      pollTimers.current.delete(saveId);
-
-      if (Date.now() - startedAt > POLL_TIMEOUT) return;
-
-      // `pullSave` writes into the store, so the feed updates itself — nothing
-      // here has to hold or hand back the result.
-      const updated = await sync.pullSave(saveId);
-      if (updated == null || updated.status === 'processing') {
-        startPolling(saveId, startedAt);
+    const timer = setTimeout(() => {
+      for (const id of ids) {
+        if (now - (startedAt.current.get(id) ?? now) > POLL_TIMEOUT) continue;
+        // `pullSave` writes into the store, so the feed updates itself — nothing
+        // here has to hold or hand back the result. When the save reaches
+        // `ready` it drops out of `processing` and this effect stops.
+        void sync.pullSave(id);
       }
     }, POLL_INTERVAL);
 
-    pollTimers.current.set(saveId, timer);
-  }, []);
+    return () => clearTimeout(timer);
+  }, [processing]);
 
-  const prepend = useCallback(
-    (save: SaveResponse) => {
-      // No local ordering to maintain: the store sorts by `createdAt` and a
-      // just-created save is the newest thing in it by definition.
-      void getStore().putSaves([save]);
-      if (save.status === 'processing') {
-        startPolling(save.id, Date.now());
-      }
-    },
-    [startPolling],
-  );
+  const refresh = useCallback(() => sync.refreshAll(), []);
 
   const patch = useCallback((id: string, changes: Partial<SaveResponse>) => {
     void getStore().patchSave(id, changes);
@@ -133,10 +135,9 @@ export function SavesProvider({ children }: { children: React.ReactNode }) {
       error: task.error,
       refresh,
       refreshing: task.running,
-      prepend,
       patch,
     }),
-    [saves, status, task.error, task.running, refresh, prepend, patch],
+    [saves, status, task.error, task.running, refresh, patch],
   );
 
   return <SavesContext.Provider value={value}>{children}</SavesContext.Provider>;

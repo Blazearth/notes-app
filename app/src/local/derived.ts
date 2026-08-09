@@ -11,14 +11,15 @@
  * `mockRepository` — they remain API surface, and keeping them keeps mock
  * parity honest. The app simply no longer calls them.
  *
- * **One thing is deliberately not reproduced locally: K4's collection
- * overrides** (manual entity merge and rename). They live in
- * `collection_overrides` server-side, there is no endpoint that reads them
- * back, and nothing in the app writes one today — merge and rename are
- * endpoint-complete but have no picker UI, and *pin* rides `entity_states`
- * (which does sync). So the local tree passes `EMPTY_OVERRIDES` and nothing
- * observable changes. The day a merge UI exists, overrides join the sync
- * alongside entity state.
+ * **K4's collection overrides are now local too.** L2 passed `EMPTY_OVERRIDES`
+ * here for a stated reason — they lived in `collection_overrides` server-side
+ * and no endpoint read them back, so the local tree could not have agreed with
+ * the server's about a manually merged or renamed entity even in principle.
+ * `GET /v1/sync` (L4) is that endpoint, so the reason is gone: the overrides ride
+ * the delta into the store's `overrides` table and are threaded through the same
+ * pure merge core the server threads them through. Chains are resolved
+ * server-side by `CollectionOverrideService.loadFor` before they are sent, so
+ * what arrives here is already `A -> C`, never `A -> B -> C`.
  */
 
 import type { CollectionEntityResponse, CollectionNodeResponse, SaveResponse } from '@/api/types';
@@ -26,6 +27,7 @@ import {
   buildTree as buildCollectionTree,
   mergeType,
   withDoneCount,
+  type CollectionOverrides,
   type CollectionSaveFacts,
 } from '@/collections/merge';
 import type { KnowledgeGroup } from '@/data/repository';
@@ -33,7 +35,7 @@ import { buildTree as buildGroupTree, collectSaveIds, findGroup, type GroupSaveF
 import type { LocalStore } from './store';
 
 /** The tables every derived view below depends on — what `useLive` subscribes to. */
-export const DERIVED_TABLES = ['saves', 'entity_states'] as const;
+export const DERIVED_TABLES = ['saves', 'entity_states', 'overrides'] as const;
 
 /**
  * Both trees are built from *ready* saves only, matching
@@ -91,8 +93,35 @@ async function doneEntityKeys(store: LocalStore): Promise<Set<string>> {
   return done;
 }
 
+/**
+ * The store's override rows in the shape the merge core wants — the same
+ * bucketing `CollectionOverrideService.loadFor` does server-side, minus the
+ * chain resolution, which has already happened before these were sent.
+ */
+async function readOverrides(store: LocalStore): Promise<CollectionOverrides> {
+  const mergeRedirects: Record<string, string> = {};
+  const entityNames: Record<string, string> = {};
+  const collectionNames: Record<string, string> = {};
+  for (const row of await store.readOverrides()) {
+    const into = row.payload.into;
+    const name = row.payload.name;
+    if (row.overrideType === 'entity_merge' && typeof into === 'string' && into) {
+      mergeRedirects[row.subjectKey] = into;
+    } else if (row.overrideType === 'entity_rename' && typeof name === 'string' && name) {
+      entityNames[row.subjectKey] = name;
+    } else if (row.overrideType === 'collection_rename' && typeof name === 'string' && name) {
+      collectionNames[row.subjectKey] = name;
+    }
+  }
+  return { mergeRedirects, entityNames, collectionNames };
+}
+
 export async function readCollections(store: LocalStore): Promise<CollectionNodeResponse[]> {
-  const tree = buildCollectionTree((await readySaves(store)).map(toCollectionFacts));
+  const tree = buildCollectionTree(
+    (await readySaves(store)).map(toCollectionFacts),
+    undefined,
+    await readOverrides(store),
+  );
   const done = await doneEntityKeys(store);
   return tree.map((node) => withDoneCount(node, done));
 }
@@ -102,7 +131,12 @@ export async function readCollectionEntities(
   type: string,
   facet?: string | null,
 ): Promise<CollectionEntityResponse[]> {
-  const merged = mergeType((await readySaves(store)).map(toCollectionFacts), type, facet ?? null);
+  const merged = mergeType(
+    (await readySaves(store)).map(toCollectionFacts),
+    type,
+    facet ?? null,
+    await readOverrides(store),
+  );
   const states = await store.readEntityStates();
   // The state join the server does inside `GET /v1/collections/{type}` — the
   // entity payload and the caller's own K2 state arrive together, so no screen

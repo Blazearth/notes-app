@@ -11,6 +11,7 @@ import java.util.UUID;
 import com.weavr.api.common.ForbiddenException;
 import com.weavr.api.common.NotFoundException;
 import com.weavr.api.profile.ProfileService;
+import com.weavr.api.sync.TombstoneService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -49,12 +50,15 @@ public class SpaceService {
     private final JdbcClient jdbc;
     private final ProfileService profiles;
     private final ObjectMapper objectMapper;
+    private final TombstoneService tombstones;
     private final SecureRandom random = new SecureRandom();
 
-    SpaceService(JdbcClient jdbc, ProfileService profiles, ObjectMapper objectMapper) {
+    SpaceService(JdbcClient jdbc, ProfileService profiles, ObjectMapper objectMapper,
+                 TombstoneService tombstones) {
         this.jdbc = jdbc;
         this.profiles = profiles;
         this.objectMapper = objectMapper;
+        this.tombstones = tombstones;
     }
 
     public record Space(UUID id, String name, String type, UUID ownerId, SpaceRole myRole,
@@ -192,10 +196,16 @@ public class SpaceService {
     @Transactional
     public void delete(UUID userId, UUID spaceId) {
         requireRole(userId, spaceId, SpaceRole.OWNER);
+        // Read the audience BEFORE the delete. `space_members` cascades away
+        // with the Space, so a tombstone written afterwards would have nobody
+        // to address and every other member would keep this Space in their
+        // local cache forever.
+        List<UUID> members = tombstones.membersOf(spaceId);
         // `saves.space_id` is ON DELETE SET NULL, so deleting a Space returns
         // its saves to their owners' private libraries rather than destroying
         // other people's content. Members and invites cascade.
         jdbc.sql("delete from spaces where id = ?").param(spaceId).update();
+        tombstones.recordFor(members, TombstoneService.SPACE, spaceId.toString());
         log.info("Space {} deleted by {}", spaceId, userId);
     }
 
@@ -259,10 +269,23 @@ public class SpaceService {
             throw new ForbiddenException(
                     "The owner can't leave a Space. Delete it, or transfer it first.");
         }
+        List<UUID> remaining = tombstones.membersOf(spaceId).stream()
+                .filter(id -> !id.equals(targetId))
+                .toList();
+
         jdbc.sql("delete from space_members where space_id = ? and user_id = ?")
                 .param(spaceId)
                 .param(targetId)
                 .update();
+
+        // Two different tombstones, because the same delete means two different
+        // things. The people still in the Space lost a *member*; the person who
+        // left lost the *Space* — their cached copy of it, its saves and its
+        // member list all have to go, and a `space_member` tombstone would only
+        // have taken their own row out of a list they can no longer see.
+        tombstones.recordFor(remaining, TombstoneService.SPACE_MEMBER,
+                spaceId + TombstoneService.KEY_SEPARATOR + targetId);
+        tombstones.record(targetId, TombstoneService.SPACE, spaceId.toString());
     }
 
     @Transactional

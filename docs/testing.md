@@ -80,6 +80,34 @@ fix: Home blurred beneath the open sheet, and sharp again after a tap on the
 backdrop. Sleep between steps rather than racing the springs — the virtual
 clock is not in play here, so these are real milliseconds.
 
+**Scroll into view before measuring, and assert that you did.** A control below
+the fold has a `getBoundingClientRect().y` past the viewport, and a mouse event
+dispatched at that coordinate lands on nothing — *silently*. The failure reads as
+"the tap did not work", which sends you debugging the handler instead of the
+probe. This cost ten minutes on the local-first work: the Progress strip sits low
+on a save's detail screen, and the write looked broken until the click helper grew
+an `el.scrollIntoView({ block: 'center' })` plus an `inView` check on the measured
+rectangle. Return `false` from the helper when the rectangle is not in view, so a
+miss is a failed assertion rather than a mystery.
+
+**`innerText` reflects rendered text, so `textTransform` breaks string matches.**
+`SectionLabel` uses `variant="sectionLabel"`, which is `textTransform:
+'uppercase'` — so a check for `text.includes('Unsent changes')` fails against a DOM
+that says `UNSENT CHANGES`. Match case-insensitively (`/unsent changes/i.test`) or
+the assertion tests the stylesheet. Worth knowing in both directions: an assertion
+that something is *absent* passes for the wrong reason here.
+
+**Three things a CDP run can check that a screenshot cannot, and they are where
+the bugs are:** `localStorage` (the local-first store's snapshot is a plain JSON
+blob — every claim about what was persisted, and what was deliberately *not*,
+is one `evaluate` away), the DOM's accessibility labels (query by the same string
+a screen reader uses, so the probe breaks loudly if a label is dropped), and state
+*after* a reload. On a freshly launched Chrome the page target starts on
+`about:blank`, where reading `localStorage` is a `SecurityError` rather than an
+empty store — poll `location.origin` until it is the app's before touching it, and
+check `location.href` is not `chrome-error://chromewebdata/` when a navigation
+mysteriously produces nothing (that one means Metro is not running).
+
 The Yoga caveat above still applies. This drives a **browser**; it sees more of
 the app than a static screenshot, and still nothing platform-native.
 
@@ -324,6 +352,58 @@ Every pairing should clear **4.5:1** (WCAG AA for normal text). The current wors
 case is 4.50:1. **Re-run this after touching `palettes.ts` or `contrast.ts`** —
 adding an accent adds six new pairings, and there is no automation to catch a
 regression yet.
+
+### Verifying a migration — run it against the real schema and roll it back
+
+A migration's SQL is the least-tested code in this repo: `./mvnw test` needs no
+database, so nothing executes it until Flyway does, on a real deployment, once. A
+statement that fails halfway leaves Flyway needing manual repair — and this project
+has been caught twice by SQL that reads perfectly (`to_tsvector` being STABLE
+rather than IMMUTABLE, and V11's `$.*` indexing JSON *keys* as well as values).
+
+Postgres runs DDL transactionally, so the whole file can be executed against the
+live schema and then discarded:
+
+```java
+try (Connection c = DriverManager.getConnection(System.getenv("WEAVR_FLYWAY_URL"), props)) {
+    c.setAutoCommit(false);
+    try (Statement s = c.createStatement()) {
+        s.execute(Files.readString(Path.of("…/V15__sync.sql")));
+        // …then assert against information_schema / pg_indexes / pg_policies,
+        // and run the queries the new service will actually issue.
+    } finally {
+        c.rollback();   // the database is exactly as it was
+    }
+}
+```
+
+Run it with the **session pooler** URL (`WEAVR_FLYWAY_URL`), not the transaction
+pooler — same reason Flyway itself needs it. Then `java -cp <pg-driver>.jar
+Probe.java` (single-file source, no build).
+
+Three things worth asserting beyond "it parsed":
+
+- **That the objects exist**, via `information_schema.tables/columns`,
+  `pg_indexes`, `pg_trigger`, `pg_policies` — a script can parse and still create
+  nothing you expected.
+- **That the queries the new code issues are accepted against the new shape.** A
+  delta whose SQL only compiles in Java is not a delta.
+- **`explain` on the query the new index exists for.** V15's added
+  `saves_user_updated_idx` because V1's index is on `created_at`; the plan says
+  `Index Scan using saves_user_updated_idx`, which is the difference between an
+  index and a comment claiming there is one.
+
+**This does not work for `create index concurrently`** — that cannot run in a
+transaction, which is a reason to prefer the plain form in a migration unless the
+table is large enough to care about the lock.
+
+The same file+rollback shape suits any "does Postgres actually do X?" question.
+Some need a write to answer at all: *does an `on delete set null` FK cascade fire
+the row-level `BEFORE UPDATE` trigger?* cannot be read out of the catalog, because
+the trigger exists either way. That one needs a throwaway user, space and save, a
+delete, and a `finally` block that removes them — **inserted directly into
+`auth.users`, never via `/auth/v1/signup`**, which emails a fake address and risks
+the project's sending reputation on a bounce.
 
 ### Verifying response shapes — ask the running service
 

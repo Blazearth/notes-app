@@ -320,3 +320,51 @@ export interface CollectionEntityResponse {
   /** The caller's own K2 entity state (`done`, `rating`, …) — absent when never touched. */
   state?: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// Sync (L4)
+// ---------------------------------------------------------------------------
+
+/**
+ * `SyncResponse.Deletion` — the only thing a delta cannot infer.
+ *
+ * `type` is one of `TombstoneService`'s constants (`space`, `space_member`,
+ * `comment`, `vote`, `shopping_item`, `collection_override`). Two of them carry
+ * a composite `id` joined by `|`: `space_member` is `"<spaceId>|<userId>"` and
+ * `collection_override` is `"<overrideType>|<subjectKey>"`.
+ *
+ * The client applies the types it caches and ignores the rest, deliberately: a
+ * server that starts tombstoning something new must not break an older client,
+ * and `comment`/`vote` are written for completeness (the deletion record is
+ * either whole or it is a thing nobody can reason about) while nothing local
+ * holds either.
+ */
+export interface SyncDeletion {
+  type: string;
+  id: string;
+}
+
+/** `SyncResponse` — one page of `GET /v1/sync`. Every list is "what changed". */
+export interface SyncResponse {
+  /**
+   * The cursor to send back as `since`. Always from the server's own clock via
+   * the rows it selected — the client never formats a timestamp of its own,
+   * because device clock skew against Postgres is otherwise silent data loss.
+   */
+  until: string;
+  /** Another page is waiting. A client loops, applying and advancing each time. */
+  hasMore: boolean;
+  /**
+   * The caller's own saves. Deliberately without `itemStates` — those arrive as
+   * their own list, and the store holds them in a separate table for exactly
+   * this reason.
+   */
+  saves: SaveResponse[];
+  spaces: Space[];
+  /** The **whole** member list of any Space where any member row changed. */
+  spaceMembers: { spaceId: string; members: SpaceMember[] }[];
+  itemStates: { saveId: string; itemPath: string; state: Record<string, unknown> }[];
+  entityStates: { entityKey: string; state: Record<string, unknown> }[];
+  overrides: { overrideType: string; subjectKey: string; payload: Record<string, unknown> }[];
+  deleted: SyncDeletion[];
+}

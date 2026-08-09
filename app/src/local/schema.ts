@@ -17,16 +17,28 @@ export const STORE_TABLES = [
   'saves',
   'item_states',
   'entity_states',
+  'overrides',
   'spaces',
   'space_members',
   'shopping_items',
+  'outbox',
   'kv',
 ] as const;
 
 export type StoreTable = (typeof STORE_TABLES)[number];
 
-/** Bumped whenever the DDL below changes shape. A bump drops and recreates. */
-export const SCHEMA_VERSION = 1;
+/**
+ * Bumped whenever the DDL below changes shape. A bump drops and recreates.
+ *
+ * **2** — L3/L4: `outbox` and `overrides`. Dropping rather than migrating is
+ * safe for `overrides` (a cache of something `GET /v1/sync` re-sends) and is
+ * *not* free for `outbox`, which is the only table here holding writes the
+ * server has never seen. That is a real cost, accepted once: at the moment of
+ * the bump there is no outbox in the field to lose, and every future bump has to
+ * weigh it again rather than assume the "everything here is a cache" rule still
+ * holds. It no longer does.
+ */
+export const SCHEMA_VERSION = 2;
 
 /**
  * `json` holds the full `SaveResponse` **minus `itemStates`** — see
@@ -34,8 +46,8 @@ export const SCHEMA_VERSION = 1;
  * ordering and the Library's filters are index reads rather than a parse of
  * every row.
  *
- * `pending` is unused until L3 (the outbox) and is here so that phase is a
- * write path rather than a migration.
+ * `pending` marks a save with unsent local writes — set when an offline
+ * `createSave` inserts a `local:<uuid>` row, cleared when the real id arrives.
  */
 export const SCHEMA_SQL = `
 create table if not exists saves (
@@ -69,6 +81,18 @@ create table if not exists entity_states (
   json       text not null
 );
 
+-- K4's collection overrides (manual entity merge, entity rename, collection
+-- rename). L2 deliberately did not hold these — no endpoint read them back, so
+-- the local tree passed no-op overrides and nothing observable differed.
+-- \`GET /v1/sync\` is that endpoint, so the local tree can now agree with the
+-- server's on a renamed or manually merged entity.
+create table if not exists overrides (
+  override_type text not null,
+  subject_key   text not null,
+  payload       text not null,
+  primary key (override_type, subject_key)
+);
+
 create table if not exists spaces (
   id               text primary key,
   last_activity_at text,
@@ -87,6 +111,35 @@ create table if not exists shopping_items (
   position integer not null,
   json     text not null
 );
+
+-- The outbox: every local write that has not reached the server yet.
+--
+-- \`op\` is a \`Repository\` method name and \`payload\` its arguments, so a queued
+-- write is described in the same vocabulary the rest of the app uses rather than
+-- as a serialised HTTP request — which would pin the queue to a URL shape that
+-- can change under it.
+--
+-- \`idempotency_key\` is generated ONCE at enqueue and carried through every
+-- retry. Generating it at send time would defeat the entire point: the case it
+-- exists for is a request that reached the server and whose response was lost.
+--
+-- \`status\` is \`pending\` or \`failed\`. There is no \`sending\` — a row in flight
+-- is tracked in memory for the length of one drain, because a process killed
+-- mid-send must come back to a row that will be retried, not one stuck in a
+-- state nothing clears.
+create table if not exists outbox (
+  id              integer primary key autoincrement,
+  op              text not null,
+  payload         text not null,
+  idempotency_key text not null,
+  entity_id       text,
+  created_at      text not null,
+  attempts        integer not null default 0,
+  next_attempt_at text,
+  last_error      text,
+  status          text not null default 'pending'
+);
+create index if not exists outbox_status_idx on outbox (status, id);
 
 create table if not exists kv (
   key   text primary key,
@@ -112,4 +165,13 @@ export const KV = {
   shoppingCategories: 'shopping_categories',
   /** Whether the shopping list has ever been fetched — empty vs. never-loaded. */
   syncedAt: (task: string) => `synced_at:${task}`,
+  /**
+   * The delta watermark: the `until` from the last **fully applied**
+   * `GET /v1/sync` page.
+   *
+   * Always a value the *server* handed out, never `Date.now()`. Device clock
+   * skew against Postgres would otherwise be a silent data-loss bug — a phone
+   * running two seconds fast would step its cursor past rows it never received.
+   */
+  syncCursor: 'sync_cursor',
 } as const;

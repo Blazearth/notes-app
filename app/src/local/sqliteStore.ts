@@ -22,13 +22,50 @@ import type {
   Space,
   SpaceMember,
 } from '@/api/types';
+import { isLocalId, type OutboxEntry, type OutboxOp, type OutboxPayloads } from './outbox';
 import { KV, SCHEMA_SQL, SCHEMA_VERSION, type StoreTable } from './schema';
 import { ChangeBus, fromRow, toRow, type FeedQuery, type LocalStore } from './store';
 
 const DATABASE_NAME = 'weavr.db';
 
+/** Every table the store owns, for the drop-and-recreate on a schema bump. */
+const ALL_TABLES = [
+  'saves', 'item_states', 'entity_states', 'overrides',
+  'spaces', 'space_members', 'shopping_items', 'outbox', 'kv',
+] as const;
+
+const CLEAR_ALL_SQL = ALL_TABLES.map((table) => `delete from ${table};`).join(' ');
+
 interface JsonRow {
   json: string;
+}
+
+interface OutboxRow {
+  id: number;
+  op: string;
+  payload: string;
+  idempotency_key: string;
+  entity_id: string | null;
+  created_at: string;
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  status: string;
+}
+
+function toOutboxEntry(row: OutboxRow): OutboxEntry {
+  return {
+    id: row.id,
+    op: row.op as OutboxOp,
+    payload: JSON.parse(row.payload) as OutboxPayloads[OutboxOp],
+    idempotencyKey: row.idempotency_key,
+    entityId: row.entity_id,
+    createdAt: row.created_at,
+    attempts: row.attempts,
+    nextAttemptAt: row.next_attempt_at,
+    lastError: row.last_error,
+    status: row.status === 'failed' ? 'failed' : 'pending',
+  };
 }
 
 export function createSqliteStore(): LocalStore {
@@ -124,9 +161,7 @@ export function createSqliteStore(): LocalStore {
       const stored = await db.getFirstAsync<{ value: string }>('select value from kv where key = ?', KV.schemaVersion);
       const version = stored ? (JSON.parse(stored.value) as number) : null;
       if (version !== SCHEMA_VERSION) {
-        await db.execAsync(
-          'delete from saves; delete from item_states; delete from entity_states; delete from spaces; delete from space_members; delete from shopping_items; delete from kv;',
-        );
+        await db.execAsync(CLEAR_ALL_SQL);
         await db.runAsync(
           'insert or replace into kv (key, value) values (?, ?)',
           KV.schemaVersion,
@@ -136,15 +171,16 @@ export function createSqliteStore(): LocalStore {
     },
 
     async wipe() {
-      await handle().execAsync(
-        'delete from saves; delete from item_states; delete from entity_states; delete from spaces; delete from space_members; delete from shopping_items; delete from kv;',
-      );
+      // The outbox goes with everything else: it holds writes made *as the
+      // previous user*, and replaying them under a new session would attribute
+      // one person's edits to another.
+      await handle().execAsync(CLEAR_ALL_SQL);
       await handle().runAsync(
         'insert or replace into kv (key, value) values (?, ?)',
         KV.schemaVersion,
         JSON.stringify(SCHEMA_VERSION),
       );
-      bus.emit('saves', 'item_states', 'entity_states', 'spaces', 'space_members', 'shopping_items', 'kv');
+      bus.emit(...ALL_TABLES);
     },
 
     // ------------------------------------------------------------- saves
@@ -156,7 +192,10 @@ export function createSqliteStore(): LocalStore {
           const existing = await handle().getAllAsync<{ id: string }>('select id from saves');
           const keep = new Set(ids);
           for (const row of existing) {
-            if (!keep.has(row.id)) {
+            // A `local:` row is a save the server has never heard of, so a full
+            // pull cannot mention it — reaping it would delete the user's save
+            // and orphan the outbox entry that creates it.
+            if (!keep.has(row.id) && !isLocalId(row.id)) {
               await handle().runAsync('delete from saves where id = ?', row.id);
               await handle().runAsync('delete from item_states where save_id = ?', row.id);
             }
@@ -251,6 +290,52 @@ export function createSqliteStore(): LocalStore {
       touched('item_states');
     },
 
+    async putItemState(saveId, itemPath, state) {
+      await handle().runAsync(
+        'insert or replace into item_states (save_id, item_path, json) values (?, ?, ?)',
+        saveId,
+        itemPath,
+        JSON.stringify(state),
+      );
+      touched('item_states');
+    },
+
+    async removeItemState(saveId, itemPath) {
+      await handle().runAsync(
+        'delete from item_states where save_id = ? and item_path = ?',
+        saveId,
+        itemPath,
+      );
+      touched('item_states');
+    },
+
+    async reconcileSaveId(localId, real) {
+      await handle().withTransactionAsync(async () => {
+        // Item states first, while the old id still exists to move them off.
+        await handle().runAsync(
+          'update or replace item_states set save_id = ? where save_id = ?',
+          real.id,
+          localId,
+        );
+        await handle().runAsync('delete from saves where id = ?', localId);
+        await writeSave(real);
+        await handle().runAsync('update saves set pending = 0 where id = ?', real.id);
+        // The outbox rewrite is textual for the same reason `rewriteLocalId` is:
+        // an op added later cannot forget to participate, and a local id is a
+        // uuid behind a prefix that appears in no other stored value.
+        await handle().runAsync(
+          `update outbox
+             set entity_id = case when entity_id = ? then ? else entity_id end,
+                 payload   = replace(payload, ?, ?)`,
+          localId,
+          real.id,
+          localId,
+          real.id,
+        );
+      });
+      touched('saves', 'item_states', 'outbox');
+    },
+
     // ------------------------------------------------------ entity state
 
     async putEntityStates(states, options) {
@@ -280,6 +365,59 @@ export function createSqliteStore(): LocalStore {
         }
       }
       return out;
+    },
+
+    async removeEntityState(entityKey) {
+      await handle().runAsync('delete from entity_states where entity_key = ?', entityKey);
+      touched('entity_states');
+    },
+
+    // -------------------------------------------------- collection overrides
+
+    async putOverrides(rows, options) {
+      await handle().withTransactionAsync(async () => {
+        if (options?.replaceAll) await handle().runAsync('delete from overrides');
+        for (const row of rows) {
+          await handle().runAsync(
+            'insert or replace into overrides (override_type, subject_key, payload) values (?, ?, ?)',
+            row.overrideType,
+            row.subjectKey,
+            JSON.stringify(row.payload),
+          );
+        }
+      });
+      touched('overrides');
+    },
+
+    async readOverrides() {
+      const rows = await handle().getAllAsync<{
+        override_type: string;
+        subject_key: string;
+        payload: string;
+      }>('select override_type, subject_key, payload from overrides');
+      const out: { overrideType: string; subjectKey: string; payload: Record<string, unknown> }[] = [];
+      for (const row of rows) {
+        try {
+          out.push({
+            overrideType: row.override_type,
+            subjectKey: row.subject_key,
+            payload: JSON.parse(row.payload) as Record<string, unknown>,
+          });
+        } catch {
+          // One unreadable override costs that one rule, not the whole tree.
+          continue;
+        }
+      }
+      return out;
+    },
+
+    async removeOverride(overrideType, subjectKey) {
+      await handle().runAsync(
+        'delete from overrides where override_type = ? and subject_key = ?',
+        overrideType,
+        subjectKey,
+      );
+      touched('overrides');
     },
 
     // ------------------------------------------------------------ spaces
@@ -338,6 +476,15 @@ export function createSqliteStore(): LocalStore {
           );
         }
       });
+      touched('space_members');
+    },
+
+    async removeSpaceMember(spaceId, userId) {
+      await handle().runAsync(
+        'delete from space_members where space_id = ? and user_id = ?',
+        spaceId,
+        userId,
+      );
       touched('space_members');
     },
 
@@ -411,6 +558,89 @@ export function createSqliteStore(): LocalStore {
         items: rows.map((row) => JSON.parse(row.json) as ShoppingListItem),
         categories: categories ? (JSON.parse(categories.value) as string[]) : [],
       };
+    },
+
+    // ------------------------------------------------------------ outbox
+
+    async enqueueOutbox(draft) {
+      const result = await handle().runAsync(
+        `insert into outbox (op, payload, idempotency_key, entity_id, created_at)
+         values (?, ?, ?, ?, ?)`,
+        draft.op,
+        JSON.stringify(draft.payload),
+        draft.idempotencyKey,
+        draft.entityId,
+        draft.createdAt,
+      );
+      touched('outbox');
+      return {
+        ...draft,
+        id: result.lastInsertRowId,
+        attempts: 0,
+        nextAttemptAt: null,
+        lastError: null,
+        status: 'pending',
+      };
+    },
+
+    async readOutbox() {
+      // `order by id` is the queue's order and the reason the column is an
+      // autoincrement rather than a uuid — see `selectNext`.
+      const rows = await handle().getAllAsync<OutboxRow>('select * from outbox order by id asc');
+      const out: OutboxEntry[] = [];
+      for (const row of rows) {
+        try {
+          out.push(toOutboxEntry(row));
+        } catch {
+          // An unparseable payload can never be sent, so leaving it pending
+          // would block its entity forever. Mark it failed and move on; it
+          // surfaces to the user like any other terminal failure.
+          await handle().runAsync(
+            "update outbox set status = 'failed', last_error = ? where id = ?",
+            'This change could not be read back and was discarded.',
+            row.id,
+          );
+        }
+      }
+      return out;
+    },
+
+    async updateOutbox(id, changes) {
+      const sets: string[] = [];
+      const params: (string | number | null)[] = [];
+      if (changes.attempts !== undefined) {
+        sets.push('attempts = ?');
+        params.push(changes.attempts);
+      }
+      if (changes.nextAttemptAt !== undefined) {
+        sets.push('next_attempt_at = ?');
+        params.push(changes.nextAttemptAt);
+      }
+      if (changes.lastError !== undefined) {
+        sets.push('last_error = ?');
+        params.push(changes.lastError);
+      }
+      if (changes.status !== undefined) {
+        sets.push('status = ?');
+        params.push(changes.status);
+      }
+      if (changes.entityId !== undefined) {
+        sets.push('entity_id = ?');
+        params.push(changes.entityId);
+      }
+      if (changes.payload !== undefined) {
+        sets.push('payload = ?');
+        params.push(JSON.stringify(changes.payload));
+      }
+      if (sets.length === 0) return;
+      params.push(id);
+      await handle().runAsync(`update outbox set ${sets.join(', ')} where id = ?`, ...params);
+      touched('outbox');
+    },
+
+    async removeOutbox(id) {
+      await handle().runAsync('delete from outbox where id = ?', id);
+      touched('outbox');
     },
 
     // ---------------------------------------------------------------- kv

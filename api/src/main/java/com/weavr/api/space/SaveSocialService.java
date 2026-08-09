@@ -7,6 +7,7 @@ import java.util.UUID;
 
 import com.weavr.api.common.ForbiddenException;
 import com.weavr.api.common.NotFoundException;
+import com.weavr.api.sync.TombstoneService;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,10 +29,12 @@ public class SaveSocialService {
 
     private final JdbcClient jdbc;
     private final SpaceService spaces;
+    private final TombstoneService tombstones;
 
-    SaveSocialService(JdbcClient jdbc, SpaceService spaces) {
+    SaveSocialService(JdbcClient jdbc, SpaceService spaces, TombstoneService tombstones) {
         this.jdbc = jdbc;
         this.spaces = spaces;
+        this.tombstones = tombstones;
     }
 
     /**
@@ -131,6 +134,15 @@ public class SaveSocialService {
             // they just read — pretending it does not exist would be nonsense.
             throw new ForbiddenException("You can only delete your own comments.");
         }
+
+        // Written for everyone who could see the comment, not just the deleter.
+        // `save_comments` is deliberately outside the delta (see
+        // docs/local-first.md — scoping "comments on saves I can see" is a join
+        // across Spaces, and comments are a detail-screen read), so no client
+        // consumes this yet; it exists so the deletion record is complete
+        // rather than complete for six of seven paths.
+        tombstones.recordFor(tombstones.audienceForSave(saveId), TombstoneService.COMMENT,
+                commentId.toString());
     }
 
     /**
@@ -151,8 +163,16 @@ public class SaveSocialService {
         UUID spaceId = requireVisible(userId, saveId);
 
         if (value == 0) {
-            jdbc.sql("delete from save_votes where save_id = ? and user_id = ?")
+            int cleared = jdbc.sql("delete from save_votes where save_id = ? and user_id = ?")
                     .param(saveId).param(userId).update();
+            // Only the voter held the row, so only the voter's cache can hold a
+            // copy of it — unlike a comment, a vote is not visible to anyone
+            // else as a row of its own, just as a contribution to the score.
+            // Same "no consumer yet" caveat as the comment tombstone above.
+            if (cleared > 0) {
+                tombstones.record(userId, TombstoneService.VOTE,
+                        saveId + TombstoneService.KEY_SEPARATOR + userId);
+            }
         } else if (value == 1 || value == -1) {
             // Read before write, so re-sending the same vote does not put a
             // second line in the Space's feed. Setting a value you already

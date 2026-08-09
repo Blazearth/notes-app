@@ -32,11 +32,18 @@ import type {
   SpaceInvite,
   SpaceMember,
   SpaceRole,
+  SyncResponse,
 } from '@/api/types';
 
 export interface Repository {
   // Saves
-  createSave(body: CreateSaveRequest): Promise<SaveResponse>;
+  /**
+   * @param idempotencyKey generated once when the write is queued and carried
+   *                       through every retry — a key minted per attempt would
+   *                       let a POST whose response was lost create a second
+   *                       save. See `@/local/outbox`.
+   */
+  createSave(body: CreateSaveRequest, idempotencyKey?: string): Promise<SaveResponse>;
   listSaves(page?: number, size?: number): Promise<SaveResponse[]>;
   listSavesByLifecycle(statuses: LifecycleStatus[], size?: number): Promise<SaveResponse[]>;
   getSave(id: string): Promise<SaveResponse>;
@@ -148,6 +155,15 @@ export interface Repository {
   unmergeEntity(fromKey: string): Promise<void>;
   renameEntity(entityKey: string, name: string): Promise<void>;
   renameCollection(collectionId: string, name: string): Promise<void>;
+
+  /**
+   * `GET /v1/sync` — everything that changed since `since`, in one request.
+   *
+   * The primary read of the whole app. Omitting `since` is a first sync, not a
+   * different call: the window simply starts at the epoch, so there is no
+   * separate bootstrap path to keep correct.
+   */
+  pullSync(since?: string | null, limit?: number): Promise<SyncResponse>;
 }
 
 /**
