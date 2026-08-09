@@ -38,6 +38,11 @@ function withShareReceiverManifest(config) {
             category: [{ $: { 'android:name': 'android.intent.category.DEFAULT' } }],
             data: [{ $: { 'android:mimeType': 'text/plain' } }],
           },
+          {
+            action: [{ $: { 'android:name': 'android.intent.action.SEND' } }],
+            category: [{ $: { 'android:name': 'android.intent.category.DEFAULT' } }],
+            data: [{ $: { 'android:mimeType': 'image/*' } }],
+          },
         ],
       });
     }

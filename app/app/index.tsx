@@ -1,18 +1,24 @@
 import { Redirect, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BackHandler, Dimensions, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Extrapolation,
   interpolate,
+  runOnJS,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
-  withTiming,
+  withSpring,
 } from 'react-native-reanimated';
 
 import { useSession } from '@/auth/SessionProvider';
+import { AppText } from '@/components/AppText';
 import { BottomNav, type NavItem } from '@/components/BottomNav';
+import { Touchable } from '@/components/Touchable';
 import { morphProgress } from '@/motion/morph';
+import { activeTabFraction } from '@/motion/tabs';
+import { Spring } from '@/theme/motion';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { LibraryScreen } from '@/screens/LibraryScreen';
 import { SpacesScreen } from '@/screens/SpacesScreen';
@@ -24,95 +30,152 @@ const TABS: NavItem[] = [
   { key: 'library', label: 'Library' },
   { key: 'spaces', label: 'Spaces' },
 ];
-
-/** Cross-fade duration. Short — this is a tab switch, not a page load. */
-const FADE_MS = 170;
+/** Tab keys in display order — index equals horizontal pane position. */
+const TAB_KEYS = TABS.map((t) => t.key);
 
 /**
- * How far the shell recedes while Settings expands over it.
- *
- * Small on purpose. The blur carries the separation; this only has to say that
- * the two surfaces are on different planes and that one of them is *behind*.
- * Any further and the shell reads as a shrinking screenshot rather than as the
- * app still being there, one layer down.
+ * Screen pixel width used to position pane offsets.
+ * Stable for the life of the app on phone form factors.
  */
+const SCREEN_WIDTH = Dimensions.get('window').width;
+
+/** How far the shell recedes while Settings expands over it. */
 const SHELL_RECEDE_SCALE = 0.94;
 
-/**
- * One tab's content, stacked with its siblings and faded in when selected.
- *
- * Toggling `display` between `flex` and `none` is the cheap version and it
- * cuts hard: the outgoing screen vanishes a frame before the incoming one
- * exists, so the nav pill slides while the content teleports. Stacking the
- * panes and cross-fading keeps the two motions telling the same story.
- *
- * The panes stay mounted, so scroll position survives a switch — which is the
- * reason the shell keeps them alive in the first place.
- */
-function TabPane({ active, children }: { active: boolean; children: React.ReactNode }) {
-  const reduced = useReducedMotion();
-  const progress = useSharedValue(active ? 1 : 0);
+// ---------------------------------------------------------------------------
+// Exit dialog
+// ---------------------------------------------------------------------------
 
-  useEffect(() => {
-    const target = active ? 1 : 0;
-    progress.value = reduced ? target : withTiming(target, { duration: FADE_MS });
-  }, [active, reduced, progress]);
-
-  const style = useAnimatedStyle(() => ({
-    opacity: progress.value,
-    // A hidden pane must not sit on top of the visible one swallowing touches.
-    // Reanimated can drive `zIndex` off the same value, so visibility and hit
-    // testing can never disagree the way two separate state updates can.
-    zIndex: progress.value > 0.5 ? 1 : 0,
-  }));
-
+function ExitDialog({
+  visible,
+  onStay,
+  onExit,
+}: {
+  visible: boolean;
+  onStay: () => void;
+  onExit: () => void;
+}) {
+  const { palette, spacing, radius, elevation } = useTheme();
   return (
-    <Animated.View
-      // Belt and braces alongside `zIndex`: this is what actually stops a
-      // faded-out pane from taking a tap mid-transition.
-      pointerEvents={active ? 'auto' : 'none'}
-      // Keep the inactive screens out of the accessibility tree, or a screen
-      // reader walks three copies of the app.
-      accessibilityElementsHidden={!active}
-      importantForAccessibility={active ? 'auto' : 'no-hide-descendants'}
-      style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }, style]}
-    >
-      {children}
-    </Animated.View>
+    <Modal transparent animationType="fade" visible={visible} onRequestClose={onStay} statusBarTranslucent>
+      <Pressable
+        style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.45)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: spacing.xl,
+        }}
+        onPress={onStay}
+      >
+        <Pressable
+          style={[
+            {
+              width: '100%',
+              backgroundColor: palette.surface,
+              borderRadius: radius.xl,
+              padding: spacing.xl,
+              gap: spacing.lg,
+            },
+            elevation.sheet,
+          ]}
+        >
+          <View style={{ gap: spacing.xs }}>
+            <AppText variant="heading" style={{ fontSize: 18 }}>
+              Exit Weavr?
+            </AppText>
+            <AppText tone="muted" style={{ fontSize: 14 }}>
+              Are you sure you want to close the app?
+            </AppText>
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: spacing.md }}>
+            <Touchable
+              onPress={onStay}
+              weight="control"
+              style={{
+                flex: 1,
+                paddingVertical: spacing.md,
+                borderRadius: radius.pill,
+                borderWidth: 1.5,
+                borderColor: palette.border,
+                alignItems: 'center',
+              }}
+            >
+              <AppText variant="navLabel" style={{ color: palette.text }}>
+                Stay
+              </AppText>
+            </Touchable>
+
+            <Touchable
+              onPress={onExit}
+              weight="control"
+              style={{
+                flex: 1,
+                paddingVertical: spacing.md,
+                borderRadius: radius.pill,
+                backgroundColor: palette.danger ?? palette.accent,
+                alignItems: 'center',
+              }}
+            >
+              <AppText variant="navLabel" style={{ color: '#ffffff' }}>
+                Exit
+              </AppText>
+            </Touchable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Tab shell
+// ---------------------------------------------------------------------------
+
 /**
- * The tab shell.
+ * The root tab shell — Home / Library / Spaces.
  *
- * Home / Library / Spaces are kept mounted once visited rather than being three
- * routes, so switching tabs preserves scroll position — the three screens are
- * dense and losing your place in the Library is worse than the extra memory.
- * Tabs render lazily: nothing mounts until it is first opened.
+ * The three screens are laid out side-by-side in a single flexDirection:'row'
+ * container that is 3× the screen width. `panX` (a Reanimated shared value)
+ * translates this container left and right entirely on the UI thread, so panes
+ * follow the finger with zero JS-thread involvement during drag.
+ *
+ * On release the container springs to the nearest tab. `runOnJS` then updates
+ * React state so the nav pill stays in sync.
  */
 export default function TabShell() {
   const { palette } = useTheme();
   const { session } = useSession();
   const router = useRouter();
   const reduced = useReducedMotion();
+
   const [active, setActive] = useState('home');
-  const [visited, setVisited] = useState<Record<string, boolean>>({ home: true });
+  const [exitDialogVisible, setExitDialogVisible] = useState(false);
+
+  // ── Shared values ──────────────────────────────────────────────────────────
 
   /**
-   * The shell's half of the Settings morph.
-   *
-   * Settings is a transparent modal, so this screen stays mounted and visible
-   * underneath it — and a surface expanding over a shell that sits perfectly
-   * still reads as a page covering another page. Receding on the *same* shared
-   * value is what turns two screens into one interface with a front and a back.
-   *
-   * It is read from a module-scope shared value rather than passed down because
-   * the value's owner is on the other side of a navigation boundary; see
-   * `src/motion/morph.ts`.
+   * Horizontal position of the pane container.
+   *   0              → Home    (index 0)
+   *  -SCREEN_WIDTH   → Library (index 1)
+   *  -2*SCREEN_WIDTH → Spaces  (index 2)
    */
+  const panX = useSharedValue(0);
+
+  /**
+   * Mirrors the active tab index for worklet access (shared values cross
+   * the JS/UI bridge; plain React state does not).
+   */
+  const activeIndexSV = useSharedValue(0);
+
+  // ── Animated styles ────────────────────────────────────────────────────────
+
+  const containerStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: panX.value }],
+  }));
+
   const shellStyle = useAnimatedStyle(() => {
-    // Reduced Motion snaps the morph to its end state, and a snap is exactly the
-    // jolt the setting exists to avoid. The shell simply stays put.
     if (reduced) return {};
     const progress = interpolate(morphProgress.value, [0, 1], [0, 1], Extrapolation.CLAMP);
     return {
@@ -121,19 +184,6 @@ export default function TabShell() {
     };
   });
 
-  /**
-   * The nav layer's half of the same recede.
-   *
-   * The nav used to be a child of the shell above and so was carried by that
-   * one transform. It is a sibling now (see the render below), which means it
-   * needs its own — but it must be the *same* scale, applied to a layer that
-   * fills the same rectangle. A transform scales about the view's own centre,
-   * so a full-screen layer and the full-screen shell share an origin and the
-   * two moves stay indistinguishable from the single one they replaced.
-   *
-   * No `borderRadius` here: it exists on the shell to round the receding page,
-   * and this layer paints nothing of its own to round.
-   */
   const navLayerStyle = useAnimatedStyle(() => {
     if (reduced) return {};
     const progress = interpolate(morphProgress.value, [0, 1], [0, 1], Extrapolation.CLAMP);
@@ -142,59 +192,159 @@ export default function TabShell() {
     };
   });
 
-  if (!session) return <Redirect href="/sign-in" />;
+  // ── Stable ref ─────────────────────────────────────────────────────────────
 
-  const select = (key: string) => {
-    setVisited((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
+
+  // ── Callbacks ──────────────────────────────────────────────────────────────
+
+  /**
+   * Primary tab-select: used by the nav pill, back button and any programmatic
+   * navigation. Springs panX and syncs React state.
+   */
+  const selectTab = useCallback(
+    (key: string) => {
+      const idx = TAB_KEYS.indexOf(key);
+      if (idx === -1) return;
+      setActive(key);
+      activeRef.current = key;
+      activeIndexSV.value = idx;
+      panX.value = withSpring(-idx * SCREEN_WIDTH, Spring.travel);
+      activeTabFraction.value = withSpring(idx, Spring.travel);
+    },
+    // panX / activeIndexSV are stable Reanimated shared values, not React deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  /**
+   * Called from the swipe worklet via runOnJS. Only updates React state;
+   * panX and activeIndexSV are already set on the UI thread.
+   */
+  const setActiveFromIndex = useCallback((idx: number) => {
+    const key = TAB_KEYS[idx];
     setActive(key);
-  };
+    activeRef.current = key;
+  }, []);
+
+  // ── Swipe gesture ──────────────────────────────────────────────────────────
+
+  /**
+   * activeOffsetX  — activates after 15 px horizontal movement so vertical
+   *                  scrollers inside panes get a head start.
+   * failOffsetY    — fails entirely on 20 px vertical movement, leaving lists
+   *                  and scroll views fully unaffected.
+   * onUpdate       — runs on UI thread, moves panes in real time (no JS round-trip).
+   * onEnd          — springs to nearest tab, biased by flick velocity.
+   */
+  const swipeGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-15, 15])
+        .failOffsetY([-20, 20])
+        .onUpdate((e) => {
+          'worklet';
+          const baseX = -activeIndexSV.value * SCREEN_WIDTH;
+          const clamped = Math.min(
+            0,
+            Math.max(-(TAB_KEYS.length - 1) * SCREEN_WIDTH, baseX + e.translationX),
+          );
+          panX.value = clamped;
+          // Keep the nav pill in sync on the UI thread — no JS round-trip needed.
+          activeTabFraction.value = -clamped / SCREEN_WIDTH;
+        })
+        .onEnd((e) => {
+          'worklet';
+          const rawIndex = -panX.value / SCREEN_WIDTH;
+          let target = Math.min(TAB_KEYS.length - 1, Math.max(0, Math.round(rawIndex)));
+          if (e.velocityX < -400 && target < TAB_KEYS.length - 1) target += 1;
+          if (e.velocityX > 400 && target > 0) target -= 1;
+          panX.value = withSpring(-target * SCREEN_WIDTH, { damping: 24, stiffness: 240, mass: 0.9 });
+          activeTabFraction.value = withSpring(target, { damping: 24, stiffness: 240, mass: 0.9 });
+          activeIndexSV.value = target;
+          runOnJS(setActiveFromIndex)(target);
+        }),
+    [setActiveFromIndex],
+  );
+
+  // ── Android back button ────────────────────────────────────────────────────
+
+  /**
+   * Case 1: pushed screen → React Navigation pops it (return false).
+   * Case 2: not on Home root → go to the previous tab in order
+   *         (Spaces → Library → Home) with the same spring as a swipe.
+   * Case 3: on Home root → show themed exit dialog.
+   */
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (router.canGoBack()) return false;
+
+      const currentIndex = TAB_KEYS.indexOf(activeRef.current);
+      if (currentIndex > 0) {
+        selectTab(TAB_KEYS[currentIndex - 1]);
+        return true;
+      }
+
+      setExitDialogVisible(true);
+      return true;
+    });
+
+    return () => handler.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // All hooks above — Rules of Hooks satisfied before the early return.
+  if (!session) return <Redirect href="/sign-in" />;
 
   return (
     <View style={{ flex: 1, backgroundColor: palette.background }}>
       <Animated.View style={[{ flex: 1, overflow: 'hidden' }, shellStyle]}>
-        <View style={{ flex: 1 }}>
-          {visited.home ? (
-            <TabPane active={active === 'home'}>
+        <GestureDetector gesture={swipeGesture}>
+          {/*
+            Three panes side-by-side in a 3× wide container. overflow:'hidden'
+            on the parent clips off-screen panes. pointerEvents="none" blocks
+            touches to inactive panes even during mid-swipe transitions.
+          */}
+          <Animated.View
+            style={[
+              {
+                flexDirection: 'row',
+                width: SCREEN_WIDTH * TAB_KEYS.length,
+                height: '100%',
+              },
+              containerStyle,
+            ]}
+          >
+            <View
+              style={{ width: SCREEN_WIDTH, height: '100%' }}
+              pointerEvents={active === 'home' ? 'auto' : 'none'}
+            >
               <HomeScreen />
-            </TabPane>
-          ) : null}
-          {visited.library ? (
-            <TabPane active={active === 'library'}>
+            </View>
+            <View
+              style={{ width: SCREEN_WIDTH, height: '100%' }}
+              pointerEvents={active === 'library' ? 'auto' : 'none'}
+            >
               <LibraryScreen />
-            </TabPane>
-          ) : null}
-          {visited.spaces ? (
-            <TabPane active={active === 'spaces'}>
+            </View>
+            <View
+              style={{ width: SCREEN_WIDTH, height: '100%' }}
+              pointerEvents={active === 'spaces' ? 'auto' : 'none'}
+            >
               <SpacesScreen />
-            </TabPane>
-          ) : null}
-        </View>
+            </View>
+          </Animated.View>
+        </GestureDetector>
       </Animated.View>
 
       {/*
-        The nav is a sibling of the shell with an explicit `zIndex`, and both
-        halves of that are load-bearing.
-
-        On the first device run it did not paint at all — neither the pill nor
-        the capture button — while the screen behind them rendered fine. The
-        cause is `TabPane`'s `zIndex: 1` above: painting order puts *any*
-        positive z-index above an element that has none, whatever the source
-        order, and the panes' container is a plain view that does not create a
-        stacking context to keep that number to itself. So the active pane, an
-        opaque full-bleed surface, was painted over a nav that had no z-index
-        to answer with. Being later in the tree bought it nothing.
-
-        Hoisting the nav into its own layer is what makes the two comparable at
-        all — the shell's transform does establish a stacking context, so the
-        pane's z-index is now contained by it. But that containment is a
-        property of how transforms behave on web, so it is not something to
-        rely on: `zIndex: 2` states the intent directly and holds wherever the
-        containment does not. It has to stay above `TabPane`'s 1.
-
-        `absoluteFill` reproduces the rectangle the nav used to inherit as a
-        child, `box-none` keeps taps falling through to the feed everywhere the
-        nav itself is not, and `navLayerStyle` carries the same recede so the
-        Settings morph looks unchanged.
+        Nav layer is a sibling of the shell so it is never clipped by
+        overflow:'hidden', and sits above the panes via zIndex:2.
       */}
       <Animated.View
         pointerEvents="box-none"
@@ -203,10 +353,16 @@ export default function TabShell() {
         <BottomNav
           items={TABS}
           activeKey={active}
-          onSelect={select}
+          onSelect={selectTab}
           onCapture={() => router.push('/capture')}
         />
       </Animated.View>
+
+      <ExitDialog
+        visible={exitDialogVisible}
+        onStay={() => setExitDialogVisible(false)}
+        onExit={() => BackHandler.exitApp()}
+      />
     </View>
   );
 }

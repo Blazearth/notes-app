@@ -256,6 +256,14 @@ export const mockRepository: Repository = {
     return delay(copy(save));
   },
 
+  updateNote(id: string, data: { title?: string; body?: string }): Promise<SaveResponse> {
+    const save = requireSave(id);
+    save.structuredData = { ...(save.structuredData ?? {}), ...data };
+    if (data.body !== undefined) save.rawCaption = data.body;
+    save.updatedAt = now();
+    return delay(copy(save));
+  },
+
   setSaveSpace(id: string, spaceId: string | null): Promise<SaveResponse> {
     const save = requireSave(id);
     save.spaceId = spaceId ?? undefined;

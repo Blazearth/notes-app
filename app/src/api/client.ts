@@ -246,6 +246,21 @@ export function setSaveFlags(
 }
 
 /**
+ * `PATCH /v1/saves/{id}/note` — edits the title and body of a text note.
+ * Only valid for `sourceType === 'text'` saves.
+ */
+export function updateNote(
+  id: string,
+  data: { title?: string; body?: string },
+): Promise<SaveResponse> {
+  return request<SaveResponse>(`/v1/saves/${id}/note`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+/**
  * `PATCH /v1/saves/{id}/item-state` — the one mechanism behind every
  * knowledge type's interactivity: exercise ticks, checklist items, watch
  * status + rating, "continue where I left off". Always a full replace of

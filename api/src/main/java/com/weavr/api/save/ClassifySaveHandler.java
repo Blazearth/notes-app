@@ -120,8 +120,25 @@ class ClassifySaveHandler implements JobHandler {
         // Acquire budget — throws RetryAfterException if daily pool is exhausted.
         BudgetApproved budget = budgetService.acquire();
 
-        // Call Gemini.
-        GeminiResponse response = geminiClient.classify(saveId, text, budget);
+        // For IMAGE saves that went through the upload endpoint, we have the
+        // raw image bytes in save_stages. Send them directly to Gemini Vision
+        // so it sees full visual context (UI, overlay text, layout) rather than
+        // reconstructed text from a lossy OCR intermediate.
+        Map<String, Object> imageStage = save.getSourceType() == SourceType.IMAGE
+                ? readStage(saveId, ProcessSaveHandler.STAGE_IMAGE_READY)
+                : null;
+
+        // Call Gemini — vision path for image saves, text path for everything else.
+        GeminiResponse response;
+        if (imageStage != null && imageStage.get("image_b64") instanceof String b64 && !b64.isBlank()) {
+            byte[] imageBytes = java.util.Base64.getDecoder().decode(b64);
+            String mimeType = imageStage.getOrDefault("mime_type", "image/jpeg").toString();
+            log.info("Save {} routing to Gemini image classify ({} bytes)", saveId, imageBytes.length);
+            response = geminiClient.classifyImage(saveId, imageBytes, mimeType, budget);
+        } else {
+            // Text path: URL saves, TEXT saves, and legacy IMAGE/OCR saves.
+            response = geminiClient.classify(saveId, text, budget);
+        }
 
         // If primary confidence is below threshold and we can afford fallback, retry.
         if (response.confidence() < geminiProps.confidenceThreshold()
@@ -131,7 +148,12 @@ class ClassifySaveHandler implements JobHandler {
             try {
                 BudgetApproved fallbackBudget = budgetService.acquireFor(
                         geminiProps.fallbackModel(), geminiProps.fallbackRpd());
-                GeminiResponse fallback = geminiClient.classify(saveId, text, fallbackBudget);
+                GeminiResponse fallback = (imageStage != null && imageStage.get("image_b64") instanceof String b64)
+                        ? geminiClient.classifyImage(saveId,
+                            java.util.Base64.getDecoder().decode(b64.toString()),
+                            imageStage.getOrDefault("mime_type", "image/jpeg").toString(),
+                            fallbackBudget)
+                        : geminiClient.classify(saveId, text, fallbackBudget);
                 // Use fallback result if it's more confident.
                 if (fallback.confidence() >= response.confidence()) {
                     response = fallback;

@@ -1,6 +1,7 @@
 package com.weavr.api.save;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -9,6 +10,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 import com.weavr.api.common.NotFoundException;
+import com.weavr.api.config.SupabaseStorageClient;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobType;
 import com.weavr.api.profile.ProfileService;
@@ -43,12 +45,15 @@ public class SaveService {
     private final ProfileService profiles;
     private final JobQueue jobs;
     private final SpaceService spaces;
+    private final SupabaseStorageClient storage;
 
-    SaveService(SaveRepository saves, ProfileService profiles, JobQueue jobs, SpaceService spaces) {
+    SaveService(SaveRepository saves, ProfileService profiles, JobQueue jobs,
+                SpaceService spaces, SupabaseStorageClient storage) {
         this.saves = saves;
         this.profiles = profiles;
         this.jobs = jobs;
         this.spaces = spaces;
+        this.storage = storage;
     }
 
     /**
@@ -105,6 +110,23 @@ public class SaveService {
                 throw e;
             }
             return saves.findByUserIdAndIdempotencyKey(userId, key).orElseThrow(() -> e);
+        }
+
+        // Text notes carry their full content in raw_caption — there is nothing
+        // for the extraction pipeline or Gemini to do. Mark ready immediately so
+        // the card never shows "Processing" and no Gemini budget is spent.
+        if (request.sourceType() == SourceType.TEXT) {
+            Map<String, Object> structured = new HashMap<>();
+            String title = blankToNull(request.title());
+            if (title != null) structured.put("title", title.trim());
+            String body = blankToNull(request.text());
+            if (body != null) structured.put("body", body);
+            save.setStructuredData(structured);
+            save.setStatus(SaveStatus.READY);
+            saves.save(save);
+            recordSaveAddedAfterCommit(save.getSpaceId(), userId, save.getId());
+            log.info("Accepted text note id={} user={}, marked ready immediately", save.getId(), userId);
+            return save;
         }
 
         // Keyed on the save id, so a retried enqueue is a no-op. This does not
@@ -302,7 +324,79 @@ public class SaveService {
         return save;
     }
 
+    /**
+     * Updates the title and body of a text note.
+     *
+     * <p>Only the caller's own saves can be edited — the load goes through
+     * {@code findByIdAndUserId} so a foreign save produces a 404, not a 403.
+     * Only TEXT saves are editable this way; the guard keeps the endpoint from
+     * being used to corrupt a pipeline-classified save's structuredData.
+     */
+    @Transactional
+    public Save updateNote(UUID userId, UUID saveId, String title, String body) {
+        Save save = saves.findByIdAndUserId(saveId, userId)
+                .orElseThrow(() -> new NotFoundException("Save not found"));
+        if (save.getSourceType() != SourceType.TEXT) {
+            throw new IllegalArgumentException("Only text notes can be edited this way");
+        }
+        Map<String, Object> structured = new HashMap<>(save.getStructuredData());
+        if (title != null && !title.isBlank()) {
+            structured.put("title", title.trim());
+        } else {
+            structured.remove("title");
+        }
+        if (body != null && !body.isBlank()) {
+            structured.put("body", body.trim());
+        } else {
+            structured.remove("body");
+        }
+        save.setStructuredData(structured);
+        save.setRawCaption(body != null ? body.trim() : null);
+        log.info("Updated text note id={} user={}", saveId, userId);
+        return save;
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
+    }
+
+    /**
+     * Creates a save from a raw image upload (screenshot share).
+     *
+     * <p>Steps:
+     * <ol>
+     *   <li>Upload image bytes to Supabase Storage — the public URL doubles as
+     *       the thumbnail so the card shows the real screenshot immediately.</li>
+     *   <li>Persist the save with {@code sourceType = IMAGE} and no idempotency
+     *       key (share-image uploads do not dedupe today; WorkManager's
+     *       unique-work policy handles that at the worker level).</li>
+     *   <li>Enqueue {@code PROCESS_SAVE}.</li>
+     * </ol>
+     *
+     * @param userId    owner
+     * @param imageBytes JPEG bytes (already compressed by the Android worker)
+     * @param mimeType  MIME type, typically {@code image/jpeg}
+     * @param spaceId   optional space to place the save in
+     * @return the newly-persisted save (status {@code processing})
+     */
+    @Transactional
+    public Save createFromImage(UUID userId, byte[] imageBytes, String mimeType, UUID spaceId) {
+        if (spaceId != null) {
+            spaces.requireRole(userId, spaceId, SpaceRole.EDITOR);
+        }
+
+        // Generate the save ID first so we can derive the storage path from it.
+        UUID saveId = UUID.randomUUID();
+        String publicUrl = storage.upload(userId, saveId, imageBytes, mimeType);
+
+        Save save = saves.save(Save.acceptedImage(userId, saveId, publicUrl, spaceId));
+
+        jobs.enqueueForUser(
+                JobType.PROCESS_SAVE,
+                Map.of("saveId", save.getId().toString()),
+                JobType.PROCESS_SAVE + ":" + save.getId(),
+                userId);
+        log.info("Image save created: id={} user={} storageUrl={}", save.getId(), userId, publicUrl);
+        return save;
     }
 }

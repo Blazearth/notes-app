@@ -44,6 +44,26 @@ export function writeSaveFlags(
   void sync.enqueue('setSaveFlags', { id, flags: changes }, id);
 }
 
+/**
+ * Edits a text note's title and body.
+ *
+ * The optimistic write has to reach `structuredData` as well as `rawCaption`,
+ * because that is where the detail screen and every card read a note's text
+ * from — writing only what the request carries would leave the editor agreeing
+ * with the user and the card still showing the old words.
+ *
+ * The strongest case in this file for going through the queue rather than
+ * firing a request: this is text the user typed, nothing else holds a copy of
+ * it, and the editor is dismissed before the request resolves.
+ */
+export function writeNote(save: SaveResponse, title?: string, body?: string): void {
+  void getStore().patchSave(save.id, {
+    structuredData: { ...(save.structuredData ?? {}), title, body },
+    rawCaption: body,
+  });
+  void sync.enqueue('updateNote', { id: save.id, title, body }, save.id);
+}
+
 export function writeSaveLifecycle(id: string, lifecycleStatus: LifecycleStatus): void {
   void getStore().patchSave(id, { lifecycleStatus });
   void sync.enqueue('setSaveLifecycle', { id, lifecycleStatus }, id);

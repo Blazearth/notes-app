@@ -1,8 +1,10 @@
 import * as Clipboard from 'expo-clipboard';
 import { BlurView } from 'expo-blur';
+import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
 import Animated, {
   interpolate,
   runOnJS,
@@ -17,6 +19,10 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+// `API_BASE_URL` rather than `repo`: the screenshot upload is multipart and
+// cannot go through either the repository or the outbox — see `handleOpenScreenshot`.
+import { API_BASE_URL } from '@/api/config';
+import { getStore } from '@/local';
 import { writeCreateSave } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { Glyph } from '@/components/Glyph';
@@ -25,11 +31,12 @@ import { CAPTURE_OPTIONS, CAPTURE_SUBTITLE, type CaptureOption } from '@/data/sa
 import { useHaptic } from '@/motion/haptics';
 import { Spring, staggerDelay } from '@/theme/motion';
 import { useTheme } from '@/theme/ThemeProvider';
+import { supabase } from '@/auth/supabase';
 
 const COLUMNS = 4;
 
-/** Only `link` posts today; the rest need capture surfaces that do not exist. */
-const IMPLEMENTED: ReadonlySet<string> = new Set(['link']);
+/** Only `link`, `note`, and `screenshot` post today; the rest need capture surfaces. */
+const IMPLEMENTED: ReadonlySet<string> = new Set(['link', 'note', 'screenshot']);
 
 const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
 
@@ -201,6 +208,10 @@ export function CaptureSheet() {
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 'tiles' — the grid; 'note' — the inline text editor. */
+  const [mode, setMode] = useState<'tiles' | 'note'>('tiles');
+  const [noteTitle, setNoteTitle] = useState('');
+  const [noteText, setNoteText] = useState('');
 
   const reducedMotion = useReducedMotion();
   // Drives the backdrop blur/scrim and the panel's rise together, on the same
@@ -364,11 +375,132 @@ export function CaptureSheet() {
   // `React.memo` on the tiles is decorative.
   const handlePasteLink = useCallback(() => void pasteLink(), [pasteLink]);
 
+  /** Switch the panel to the inline note editor. */
+  const handleOpenNote = useCallback(() => {
+    setError(null);
+    setNoteTitle('');
+    setNoteText('');
+    setMode('note');
+  }, []);
+
+  /**
+   * Opens the system image picker, compresses the image, and POSTs it as
+   * multipart/form-data to POST /v1/saves/image on the backend.
+   *
+   * The backend handles:
+   *   1. Uploading to Supabase Storage (using the service key — bypasses RLS)
+   *   2. Creating the save record
+   *   3. Enqueuing Gemini vision classification
+   *
+   * This avoids any client-side Supabase Storage RLS issues.
+   */
+  const handleOpenScreenshot = useCallback(async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Allow Weavr to access your photos to save screenshots.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images' as const,
+      quality: 0.85,
+      allowsEditing: false,
+      allowsMultipleSelection: false,
+    });
+
+    if (result.canceled || result.assets.length === 0) return;
+
+    const asset = result.assets[0];
+    setBusyId('screenshot');
+    setError(null);
+
+    try {
+      // Get the auth token so the backend can identify the user
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) {
+        setError('Sign in to save screenshots.');
+        setBusyId(null);
+        return;
+      }
+
+      // Build multipart upload via expo-file-system — more reliable than
+      // fetch + FormData in React Native (avoids "Unsupported FormDataPart")
+      const uploadResult = await uploadAsync(
+        `${API_BASE_URL}/v1/saves/image`,
+        asset.uri,
+        {
+          httpMethod: 'POST',
+          uploadType: FileSystemUploadType.MULTIPART,
+          fieldName: 'file',
+          mimeType: 'image/jpeg',
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+
+      if (uploadResult.status < 200 || uploadResult.status >= 300) {
+        throw new Error(`Upload failed (${uploadResult.status}): ${uploadResult.body}`);
+      }
+
+      const saved = JSON.parse(uploadResult.body) as import('@/api/types').SaveResponse;
+      haptic('success');
+      // Straight into the store rather than into a provider's list: every screen
+      // reads the store now, so this is what puts the card in the feed. **Not**
+      // `replaceAll` — this is one save, not a view of the library.
+      await getStore().putSaves([saved]);
+      dismiss();
+    } catch (e) {
+      haptic('error');
+      setError('Screenshot upload failed. Try again.');
+      console.warn('[screenshot] upload error:', e instanceof Error ? e.message : e);
+    } finally {
+      setBusyId(null);
+    }
+  }, [dismiss, haptic]);
+
+  const handleOpenScreenshotPress = useCallback(
+    () => void handleOpenScreenshot(),
+    [handleOpenScreenshot],
+  );
+
+  /**
+   * Save the typed note and dismiss, mirroring pasteLink's fire-and-forget
+   * pattern: validate locally → haptic → dismiss → POST in background.
+   * The sheet is never held open waiting on the network.
+   */
+  const handleSaveNote = useCallback(async () => {
+    const body = noteText.trim();
+    if (!body) {
+      haptic('error');
+      setError('Write something first.');
+      return;
+    }
+    const title = noteTitle.trim() || undefined;
+    haptic('success');
+    setMode('tiles');
+    setNoteTitle('');
+    setNoteText('');
+    dismiss();
+
+    // Same local-first path as `pasteLink`, and for a note the case is stronger
+    // still: this is text the user typed and nothing else holds a copy of it.
+    // A fire-and-forget POST that failed used to lose it outright — the sheet
+    // was already dismissed, so the `catch` had nowhere to report to. Queued, it
+    // survives a dead connection and an app restart.
+    writeCreateSave({ sourceType: 'text', text: body, title });
+  }, [noteTitle, noteText, dismiss, haptic]);
+
+  const handleSaveNotePress = useCallback(() => void handleSaveNote(), [handleSaveNote]);
+
   // Static input, so this must not be rebuilt on every keystroke of state.
   const rows = useMemo(() => chunk(CAPTURE_OPTIONS, COLUMNS), []);
 
   return (
-    <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+    <KeyboardAvoidingView
+      style={{ flex: 1, justifyContent: 'flex-end' }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+    >
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
         <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={dismiss} style={{ flex: 1 }}>
           {blurEffects ? (
@@ -433,47 +565,153 @@ export function CaptureSheet() {
             marginBottom: spacing.lg + 2,
           }}
         />
-        <AppText variant="heading" style={{ marginBottom: spacing.xs }}>
-          Add to Weavr
-        </AppText>
-        <AppText tone="muted" style={{ fontSize: 12.5, marginBottom: spacing.xl }}>
-          {CAPTURE_SUBTITLE}
-        </AppText>
 
-        <View style={{ gap: spacing.md + 2 }}>
-          {rows.map((row, rowIndex) => (
-            <View key={rowIndex} style={{ flexDirection: 'row', gap: spacing.md + 2 }}>
-              {row.map((option, colIndex) => (
-                <OptionTile
-                  key={option.id}
-                  option={option}
-                  busy={busyId === option.id}
-                  index={rowIndex * COLUMNS + colIndex}
-                  tilesOut={tilesOut}
-                  // Stable identities, or `React.memo` on the tile buys nothing
-                  // — a fresh arrow per render makes every tile re-render on
-                  // every keystroke of sheet state.
-                  onPress={option.id === 'link' ? handlePasteLink : noop}
-                />
-              ))}
-              {/* Keep the last row's columns aligned with the first. */}
-              {Array.from({ length: COLUMNS - row.length }).map((_, i) => (
-                <View key={`spacer-${i}`} style={{ flex: 1 }} />
+        {mode === 'note' ? (
+          /*
+           * Inline note editor — replaces the tile grid when the user taps
+           * "Text Note". No navigation, no new route: the panel content swaps
+           * in place so the sheet entrance/exit animation is unchanged.
+           */
+          <View>
+            {/* Back navigation */}
+            <Pressable
+              onPress={() => { setMode('tiles'); setError(null); }}
+              style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.lg }}
+              accessibilityRole="button"
+              accessibilityLabel="Back to capture options"
+            >
+              <Glyph name="chevron" size={16} weight={2.5} color={palette.accent} />
+              <AppText style={{ color: palette.accent, fontSize: 14, marginLeft: 4 }}>
+                Text note
+              </AppText>
+            </Pressable>
+
+            {/* Title — single line, auto-focused */}
+            <TextInput
+              value={noteTitle}
+              onChangeText={(t) => { setNoteTitle(t); setError(null); }}
+              placeholder="Title"
+              placeholderTextColor={palette.textFaint}
+              autoFocus
+              returnKeyType="next"
+              maxLength={500}
+              style={{
+                fontSize: 18,
+                fontWeight: '600',
+                color: palette.text,
+                backgroundColor: palette.surfaceVariant,
+                borderRadius: radius.md,
+                borderWidth: 1,
+                borderColor: palette.border,
+                paddingHorizontal: spacing.md,
+                paddingVertical: spacing.sm + 2,
+                marginBottom: spacing.sm,
+              }}
+            />
+
+            {/* Body — multiline */}
+            <TextInput
+              value={noteText}
+              onChangeText={(t) => { setNoteText(t); setError(null); }}
+              placeholder="Write your note…"
+              placeholderTextColor={palette.textFaint}
+              multiline
+              maxLength={100_000}
+              textAlignVertical="top"
+              style={{
+                minHeight: 110,
+                fontSize: 15,
+                lineHeight: 22,
+                color: palette.text,
+                backgroundColor: palette.surfaceVariant,
+                borderRadius: radius.md,
+                borderWidth: 1,
+                borderColor: error ? palette.danger : palette.border,
+                padding: spacing.md,
+              }}
+            />
+
+            {/* Counter + error + save */}
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginTop: spacing.md,
+              }}
+            >
+              <AppText variant="caption" style={{ color: error ? palette.danger : palette.textFaint, fontSize: 12, flex: 1 }}>
+                {error ?? `${noteText.length.toLocaleString()} / 100,000`}
+              </AppText>
+              <Touchable
+                onPress={handleSaveNotePress}
+                weight="control"
+                style={{
+                  paddingVertical: spacing.sm + 2,
+                  paddingHorizontal: spacing.lg,
+                  borderRadius: radius.pill,
+                  backgroundColor: palette.accent,
+                }}
+              >
+                <AppText variant="navLabel" style={{ color: palette.onAccent }}>
+                  Save note
+                </AppText>
+              </Touchable>
+            </View>
+          </View>
+        ) : (
+          /*
+           * Default tile grid.
+           */
+          <>
+            <AppText variant="heading" style={{ marginBottom: spacing.xs }}>
+              Add to Weavr
+            </AppText>
+            <AppText tone="muted" style={{ fontSize: 12.5, marginBottom: spacing.xl }}>
+              {CAPTURE_SUBTITLE}
+            </AppText>
+
+            <View style={{ gap: spacing.md + 2 }}>
+              {rows.map((row, rowIndex) => (
+                <View key={rowIndex} style={{ flexDirection: 'row', gap: spacing.md + 2 }}>
+                  {row.map((option, colIndex) => (
+                    <OptionTile
+                      key={option.id}
+                      option={option}
+                      busy={busyId === option.id}
+                      index={rowIndex * COLUMNS + colIndex}
+                      tilesOut={tilesOut}
+                      // Stable identities, or `React.memo` on the tile buys nothing
+                      // — a fresh arrow per render makes every tile re-render on
+                      // every keystroke of sheet state.
+                      onPress={
+                        option.id === 'link'       ? handlePasteLink :
+                        option.id === 'note'       ? handleOpenNote :
+                        option.id === 'screenshot' ? handleOpenScreenshotPress :
+                        noop
+                      }
+                    />
+                  ))}
+                  {/* Keep the last row's columns aligned with the first. */}
+                  {Array.from({ length: COLUMNS - row.length }).map((_, i) => (
+                    <View key={`spacer-${i}`} style={{ flex: 1 }} />
+                  ))}
+                </View>
               ))}
             </View>
-          ))}
-        </View>
 
-        {error ? (
-          <AppText variant="caption" style={{ color: palette.danger, marginTop: spacing.lg }}>
-            {error}
-          </AppText>
-        ) : (
-          <AppText variant="caption" tone="faint" style={{ marginTop: spacing.lg }}>
-            Paste Link is wired to the API. The rest arrive with their capture surfaces.
-          </AppText>
+            {error ? (
+              <AppText variant="caption" style={{ color: palette.danger, marginTop: spacing.lg }}>
+                {error}
+              </AppText>
+            ) : (
+              <AppText variant="caption" tone="faint" style={{ marginTop: spacing.lg }}>
+                Paste Link, Text Note, and Screenshot are wired up. The rest arrive with their capture surfaces.
+              </AppText>
+            )}
+          </>
         )}
       </Animated.View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }

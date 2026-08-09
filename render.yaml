@@ -65,3 +65,9 @@ services:
       # ── RapidAPI YouTube — primary metadata+transcript path for YouTube ──────
       - key: WEAVR_RAPID_YT_API_KEY
         sync: false
+
+      # ── Supabase Storage — screenshot upload bucket ──────────────────────────
+      - key: WEAVR_SUPABASE_SERVICE_KEY
+        sync: false
+      - key: WEAVR_SUPABASE_STORAGE_BUCKET
+        value: "screenshots"

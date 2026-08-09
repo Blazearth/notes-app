@@ -732,6 +732,14 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
     await getStore().reconcileSaveId(localId, save);
   },
 
+  async updateNote(entry) {
+    const updated = await repo.updateNote(entry.payload.id, {
+      title: entry.payload.title,
+      body: entry.payload.body,
+    });
+    await getStore().patchSave(entry.payload.id, updated);
+  },
+
   async setSaveFlags(entry) {
     const updated = await repo.setSaveFlags(entry.payload.id, entry.payload.flags);
     await getStore().patchSave(entry.payload.id, updated);

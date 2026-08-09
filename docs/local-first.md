@@ -610,6 +610,28 @@ local id.
   `V16__idempotency.sql` exists for. Queueing them before that migration lands is
   the one way to create duplicate Spaces.
 
+**Two more writes joined the queue when `main` merged in (2026-08-09), and one
+could not.** Text-note capture and the screenshot upload were built on the
+network-first `repo.createSave(...).then(prepend)` shape, and `prepend` no longer
+exists — the processing-poll became feed-driven in L3 — so both had to be
+re-landed rather than merely re-typed:
+
+- **A typed note goes through the outbox** (`writeCreateSave`, and `updateNote`
+  as a new op for the inline editor). This is the strongest case in the app for
+  the queue rather than a fire-and-forget POST: the text exists nowhere but in
+  the request, and the sheet is dismissed before it resolves, so the old
+  `catch` had no surface to report to and a failed note was simply gone. The
+  optimistic write has to touch `structuredData` **and** `rawCaption`, because
+  that is where the detail screen and the cards read a note's text from.
+- **The screenshot upload cannot be queued, and that is a property of the
+  payload rather than a decision.** It is `multipart/form-data` through
+  `expo-file-system`'s `uploadAsync`, and the outbox stores JSON payloads and
+  sends them through `Repository`; a file URI queued today can also be a file
+  that no longer exists tomorrow. So it stays a direct call and writes its
+  result into the store (`putSaves`, never `replaceAll` — it is one save, not a
+  view of the library). Offline screenshot capture would need the queue to carry
+  a copied file, which is a larger design than this merge.
+
 **Verified:** 45 node-standalone assertions over `outbox.ts` and `store.ts`'s pure
 halves — every disposition, the backoff curve and its cap, `selectNext`'s
 skip-failed and block-same-entity rules, the wake timer, local-id shape, the

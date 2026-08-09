@@ -50,6 +50,7 @@ import type { CreateSaveRequest, LifecycleStatus } from '@/api/types';
  */
 export type OutboxOp =
   | 'createSave'
+  | 'updateNote'
   | 'setSaveFlags'
   | 'setSaveLifecycle'
   | 'setSaveSpace'
@@ -65,6 +66,13 @@ export type OutboxOp =
 /** The payload shape per op, so the drain's dispatch is exhaustively typed. */
 export interface OutboxPayloads {
   createSave: { body: CreateSaveRequest; localId: string };
+  /**
+   * A text note's title and body. An absolute set like every other op here —
+   * `PATCH /v1/saves/{id}/note` replaces both fields — which is what makes a
+   * retry harmless. It matters more than most: this is text the user typed and
+   * nothing else holds a copy of, so a lost request loses the writing.
+   */
+  updateNote: { id: string; title?: string; body?: string };
   setSaveFlags: { id: string; flags: { favorite?: boolean; archived?: boolean } };
   setSaveLifecycle: { id: string; lifecycleStatus: LifecycleStatus };
   setSaveSpace: { id: string; spaceId: string | null };
@@ -297,6 +305,8 @@ export function describeOp(op: OutboxOp): string {
   switch (op) {
     case 'createSave':
       return 'Saving a link';
+    case 'updateNote':
+      return 'Editing a note';
     case 'setSaveFlags':
       return 'Favourite or archive';
     case 'setSaveLifecycle':

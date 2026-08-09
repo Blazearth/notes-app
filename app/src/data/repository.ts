@@ -50,6 +50,8 @@ export interface Repository {
   setSaveLifecycle(id: string, lifecycleStatus: LifecycleStatus): Promise<SaveResponse>;
   /** Swipe-to-favorite / swipe-to-archive. Either field may be omitted to leave it as-is. */
   setSaveFlags(id: string, flags: { favorite?: boolean; archived?: boolean }): Promise<SaveResponse>;
+  /** `PATCH /v1/saves/{id}/note` — edits the title and body of a text note. */
+  updateNote(id: string, data: { title?: string; body?: string }): Promise<SaveResponse>;
   /** Move a save into a Space, or pass null to return it to the private feed. */
   setSaveSpace(id: string, spaceId: string | null): Promise<SaveResponse>;
   /**

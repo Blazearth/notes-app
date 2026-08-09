@@ -127,6 +127,27 @@ public class Save {
         return save;
     }
 
+    /**
+     * Creates a save for an uploaded image (screenshot share). The caller
+     * generates {@code saveId} before this call so the storage path can be
+     * derived from it; we honour it here by assigning it to the {@code id}
+     * field before the row is inserted.
+     *
+     * @param publicUrl the Supabase Storage public URL — stored as both
+     *                  {@code source_url} and {@code thumbnail_url} so the
+     *                  card renders the real screenshot immediately.
+     */
+    public static Save acceptedImage(UUID userId, UUID saveId, String publicUrl, UUID spaceId) {
+        Save save = new Save(userId, SourceType.IMAGE);
+        save.id = saveId;
+        save.sourceUrl = publicUrl;
+        save.thumbnailUrl = publicUrl;
+        save.mediaStoragePath = publicUrl;
+        save.spaceId = spaceId;
+        save.status = SaveStatus.PROCESSING;
+        return save;
+    }
+
     public UUID getId() {
         return id;
     }
@@ -177,6 +198,24 @@ public class Save {
 
     public Map<String, Object> getStructuredData() {
         return structuredData;
+    }
+
+    /** Stamps {@code updatedAt} for the same reason {@link #setLifecycleStatus} does. */
+    public void setStructuredData(Map<String, Object> structuredData) {
+        this.structuredData = structuredData;
+        this.updatedAt = Instant.now();
+    }
+
+    /** Stamps {@code updatedAt} for the same reason {@link #setLifecycleStatus} does. */
+    public void setRawCaption(String rawCaption) {
+        this.rawCaption = rawCaption;
+        this.updatedAt = Instant.now();
+    }
+
+    /** Records where the original media file is stored (e.g. Supabase Storage path). */
+    public void setMediaStoragePath(String mediaStoragePath) {
+        this.mediaStoragePath = mediaStoragePath;
+        this.updatedAt = Instant.now();
     }
 
     public LifecycleStatus getLifecycleStatus() {

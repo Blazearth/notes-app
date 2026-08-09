@@ -2,6 +2,11 @@ spring:
   application:
     name: weavr-api
 
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 11MB
+
   # --------------------------------------------------------------------------
   # RUNTIME datasource -> Supavisor TRANSACTION pooler (port 6543).
   # --------------------------------------------------------------------------
@@ -352,6 +357,11 @@ weavr:
     url: ${WEAVR_SUPABASE_URL}
     # Supabase mints access tokens with aud=authenticated for signed-in users.
     jwt-audience: authenticated
+    # Service-role key for backend-to-Storage uploads (screenshot feature).
+    # Leave blank if Storage is not used; the endpoint will return 503.
+    service-key: ${WEAVR_SUPABASE_SERVICE_KEY:}
+    # Storage bucket for screenshot uploads. Created in the Supabase dashboard.
+    storage-bucket: ${WEAVR_SUPABASE_STORAGE_BUCKET:screenshots}
 
 management:
   endpoints:
