@@ -611,6 +611,125 @@ screen specifically.
 
 ---
 
+### K6 — the collection becomes a hierarchy (landed 2026-08-10)
+
+K1–K5 merged entities correctly but presented them as **one flat list per
+type**, and the tree they built was never rendered. The result read as
+"I found 7 places in one save", which is an extraction, not a collection.
+K6 is the structural half of the fix — the aggregation and hierarchy model,
+deliberately *without* the domain-specific state and action surfaces, which
+are the next pass.
+
+**The axis chain replaces the single facet.** `CollectionAxes.java` (mirrored
+in `app/src/collections/axes.ts`) generalises K1's one save-level facet per
+type in three directions at once, and `CollectionService.buildLevel` is the
+single recursive function that consumes them:
+
+| | K1–K5 | K6 |
+|---|---|---|
+| Depth | one level | a chain per type — Recommendations → Anime → Romance |
+| Source | the save's own field | the save's field **or** the merged entity's |
+| Cardinality | one value per save | many — `genre`, `muscleGroups` |
+| Threshold | one global `MIN_GROUP_SIZE = 5` | per-axis, because the right floor differs |
+
+The wired chains: `recommendation_list` splits by item `kind` then `genre`
+(both entity-level, so a title recommended by an anime list *and* a film list
+is filed once by what it **is**, not twice by what each list was about);
+`itinerary` by save-level `destination`; `checklist` by `category`; and
+`workout` — new here — by a **derived** training split.
+
+**`workout` joins shape 1.** Its `exercises[]` is an item-bearing list like
+any other, and merging it yields "Bench press, in 2 of your push days". What
+stays out of scope is synthesising a *new* routine from several saves — the
+thing this doc warns against forcing onto shape 3. A merged exercise is a
+fact about the library; an invented program is not.
+
+Five decisions worth carrying forward, three of which were forced by running
+the thing rather than reasoning about it:
+
+- **Node resolution must not depend on the display threshold.** The first
+  implementation answered `GET /v1/collections/{nodeId}` by building the tree
+  and finding the node in it — so a subgroup too small to be worth *showing*
+  answered with **nothing at all**, and a perfectly well-formed node id
+  resolved empty. `mergeNode` now walks the axis path, filtering the merged
+  set by each segment's value in turn. Showing a folder and resolving a folder
+  are separate questions; tying them together is a silent wrong answer. It is
+  also cheaper — a filter, not a tree build.
+- **A derived axis has to see the whole set, not each value.** `muscleGroups`
+  → Push/Pull/Legs mapped per value first, and the fixtures immediately showed
+  why that is wrong: a full-body circuit trains chest, so its **squat appeared
+  under Push**. The split is a property of the *session* — there is no
+  per-exercise muscle group in the schema — so a session spanning three or
+  more splits is one `Full body` session rather than being scattered across
+  all of them. `Core` is excluded from that span, since nearly every session
+  trains it and it would otherwise make "Full body" the only bucket anyone
+  sees. The axis's `derive` is therefore `List<String> → List<String>`, not
+  `String → List<String>`.
+- **A key falls through to loose only when *no* bucket it landed in
+  survived.** Deciding per bucket lists a title inside Romance *and* loose
+  beside it, because its second genre happened to be rare. The distinct-count
+  rule from K1 is now load-bearing at every depth, not only the first: three
+  anime across Romance (2) and Sports (2) is **3 titles**, not 4.
+- **A node id keeps the extracted vocabulary; only its name is
+  product-facing.** `recommendation_list~film` is named "Movies". Renaming a
+  folder can never invalidate a deep link, and `KIND_DISPLAY_NAMES` stays a
+  closed-ish map falling back to title case, exactly like `DISPLAY_NAMES`.
+- **An empty type node is worse than none.** A workout save with no
+  `exercises` used to produce a collection with nothing in it — and since the
+  Library steps a type's tiles aside once it has a collection, an empty node
+  would hide those saves behind nothing. `buildTree` now drops any type node
+  whose `entityCount` is 0.
+
+**App side, one screen serves every level.** `CollectionDetailScreen` takes a
+node id, lists whatever folders that node has, then whatever entities sit
+*directly* on it, and pushes itself for a child — so the navigation stack is
+the breadcrumb trail, back goes up exactly one level, and arbitrary depth
+costs no extra screen. Same property `GroupDetailScreen` gets from the group
+tree. The route is still `/collection/[type]`; the param now carries a node
+id, which is one path segment by construction since `slug` strips `~`.
+
+Two presentation rules, both aimed at not making the user care about the
+extraction structure:
+
+- **The section heading is named for what the objects are** — PLACES,
+  WATCHLIST, EXERCISES, TASKS — not "Remaining". Only a checklist is a list of
+  things left to do; heading an itinerary's places that way made every
+  collection read as the same generic to-do screen.
+- **`kind` renders only when it varies.** `workout` and `checklist` have a
+  fixed kind every item shares, so showing it put the word "exercise" under
+  every row of a screen headed EXERCISES. Caught by reading a CDP dump, not by
+  a test.
+
+**"Everything" is now genuinely everything.** Saves whose type produced a
+collection are no longer excluded from the flat list — a reversal of K3.
+Collections are derived organisation; Everything is the raw source history,
+and it has to be complete to be the safety net it exists to be. Duplication
+between the two views is the point.
+
+**Verified.** Backend suite green (**431/431**, 6 opt-in skipped — 15 new
+`CollectionServiceTest` cases covering the four structural paths end to end,
+the multi-valued distinct count, the loose-fallthrough rule, threshold
+independence, and the full-body/Core/unmapped-muscle derivation). App
+typechecks; `expo export --platform web` bundles clean. **69 node-standalone
+assertions** over the real shipped `merge.ts`/`axes.ts`/`collectionMeta.ts`
+against the real shipped `mockData.ts` fixtures. **59 CDP checks** driving the
+real app on `expo start --web` with `USE_MOCK_DATA` flipped locally (never
+committed): Library → Itineraries → Japan → Tokyo's entity sheet naming both
+source saves, Recommendations → Anime → Romance, Workouts → Push → Bench
+press, plus a done-toggle write that survived a page reload. Three of the
+five CDP failures in the first run were the probe matching **Home's** group
+card rather than the Library's collection card — the mounted-pane trap this
+repo's testing doc already warns about, hit again. **Not run on a device.**
+
+**Known gaps, stated rather than hidden.** A workout entity's detail sheet
+reads "No details yet" (its rolled-up `sets`/`reps` are present in `fields`
+but nothing renders them — domain presentation, next pass). Two Japan trips
+years apart still merge into one Japan, which is open question 2, still
+unanswered on real data. And `checklist` remains wired to shape 1 without the
+real-data check open question 1 asked for — no checklist save exists yet.
+
+---
+
 ## Explicitly out, and why
 
 - **Reprocessing old saves into new shapes** — no reprocess path exists; the

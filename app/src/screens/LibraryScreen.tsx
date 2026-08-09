@@ -151,10 +151,10 @@ export function LibraryScreen() {
     void refresh();
   }, [refresh]);
 
-  // A type only leaves the ordinary flat list once it actually produced a
+  // A type only leaves the "By type" shortcut row once it actually produced a
   // collection — a recommendation_list save with no usable items (all
-  // `[unclear]` names) still needs somewhere to live, so it falls through to
-  // the flat presentation like any other type.
+  // `[unclear]` names) produces no node at all, so it keeps its ordinary
+  // type tile like any other.
   const entityBearingTypes = useMemo(() => new Set(collections.map((c) => c.id)), [collections]);
 
   // Handnotes — manually typed text saves — get their own named section so
@@ -168,25 +168,25 @@ export function LibraryScreen() {
 
   // Archived saves sit out of the ordinary views entirely — an archive is
   // only useful if it actually gets things out of the way. The `Archived`
-  // filter is the one place they're still reachable. Entity-bearing types
-  // are excluded here too: their saves are represented by the Collections
-  // section above, not as individual rows.
-  // Text saves are excluded from `activeSaves` when the filter is ALL because
-  // they are shown in the dedicated Handnotes section instead; when a type
-  // filter is active the type-filtered list still includes them if the pipeline
-  // classified them as that type (e.g. 'other').
-  const activeSaves = useMemo(
-    () =>
-      saves.filter(
-        (s) =>
-          !s.archived &&
-          !(s.knowledgeType && entityBearingTypes.has(s.knowledgeType)),
-      ),
-    [saves, entityBearingTypes],
-  );
+  // filter is the one place they're still reachable.
+  //
+  // Saves whose type produced a collection are *not* excluded any more, and
+  // that reversal is deliberate. Collections are derived organisation;
+  // Everything is the raw source history, and it has to be complete to be the
+  // safety net it exists to be — if the model files something wrongly, the
+  // save the user actually made must still be somewhere they can find it.
+  // Duplication between the two views is the point, not an accident.
+  //
+  // Text saves are still excluded when the filter is ALL, because the
+  // dedicated Handnotes section above shows exactly them; a type filter still
+  // includes them if the pipeline classified them as that type.
+  const activeSaves = useMemo(() => saves.filter((s) => !s.archived), [saves]);
 
-  // Counts drive both the tiles and the filter chips, so a type with nothing in
-  // it never appears as an empty option the user can select into a dead end.
+  // Counts drive the filter chips, so a type with nothing in it never appears
+  // as an empty option the user can select into a dead end. Every type present
+  // gets a chip, including ones with a collection — the chips narrow
+  // Everything, which is the complete list, so a type missing from them would
+  // be unreachable there.
   const counts = useMemo(() => {
     const tally = new Map<string, number>();
     for (const save of activeSaves) {
@@ -195,6 +195,16 @@ export function LibraryScreen() {
     }
     return [...tally.entries()].sort((a, b) => b[1] - a[1]);
   }, [activeSaves]);
+
+  // The "By type" tiles are a different job from the chips: they are an
+  // organisational entry point, and a type with a collection already has a
+  // better one directly above. Two tiles into the same saves would just
+  // compete — the reason this row stays compact rather than becoming a
+  // second grid of big cards.
+  const tileCounts = useMemo(
+    () => counts.filter(([type]) => !entityBearingTypes.has(type)),
+    [counts, entityBearingTypes],
+  );
 
   const favoriteCount = useMemo(() => activeSaves.filter((s) => s.favorite).length, [activeSaves]);
   const archivedCount = useMemo(() => saves.filter((s) => s.archived).length, [saves]);
@@ -479,7 +489,7 @@ export function LibraryScreen() {
             </Reveal>
           ) : null}
 
-          {counts.length > 0 && filter === ALL ? (
+          {tileCounts.length > 0 && filter === ALL ? (
             <Reveal index={4}>
               <SectionLabel>By type</SectionLabel>
               <ScrollView
@@ -488,7 +498,7 @@ export function LibraryScreen() {
                 style={{ marginHorizontal: -layout.screenGutter, marginBottom: spacing.xxl - 2 }}
                 contentContainerStyle={{ paddingHorizontal: layout.screenGutter, gap: spacing.sm }}
               >
-                {counts.map(([type, count]) => (
+                {tileCounts.map(([type, count]) => (
                   <TypeTile key={type} type={type} count={count} onPress={() => setFilter(type)} />
                 ))}
               </ScrollView>

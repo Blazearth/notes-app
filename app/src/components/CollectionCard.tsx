@@ -2,7 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 
 import type { CollectionNodeResponse } from '@/api/types';
-import { collectionTypeMeta } from '@/collections/collectionMeta';
+import { collectionTypeMeta, nodeEntityNoun } from '@/collections/collectionMeta';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppText } from './AppText';
@@ -11,13 +11,19 @@ import { Glyph } from './Glyph';
 import { Touchable } from './Touchable';
 
 /**
- * The Library's top-level tile for an entity-bearing type — "Recommendations
- * — 5 titles · 1 watched · 2 sources" instead of a row per save.
+ * The Library's top-level tile for an entity-bearing type — "Itineraries —
+ * 2 destinations · 14 places · 4 sources", with the destinations named,
+ * instead of a row per save.
  *
- * `node` is a top-level `CollectionNodeResponse` (`node.id === type`, per
- * `CollectionController`'s scheme), so its icon and colour reuse
- * `saveTypeMeta` rather than inventing a second palette for the same
- * `knowledgeType`.
+ * The folder names matter as much as the counts: "Japan · Switzerland" tells
+ * the user how their knowledge is organised and gives them something to aim
+ * at, where "14 places" alone is a number about an extraction. The same
+ * reasoning as `KnowledgeGroup` previewing subgroup names rather than
+ * adjectives.
+ *
+ * `node` is a top-level `CollectionNodeResponse` (`node.id === type`), so its
+ * icon and colour reuse `saveTypeMeta` rather than inventing a second palette
+ * for the same `knowledgeType`.
  */
 export function CollectionCard({
   node,
@@ -32,9 +38,22 @@ export function CollectionCard({
   const typeMeta = saveTypeMeta(type);
   const collMeta = collectionTypeMeta(type);
 
-  const parts = [`${node.entityCount} ${collMeta.entityNoun(node.entityCount)}`];
+  const parts: string[] = [];
+  if (node.subgroups.length > 0) {
+    parts.push(`${node.subgroups.length} ${collMeta.groupNoun(node.subgroups.length, 0)}`);
+  }
+  parts.push(`${node.entityCount} ${nodeEntityNoun(type, node.id, node.entityCount)}`);
   if (node.doneCount > 0) parts.push(`${node.doneCount} ${collMeta.doneNoun}`);
   parts.push(`${node.sourceCount} ${node.sourceCount === 1 ? 'source' : 'sources'}`);
+
+  // Three names, then a remainder — enough to recognise the collection
+  // without the line wrapping.
+  const previewNames = node.subgroups.slice(0, 3).map((child) => child.name);
+  const remaining = node.subgroups.length - previewNames.length;
+  const preview =
+    previewNames.length > 0
+      ? [...previewNames, ...(remaining > 0 ? [`+${remaining}`] : [])].join(' · ')
+      : null;
 
   return (
     <Card padding={0} radius={radius.md}>
@@ -64,6 +83,11 @@ export function CollectionCard({
           <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
             {parts.join(' · ')}
           </AppText>
+          {preview ? (
+            <AppText variant="caption" numberOfLines={1} style={{ marginTop: 4, color: typeMeta.color }}>
+              {preview}
+            </AppText>
+          ) : null}
         </View>
         <View style={{ transform: [{ scaleX: -1 }] }}>
           <Glyph name="chevron" size={icon.sm} color={palette.textFaint} />

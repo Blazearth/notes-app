@@ -11,6 +11,7 @@
  * .java` is the source of truth for merge behaviour if the two drift.
  */
 
+import { axesFor, axisDisplayName, derivedValues, type CollectionAxis } from './axes';
 import { entityKey as computeEntityKey } from './entities';
 
 export interface CollectionSource {
@@ -55,11 +56,20 @@ interface ItemShape {
   fixedKind: string | null;
 }
 
-/** Mirrors `CollectionService.ITEM_SHAPES` — shape 1 (item-bearing list types) only, exactly K1's scope. */
+/**
+ * Mirrors `CollectionService.ITEM_SHAPES` — the item-bearing types.
+ *
+ * `workout` joins here rather than staying shape 3: its `exercises[]` *is* an
+ * item-bearing list, and merging it gives "Bench Press, in 3 of your push
+ * days" — the same cross-source aggregation every other entry produces. What
+ * stays out of scope is synthesising a *new* routine from several saves; a
+ * merged exercise is a fact about the library, not an invented program.
+ */
 const ITEM_SHAPES: Record<string, ItemShape> = {
   recommendation_list: { itemsField: 'items', nameField: 'name', kindField: 'kind', fixedKind: null },
   itinerary: { itemsField: 'places', nameField: 'name', kindField: 'kind', fixedKind: null },
   checklist: { itemsField: 'items', nameField: 'text', kindField: null, fixedKind: 'task' },
+  workout: { itemsField: 'exercises', nameField: 'name', kindField: null, fixedKind: 'exercise' },
 };
 
 interface Shape2Def {
@@ -102,22 +112,15 @@ function resolveKey(key: string, overrides: CollectionOverrides): string {
   return overrides.mergeRedirects[key] ?? key;
 }
 
-/** Mirrors the entity-bearing subset of `KnowledgeFacets.FACETS`. */
-const FACETS: Record<string, string> = {
-  recommendation_list: 'medium',
-  checklist: 'category',
-  itinerary: 'destination',
-};
-
 /** Mirrors the entity-bearing subset of `KnowledgeFacets.DISPLAY_NAMES`. */
 const DISPLAY_NAMES: Record<string, string> = {
   recommendation_list: 'Recommendations',
   checklist: 'Checklists',
   itinerary: 'Itineraries',
+  workout: 'Workouts',
 };
 
-const MIN_GROUP_SIZE = 5;
-const ID_SEPARATOR = '~';
+export const ID_SEPARATOR = '~';
 
 function displayName(type: string): string {
   return DISPLAY_NAMES[type] ?? titleCase(type);
@@ -159,9 +162,23 @@ interface Occurrence {
   item: Record<string, unknown>;
 }
 
+/**
+ * One type's items bucketed by entity key, plus — per entity — the save-level
+ * field values every save that contributed it carried.
+ *
+ * K1 kept a single `facet value → entity keys` map, which could only express
+ * one level of grouping by one save-level field. Recording the values *per
+ * entity* instead lets `buildLevel` partition the same set repeatedly, once
+ * per axis, and lets a `save` axis sit at any depth rather than only first.
+ */
 interface TypeIndex {
   byEntity: Map<string, Occurrence[]>;
-  entityKeysByFacet: Map<string, Set<string>>;
+  saveFieldValues: Map<string, Map<string, Set<string>>>;
+}
+
+/** One level's partition: the subgroups that met their threshold, and the keys left at this level. */
+interface Level {
+  subgroups: CollectionNode[];
   looseEntityKeys: Set<string>;
 }
 
@@ -173,9 +190,11 @@ function itemsOf(save: CollectionSaveFacts, itemsField: string): Record<string, 
   );
 }
 
-function singleFacetValue(save: CollectionSaveFacts, field: string): string | null {
-  const raw = save.structuredData[field];
-  return typeof raw === 'string' && isUsable(raw) ? raw.trim() : null;
+/** A scalar string or an array of them, filtered to usable values — one reader for both shapes. */
+function usableStrings(raw: unknown): string[] {
+  if (typeof raw === 'string') return isUsable(raw) ? [raw.trim()] : [];
+  if (Array.isArray(raw)) return raw.filter(isUsable).map((v) => v.trim());
+  return [];
 }
 
 /**
@@ -227,14 +246,19 @@ function indexType(
   overrides: CollectionOverrides,
 ): TypeIndex {
   const shape = ITEM_SHAPES[type];
-  const facetField = FACETS[type];
+  // Only the save-level axes need reading off the save; entity-level axes are
+  // answered later, from the merged entity itself.
+  const saveAxisFields = [
+    ...new Set(axesFor(type).filter((a) => a.from === 'save').map((a) => a.field)),
+  ];
   const byEntity = new Map<string, Occurrence[]>();
-  const entityKeysByFacet = new Map<string, Set<string>>();
-  const loose = new Set<string>();
+  const saveFieldValues = new Map<string, Map<string, Set<string>>>();
 
   for (const save of typeSaves) {
     const items = itemsOf(save, shape.itemsField);
-    const facetValue = facetField ? singleFacetValue(save, facetField) : null;
+    const axisValuesForSave = saveAxisFields.map(
+      (field) => [field, usableStrings(save.structuredData[field])] as const,
+    );
 
     for (const item of items) {
       const rawNameValue = item[shape.nameField];
@@ -248,13 +272,16 @@ function indexType(
       occurrences.push({ saveId: save.id, savedAt: save.createdAt, rawName, item });
       byEntity.set(key, occurrences);
 
-      if (facetValue !== null) {
-        const set = entityKeysByFacet.get(facetValue) ?? new Set<string>();
-        set.add(key);
-        entityKeysByFacet.set(facetValue, set);
-      } else {
-        loose.add(key);
+      // The same entity reached by two saves accumulates both saves' values,
+      // so a place named by a Japan itinerary and a Tokyo one files under both
+      // rather than whichever landed last.
+      const forEntity = saveFieldValues.get(key) ?? new Map<string, Set<string>>();
+      for (const [field, values] of axisValuesForSave) {
+        const set = forEntity.get(field) ?? new Set<string>();
+        values.forEach((v) => set.add(v));
+        forEntity.set(field, set);
       }
+      saveFieldValues.set(key, forEntity);
     }
   }
 
@@ -263,7 +290,32 @@ function indexType(
     if (existing) existing.push(...occurrences);
   });
 
-  return { byEntity, entityKeysByFacet, looseEntityKeys: loose };
+  return { byEntity, saveFieldValues };
+}
+
+/**
+ * One entity's values on one axis, already derived and de-duplicated. A
+ * `save` axis reads what the contributing saves carried (recorded per entity
+ * by `indexType`); an `entity` axis reads the merged entity — its resolved
+ * `kind`, or a rolled-up field, scalar or unioned list.
+ */
+function axisValues(
+  axis: CollectionAxis,
+  entityKeyValue: string,
+  entity: CollectionEntity | undefined,
+  idx: TypeIndex,
+): string[] {
+  if (!entity) return [];
+  const raw =
+    axis.from === 'save'
+      ? [...(idx.saveFieldValues.get(entityKeyValue)?.get(axis.field) ?? [])]
+      : entityFieldValues(entity, axis.field);
+  return derivedValues(axis, raw);
+}
+
+function entityFieldValues(entity: CollectionEntity, field: string): string[] {
+  if (field === 'kind') return isUsable(entity.kind) ? [entity.kind.trim()] : [];
+  return usableStrings(entity.fields[field]);
 }
 
 /** The most common surface form across sources; ties go to the earliest save. */
@@ -381,8 +433,8 @@ function mergeAll(
 /**
  * Pure: the merged entity list for one type, optionally filtered to a facet
  * value and with K4's overrides applied — mirrors `CollectionService.mergeType`.
- * `overrides` defaults to no-op so every existing caller (mock data with no
- * curation yet) is unaffected.
+ * A facet is just the depth-1 node under a type, so this is a thin
+ * translation onto {@link mergeNode}.
  */
 export function mergeType(
   ready: CollectionSaveFacts[],
@@ -390,7 +442,30 @@ export function mergeType(
   facet?: string | null,
   overrides: CollectionOverrides = EMPTY_OVERRIDES,
 ): CollectionEntity[] {
-  const normalizedType = normaliseType(type);
+  const nodeId = facet && facet.trim() ? `${type}${ID_SEPARATOR}${slug(facet)}` : type;
+  return mergeNode(ready, nodeId, overrides);
+}
+
+/**
+ * Pure: the merged entities under one node of the tree — a bare type id for
+ * all of them, or a path like `recommendation_list~anime~romance` for one
+ * subtree. Mirrors `CollectionService.mergeNode`.
+ *
+ * Resolved by **walking the axis path** — filtering the merged set by each
+ * segment's axis value in turn — rather than by building the tree and finding
+ * the node in it. A tree lookup would make the entity list depend on
+ * `minGroupSize`: a subgroup too small to be worth *showing* would answer
+ * with nothing at all rather than with its entities, so a perfectly
+ * well-formed node id would resolve empty. It also costs a whole tree build
+ * to answer what is really just a filter.
+ */
+export function mergeNode(
+  ready: CollectionSaveFacts[],
+  nodeId: string,
+  overrides: CollectionOverrides = EMPTY_OVERRIDES,
+): CollectionEntity[] {
+  const path = nodeId ? nodeId.split(ID_SEPARATOR) : [];
+  const normalizedType = path.length > 0 ? normaliseType(path[0]) : null;
   if (!normalizedType || !ITEM_SHAPES[normalizedType]) return [];
 
   const typeSaves = ready.filter((s) => normaliseType(s.knowledgeType) === normalizedType);
@@ -398,20 +473,22 @@ export function mergeType(
   const idx = indexType(normalizedType, typeSaves, shape2ByKey, overrides);
   const merged = mergeAll(idx.byEntity, ITEM_SHAPES[normalizedType], overrides);
 
-  if (!facet || !facet.trim()) return [...merged.values()];
+  const axes = axesFor(normalizedType);
+  let wanted = new Set(merged.keys());
+  for (let depth = 1; depth < path.length; depth += 1) {
+    // The path is deeper than the type's axis chain — not a node this type
+    // can ever produce.
+    if (depth > axes.length) return [];
+    const axis = axes[depth - 1];
+    const segment = path[depth];
+    wanted = new Set(
+      [...wanted].filter((key) =>
+        axisValues(axis, key, merged.get(key), idx).some((value) => slug(value) === segment),
+      ),
+    );
+  }
 
-  const out: CollectionEntity[] = [];
-  const seen = new Set<string>();
-  idx.entityKeysByFacet.forEach((keys, facetValue) => {
-    if (slug(facetValue) !== slug(facet)) return;
-    keys.forEach((key) => {
-      if (seen.has(key)) return;
-      seen.add(key);
-      const entity = merged.get(key);
-      if (entity) out.push(entity);
-    });
-  });
-  return out;
+  return [...merged.entries()].filter(([key]) => wanted.has(key)).map(([, entity]) => entity);
 }
 
 function saveIdsFor(entityKeys: Iterable<string>, merged: Map<string, CollectionEntity>): string[] {
@@ -456,53 +533,111 @@ function nodeOf(
 function buildTypeNode(
   type: string,
   typeSaves: CollectionSaveFacts[],
-  minGroupSize: number,
+  minGroupSizeOverride: number | null,
   shape2ByKey: Map<string, Occurrence[]>,
   overrides: CollectionOverrides,
 ): CollectionNode {
   const idx = indexType(type, typeSaves, shape2ByKey, overrides);
   const merged = mergeAll(idx.byEntity, ITEM_SHAPES[type], overrides);
 
-  const subgroups: CollectionNode[] = [];
-  const loose = new Set(idx.looseEntityKeys);
-
-  idx.entityKeysByFacet.forEach((keys, facetValue) => {
-    if (keys.size >= minGroupSize) {
-      const id = `${type}${ID_SEPARATOR}${slug(facetValue)}`;
-      subgroups.push(
-        nodeOf(
-          id,
-          overrides.collectionNames[id] ?? titleCase(facetValue),
-          undefined,
-          [],
-          [...keys],
-          saveIdsFor(keys, merged),
-        ),
-      );
-    } else {
-      // Too few entities share this facet value — fold into loose so they
-      // still surface under the parent type rather than a solo subgroup.
-      keys.forEach((k) => loose.add(k));
-    }
-  });
+  const root = buildLevel(type, axesFor(type), 0, [...merged.keys()], merged, idx, minGroupSizeOverride, overrides);
 
   return nodeOf(
     type,
     overrides.collectionNames[type] ?? displayName(type),
     undefined,
-    subgroups,
-    [...loose],
-    saveIdsFor(loose, merged),
+    root.subgroups,
+    [...root.looseEntityKeys],
+    saveIdsFor(root.looseEntityKeys, merged),
   );
 }
 
 /**
+ * Partitions one set of entity keys by the axis at `depth`, then recurses
+ * into each surviving bucket with the next axis — the whole of the
+ * multi-level grouping, in one function that knows nothing about any
+ * particular type or field. Mirrors `CollectionService.buildLevel`.
+ *
+ * Two rules are load-bearing:
+ *
+ * - **An entity may sit in several buckets at one level** (a two-genre
+ *   title), so buckets are built by adding, never by moving. `nodeOf` then
+ *   counts distinct entities across the subtree rather than summing children,
+ *   which is what keeps "14 titles" from reading as 19.
+ * - **A key falls through to loose only if *no* bucket it landed in
+ *   survived.** Deciding per bucket instead would list a title inside Romance
+ *   *and* loose beside it, because its second genre happened to be rare.
+ */
+function buildLevel(
+  idPrefix: string,
+  axes: CollectionAxis[],
+  depth: number,
+  entityKeys: string[],
+  merged: Map<string, CollectionEntity>,
+  idx: TypeIndex,
+  minGroupSizeOverride: number | null,
+  overrides: CollectionOverrides,
+): Level {
+  if (depth >= axes.length || entityKeys.length === 0) {
+    return { subgroups: [], looseEntityKeys: new Set(entityKeys) };
+  }
+
+  const axis = axes[depth];
+  const threshold = minGroupSizeOverride ?? axis.minGroupSize;
+
+  const buckets = new Map<string, Set<string>>();
+  const unbucketed = new Set<string>();
+  for (const key of entityKeys) {
+    const values = axisValues(axis, key, merged.get(key), idx);
+    if (values.length === 0) {
+      // No usable value on this axis — [unclear], absent, or an empty array.
+      // The entity stays at this level rather than being filed under a guess,
+      // the same sentinel contract as everywhere else.
+      unbucketed.add(key);
+      continue;
+    }
+    for (const value of values) {
+      const set = buckets.get(value) ?? new Set<string>();
+      set.add(key);
+      buckets.set(value, set);
+    }
+  }
+
+  const subgroups: CollectionNode[] = [];
+  const claimed = new Set<string>();
+  buckets.forEach((keys, value) => {
+    if (keys.size < threshold) return;
+    const childId = `${idPrefix}${ID_SEPARATOR}${slug(value)}`;
+    const child = buildLevel(childId, axes, depth + 1, [...keys], merged, idx, minGroupSizeOverride, overrides);
+    subgroups.push(
+      nodeOf(
+        childId,
+        overrides.collectionNames[childId] ?? axisDisplayName(axis, value),
+        undefined,
+        child.subgroups,
+        [...child.looseEntityKeys],
+        saveIdsFor(child.looseEntityKeys, merged),
+      ),
+    );
+    keys.forEach((k) => claimed.add(k));
+  });
+
+  const loose = new Set(unbucketed);
+  for (const key of entityKeys) {
+    if (!claimed.has(key)) loose.add(key);
+  }
+  return { subgroups, looseEntityKeys: loose };
+}
+
+/**
  * Pure: the collection tree — mirrors `CollectionService.buildTree`.
- * `minGroupSize` defaults to the production threshold, `overrides` to no-op.
+ * `minGroupSizeOverride` is null in production, where each axis carries its
+ * own threshold; a number replaces every axis's threshold, which is what
+ * lets a small fixture still produce the full tree.
  */
 export function buildTree(
   ready: CollectionSaveFacts[],
-  minGroupSize: number = MIN_GROUP_SIZE,
+  minGroupSizeOverride: number | null = null,
   overrides: CollectionOverrides = EMPTY_OVERRIDES,
 ): CollectionNode[] {
   const byType = new Map<string, CollectionSaveFacts[]>();
@@ -515,8 +650,26 @@ export function buildTree(
   }
   const shape2ByKey = shape2Occurrences(ready, overrides);
   const nodes: CollectionNode[] = [];
-  byType.forEach((typeSaves, type) => nodes.push(buildTypeNode(type, typeSaves, minGroupSize, shape2ByKey, overrides)));
+  byType.forEach((typeSaves, type) => {
+    const node = buildTypeNode(type, typeSaves, minGroupSizeOverride, shape2ByKey, overrides);
+    // A type whose saves carried no usable items — a workout save with no
+    // `exercises`, a list whose every item name was `[unclear]` — produces no
+    // entities, and an empty collection is worse than no collection: the
+    // Library hides a type's individual saves once it has a collection to
+    // show instead, so an empty node would hide them behind nothing.
+    if (node.entityCount > 0) nodes.push(node);
+  });
   return nodes;
+}
+
+/** Depth-first lookup of one node in a built tree — what a route param resolves through. */
+export function findCollectionNode(nodes: CollectionNode[], id: string): CollectionNode | null {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const found = findCollectionNode(node.subgroups, id);
+    if (found) return found;
+  }
+  return null;
 }
 
 /** Recomputes `doneCount` across a subtree from a set of known-done entity keys — mirrors `CollectionNode.withDoneCount`. */

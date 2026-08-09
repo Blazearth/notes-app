@@ -25,7 +25,8 @@
 import type { CollectionEntityResponse, CollectionNodeResponse, SaveResponse } from '@/api/types';
 import {
   buildTree as buildCollectionTree,
-  mergeType,
+  findCollectionNode,
+  mergeNode,
   withDoneCount,
   type CollectionOverrides,
   type CollectionSaveFacts,
@@ -126,24 +127,59 @@ export async function readCollections(store: LocalStore): Promise<CollectionNode
   return tree.map((node) => withDoneCount(node, done));
 }
 
+/**
+ * One node of the tree, by id — `itinerary` for a type root,
+ * `itinerary~japan` for one of its folders. Returns null for an id the
+ * current library does not produce, which a screen reads as "not synced
+ * yet", never as an error.
+ */
+export async function readCollectionNode(
+  store: LocalStore,
+  nodeId: string,
+): Promise<CollectionNodeResponse | null> {
+  return findCollectionNode(await readCollections(store), nodeId);
+}
+
+/**
+ * The merged entities under one node — the whole type for a bare type id, one
+ * subtree for a path.
+ *
+ * Note this resolves through `mergeNode`'s axis-path walk rather than through
+ * the tree built above, so a node whose subgroup was too small to be worth
+ * *showing* still answers with its entities. The two questions are separate,
+ * and tying them together made a well-formed id resolve empty.
+ */
 export async function readCollectionEntities(
   store: LocalStore,
-  type: string,
-  facet?: string | null,
+  nodeId: string,
 ): Promise<CollectionEntityResponse[]> {
-  const merged = mergeType(
+  const merged = mergeNode(
     (await readySaves(store)).map(toCollectionFacts),
-    type,
-    facet ?? null,
+    nodeId,
     await readOverrides(store),
   );
   const states = await store.readEntityStates();
-  // The state join the server does inside `GET /v1/collections/{type}` — the
+  // The state join the server does inside `GET /v1/collections/{nodeId}` — the
   // entity payload and the caller's own K2 state arrive together, so no screen
   // has to correlate two lists.
   return merged.map((entity) =>
     states[entity.entityKey] ? { ...entity, state: states[entity.entityKey] } : entity,
   );
+}
+
+/**
+ * The saves feeding one node — its provenance, for the "mentioned in N
+ * sources" relationships that make a collection read as accumulated
+ * knowledge rather than a list. Ordered by the feed's own order.
+ */
+export async function readCollectionSources(
+  store: LocalStore,
+  nodeId: string,
+): Promise<SaveResponse[]> {
+  const entities = await readCollectionEntities(store, nodeId);
+  const saveIds = new Set<string>();
+  entities.forEach((entity) => entity.sources.forEach((source) => saveIds.add(source.saveId)));
+  return store.readSavesByIds([...saveIds]);
 }
 
 // ---------------------------------------------------------- continue rail

@@ -26,25 +26,35 @@ class CollectionController {
         this.collections = collections;
     }
 
-    /** The Library's collections spine: type → facet, with distinct entity and source counts, no entity payload. */
+    /**
+     * The Library's collections spine — the whole axis tree per type
+     * (Recommendations → Anime → Romance), with distinct entity and source
+     * counts at every level and no entity payload.
+     */
     @GetMapping
     List<CollectionNode> list(@CurrentUser UUID userId) {
         return collections.listCollections(userId);
     }
 
     /**
-     * The merged entity list for one type, each with every source's own
-     * un-merged item and a rolled-up view. {@code facet} narrows to one of the
-     * tree's subgroup values (matched loosely, the same slugging
-     * {@link CollectionNode} ids use) — omitted, it returns every entity of
-     * the type. An unknown or unwired {@code type} returns an empty list
-     * rather than 404: collections are always scoped to the caller's own
-     * saves, so there is no cross-user id here to distinguish "not yours"
-     * from "doesn't exist".
+     * The merged entity list for one <em>node</em>, each with every source's
+     * own un-merged item and a rolled-up view.
+     *
+     * <p>{@code nodeId} is either a bare type ({@code recommendation_list}) or
+     * a path into its tree ({@code recommendation_list~anime~romance}) — a
+     * node id is one path segment by construction, since
+     * {@code CollectionService.slug} strips the separator out of every facet
+     * value, so both forms bind here without a second route. {@code facet}
+     * remains K1's single-level narrowing and is translated into the
+     * equivalent depth-1 node id.
+     *
+     * <p>An unknown or unwired node returns an empty list rather than 404:
+     * collections are always scoped to the caller's own saves, so there is no
+     * cross-user id here to distinguish "not yours" from "doesn't exist".
      */
-    @GetMapping("/{type}")
-    List<CollectionEntity> entities(@CurrentUser UUID userId, @PathVariable String type,
+    @GetMapping("/{nodeId}")
+    List<CollectionEntity> entities(@CurrentUser UUID userId, @PathVariable String nodeId,
                                      @RequestParam(required = false) String facet) {
-        return collections.entities(userId, type, facet);
+        return collections.entities(userId, nodeId, facet);
     }
 }

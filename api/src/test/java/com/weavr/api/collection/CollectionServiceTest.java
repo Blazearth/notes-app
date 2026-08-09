@@ -43,14 +43,51 @@ class CollectionServiceTest {
                 Map.of("title", "A list", "medium", medium, "items", List.of((Object[]) items)));
     }
 
+    /** An itinerary for one destination, whose places are named only (no per-place kind). */
+    private static SaveFacts itinerarySave(String destination, String... placeNames) {
+        List<Object> places = new java.util.ArrayList<>();
+        for (String name : placeNames) places.add(Map.of("name", name, "kind", "sight"));
+        return ready("itinerary", Map.of("title", destination + " trip", "destination", destination, "places", places));
+    }
+
+    /** A workout whose {@code muscleGroups} drive the derived training split. */
+    private static SaveFacts workoutSave(List<String> muscleGroups, String... exerciseNames) {
+        List<Object> exercises = new java.util.ArrayList<>();
+        for (String name : exerciseNames) exercises.add(Map.of("name", name, "sets", "3", "reps", "8-12"));
+        return ready("workout", Map.of("title", "A session", "muscleGroups", muscleGroups, "exercises", exercises));
+    }
+
+    /** Depth-first node ids under a root — the shape a drill-down actually navigates. */
+    private static List<String> nodeIds(CollectionNode root) {
+        List<String> ids = new java.util.ArrayList<>();
+        ids.add(root.id());
+        root.subgroups().forEach(child -> ids.addAll(nodeIds(child)));
+        return ids;
+    }
+
     @Test
-    void onlyShapeOneTypesProduceACollection() {
-        // movie is shape 2 (save-is-the-entity) and workout is shape 3 (synthesis) —
-        // neither is wired in K1.
+    void onlyItemBearingTypesProduceACollection() {
+        // movie is shape 2 — a save-is-the-entity type only ever joins an
+        // entity a shape-1 item already created, never stands alone. The
+        // workout here carries no `exercises`, so it produces no entities
+        // either, and a node with nothing in it is not built at all.
         assertThat(tree(
                 ready("movie", Map.of("title", "Parasite")),
                 ready("workout", Map.of("title", "Push day"))))
                 .isEmpty();
+    }
+
+    /**
+     * The counterpart to the above: {@code workout} <em>is</em> item-bearing,
+     * so a save that actually carries a routine does produce a collection.
+     * These two together pin the rule — the type is wired, the emptiness is
+     * what suppressed it.
+     */
+    @Test
+    void aWorkoutCarryingExercisesProducesACollection() {
+        assertThat(tree(workoutSave(List.of("chest"), "Bench press")))
+                .extracting(CollectionNode::name)
+                .containsExactly("Workouts");
     }
 
     @Test
@@ -196,17 +233,43 @@ class CollectionServiceTest {
         assertThat(entities.getFirst().name()).isEqualTo("Blue Box");
     }
 
+    /**
+     * The first axis subdivides entities the way groups subdivide saves — but
+     * by what each recommended item <em>is</em> ({@code kind}, read off the
+     * merged entity) rather than by the list's own {@code medium}. A node's
+     * <b>id keeps the extracted vocabulary</b> ({@code ~film}) while its
+     * <b>name is the product-facing one</b> ("Movies"), so renaming a folder
+     * can never invalidate a deep link.
+     */
     @Test
-    void facetSubdividesEntitiesTheSameWayGroupsSubdivideSaves() {
+    void theFirstAxisSubdividesEntitiesByWhatEachItemIs() {
         CollectionNode recs = tree(
                 recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))),
                 recommendationSave("film", recommendationItem("Parasite", Map.of("kind", "film"))))
                 .getFirst();
 
         assertThat(recs.subgroups()).extracting(CollectionNode::name)
-                .containsExactlyInAnyOrder("Anime", "Film");
+                .containsExactlyInAnyOrder("Anime", "Movies");
         assertThat(recs.subgroups()).extracting(CollectionNode::id)
                 .containsExactlyInAnyOrder("recommendation_list~anime", "recommendation_list~film");
+    }
+
+    /**
+     * An entity-level axis files by the <em>merged</em> entity, so a title
+     * recommended by two lists that disagree about the list's medium is filed
+     * once, under what the item itself is — the whole reason the axis moved
+     * off the save-level {@code medium}.
+     */
+    @Test
+    void anEntityLevelAxisFilesAMergedEntityOnceNotOncePerSource() {
+        CollectionNode recs = tree(
+                recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))),
+                recommendationSave("mixed", recommendationItem("Blue Box", Map.of("kind", "anime"))))
+                .getFirst();
+
+        assertThat(recs.subgroups()).extracting(CollectionNode::name).containsExactly("Anime");
+        assertThat(recs.entityCount()).isEqualTo(1);
+        assertThat(recs.sourceCount()).isEqualTo(2);
     }
 
     /** The K1 exit criterion, verbatim: a collection's entityCount equals the length of its merged list. */
@@ -364,6 +427,204 @@ class CollectionServiceTest {
     }
 
     // ------------------------------------------------------------------ K4c: manual overrides
+
+    // ------------------------------------------------------------------
+    // The four structural paths this redesign has to be able to represent.
+    // Each one is a real navigation path in the Library, asserted end to end:
+    // the tree contains the node, and the node resolves to the right entities.
+    // ------------------------------------------------------------------
+
+    /** Itineraries → Japan → Tokyo, and Itineraries → Switzerland → Zurich. */
+    @Test
+    void itinerariesSplitByDestinationAndHoldTheirPlaces() {
+        List<SaveFacts> saves = List.of(
+                itinerarySave("Japan", "Tokyo", "Kyoto"),
+                itinerarySave("Switzerland", "Zurich", "Interlaken"));
+
+        CollectionNode itineraries = CollectionService.buildTree(saves).getFirst();
+
+        assertThat(itineraries.name()).isEqualTo("Itineraries");
+        assertThat(itineraries.subgroups()).extracting(CollectionNode::name)
+                .containsExactlyInAnyOrder("Japan", "Switzerland");
+        assertThat(itineraries.entityCount()).isEqualTo(4);
+
+        assertThat(CollectionService.mergeNode(saves, "itinerary~japan", CollectionOverrides.EMPTY))
+                .extracting(CollectionEntity::name).containsExactly("Tokyo", "Kyoto");
+        assertThat(CollectionService.mergeNode(saves, "itinerary~switzerland", CollectionOverrides.EMPTY))
+                .extracting(CollectionEntity::name).containsExactly("Zurich", "Interlaken");
+    }
+
+    /** Recommendations → Anime → Romance → Call of the Night: two axes deep. */
+    @Test
+    void recommendationsSplitByKindThenGenre() {
+        List<SaveFacts> saves = List.of(
+                recommendationSave("anime",
+                        recommendationItem("Call of the Night", Map.of("kind", "anime", "genre", List.of("romance"))),
+                        recommendationItem("Blue Box", Map.of("kind", "anime", "genre", List.of("romance", "sports"))),
+                        recommendationItem("Vinland Saga", Map.of("kind", "anime", "genre", List.of("action")))),
+                recommendationSave("film",
+                        recommendationItem("Parasite", Map.of("kind", "film", "genre", List.of("thriller"))),
+                        recommendationItem("Oldboy", Map.of("kind", "film", "genre", List.of("thriller")))));
+
+        CollectionNode recs = CollectionService.buildTree(saves).getFirst();
+
+        assertThat(nodeIds(recs)).contains(
+                "recommendation_list",
+                "recommendation_list~anime",
+                "recommendation_list~anime~romance",
+                "recommendation_list~film~thriller");
+
+        assertThat(CollectionService.mergeNode(saves, "recommendation_list~anime~romance", CollectionOverrides.EMPTY))
+                .extracting(CollectionEntity::name)
+                .containsExactly("Call of the Night", "Blue Box");
+    }
+
+    /** Workouts → Push → Bench Press, where "Push" is derived from muscle groups, not extracted. */
+    @Test
+    void workoutsSplitByDerivedTrainingSplit() {
+        List<SaveFacts> saves = List.of(
+                workoutSave(List.of("chest", "triceps"), "Bench press", "Overhead press"),
+                workoutSave(List.of("back", "biceps"), "Barbell row", "Chin-up"));
+
+        CollectionNode workouts = CollectionService.buildTree(saves).getFirst();
+
+        assertThat(workouts.subgroups()).extracting(CollectionNode::name)
+                .containsExactlyInAnyOrder("Push", "Pull");
+        assertThat(CollectionService.mergeNode(saves, "workout~push", CollectionOverrides.EMPTY))
+                .extracting(CollectionEntity::name).containsExactly("Bench press", "Overhead press");
+    }
+
+    /**
+     * A session spanning three or more splits is one Full body session, not
+     * three. The failure this prevents is concrete and was found by running
+     * the real fixtures: a full-body circuit's squat appeared under Push,
+     * purely because the same circuit also pressed something. The split is a
+     * property of the session — the model gives no per-exercise muscle group
+     * — so a session that is all of them is none of them.
+     */
+    @Test
+    void aSessionSpanningThreeSplitsIsFullBodyRatherThanAllOfThem() {
+        List<SaveFacts> saves = List.of(
+                workoutSave(List.of("legs", "back", "chest", "core"), "Banded squat", "Banded row"));
+
+        CollectionNode workouts = CollectionService.buildTree(saves).getFirst();
+
+        assertThat(workouts.subgroups()).extracting(CollectionNode::name).containsExactly("Full body");
+        assertThat(CollectionService.mergeNode(saves, "workout~push", CollectionOverrides.EMPTY)).isEmpty();
+    }
+
+    /** Core rides along on nearly every session, so it must not push a push day over the line. */
+    @Test
+    void coreDoesNotCountTowardTheFullBodySpan() {
+        List<SaveFacts> saves = List.of(workoutSave(List.of("chest", "triceps", "abs"), "Bench press"));
+
+        assertThat(CollectionService.buildTree(saves).getFirst().subgroups())
+                .extracting(CollectionNode::name)
+                .containsExactly("Push", "Core");
+    }
+
+    /** An unrecognised muscle group keeps its own bucket rather than being dropped. */
+    @Test
+    void anUnmappedMuscleGroupStillFilesSomewhere() {
+        List<SaveFacts> saves = List.of(workoutSave(List.of("grip"), "Farmer's carry"));
+
+        assertThat(CollectionService.buildTree(saves).getFirst().subgroups())
+                .extracting(CollectionNode::name)
+                .containsExactly("Grip");
+    }
+
+    /**
+     * The claim the whole feature rests on: the same thing named by two saves
+     * is <em>one</em> entity carrying both sources, not two rows — and the
+     * counts above it say 3, not 4.
+     */
+    @Test
+    void oneEntityNamedByTwoSavesIsMergedNotDuplicated() {
+        List<SaveFacts> saves = List.of(
+                itinerarySave("Japan", "Tokyo", "Kyoto"),
+                itinerarySave("Japan", "Tokyo", "Osaka"));
+
+        CollectionNode japan = CollectionService.buildTree(saves).getFirst().subgroups().getFirst();
+        assertThat(japan.name()).isEqualTo("Japan");
+        assertThat(japan.entityCount()).isEqualTo(3);
+        assertThat(japan.sourceCount()).isEqualTo(2);
+
+        List<CollectionEntity> entities =
+                CollectionService.mergeNode(saves, "itinerary~japan", CollectionOverrides.EMPTY);
+        assertThat(entities).extracting(CollectionEntity::name).containsExactly("Tokyo", "Kyoto", "Osaka");
+        assertThat(entities.getFirst().sourceCount()).isEqualTo(2);
+    }
+
+    /**
+     * A multi-valued axis puts one entity in several buckets at the same
+     * level. The parent must still count it once — the K1 distinct-not-summed
+     * rule, now load-bearing at every depth rather than only the first.
+     */
+    @Test
+    void aMultiValuedAxisCountsAnEntityOnceAcrossTheBucketsItSitsIn() {
+        List<SaveFacts> saves = List.of(recommendationSave("anime",
+                recommendationItem("Blue Box", Map.of("kind", "anime", "genre", List.of("romance", "sports"))),
+                recommendationItem("Haikyuu", Map.of("kind", "anime", "genre", List.of("sports"))),
+                recommendationItem("Horimiya", Map.of("kind", "anime", "genre", List.of("romance")))));
+
+        CollectionNode anime = CollectionService.buildTree(saves).getFirst().subgroups().getFirst();
+
+        assertThat(anime.subgroups()).extracting(CollectionNode::name)
+                .containsExactlyInAnyOrder("Romance", "Sports");
+        assertThat(anime.subgroups()).extracting(CollectionNode::entityCount).containsExactly(2, 2);
+        // 2 + 2 = 4 memberships over 3 distinct titles.
+        assertThat(anime.entityCount()).isEqualTo(3);
+    }
+
+    /**
+     * An entity whose only bucket at this level was too small stays at the
+     * parent level; one that also belongs to a surviving bucket must not be
+     * listed twice.
+     */
+    @Test
+    void anEntityFallsThroughToLooseOnlyWhenNoBucketItLandedInSurvived() {
+        List<SaveFacts> saves = List.of(recommendationSave("anime",
+                recommendationItem("Blue Box", Map.of("kind", "anime", "genre", List.of("romance", "isekai"))),
+                recommendationItem("Horimiya", Map.of("kind", "anime", "genre", List.of("romance"))),
+                recommendationItem("Frieren", Map.of("kind", "anime", "genre", List.of("fantasy")))));
+
+        CollectionNode anime = CollectionService.buildTree(saves).getFirst().subgroups().getFirst();
+
+        // romance has 2 and survives; isekai and fantasy have 1 each and do not.
+        assertThat(anime.subgroups()).extracting(CollectionNode::name).containsExactly("Romance");
+        // Frieren's only genre was too small, so it stays here. Blue Box does
+        // not, even though its `isekai` bucket was also too small.
+        assertThat(anime.entityKeys()).hasSize(1);
+        assertThat(anime.entityCount()).isEqualTo(3);
+    }
+
+    /**
+     * A node id resolves to its entities regardless of whether the subgroup
+     * was large enough to be worth <em>showing</em> — the two are separate
+     * questions, and tying them together made a well-formed id answer empty.
+     */
+    @Test
+    void nodeResolutionIsIndependentOfTheDisplayThreshold() {
+        List<SaveFacts> saves = List.of(recommendationSave("anime",
+                recommendationItem("Frieren", Map.of("kind", "anime", "genre", List.of("fantasy")))));
+
+        // One entity clears no threshold at either level, so the tree is a
+        // bare type node with the entity held directly on it...
+        CollectionNode recs = CollectionService.buildTree(saves).getFirst();
+        assertThat(recs.subgroups()).isEmpty();
+        assertThat(recs.entityCount()).isEqualTo(1);
+
+        // ...and yet the full path still answers with it.
+        assertThat(CollectionService.mergeNode(saves, "recommendation_list~anime~fantasy", CollectionOverrides.EMPTY))
+                .extracting(CollectionEntity::name).containsExactly("Frieren");
+    }
+
+    @Test
+    void aPathDeeperThanTheTypesAxisChainResolvesToNothing() {
+        List<SaveFacts> saves = List.of(itinerarySave("Japan", "Tokyo"));
+        assertThat(CollectionService.mergeNode(saves, "itinerary~japan~tokyo~more", CollectionOverrides.EMPTY))
+                .isEmpty();
+    }
 
     private static CollectionOverrides mergeOverride(String fromKey, String intoKey) {
         return new CollectionOverrides(Map.of(fromKey, intoKey), Map.of(), Map.of());

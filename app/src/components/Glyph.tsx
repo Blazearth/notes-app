@@ -56,6 +56,8 @@ export type GlyphName =
   | 'minus'
   // K4 collection overrides — pin an entity to the top of its section.
   | 'bookmark'
+  // Multi-level collections — a folder inside a collection (Japan, Romance, Push).
+  | 'folder'
   // Decorative primitives — not drawn as icons in the mockup
   | 'circle'
   | 'ring'
@@ -469,6 +471,16 @@ export function Glyph({ name, size = 18, color, weight = 2, style }: GlyphProps)
         return (
           <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
             <Path d="M19 21 12 16 5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" />
+          </StrokeIcon>
+        );
+
+      // A folder within a collection — a destination, a genre, a training
+      // split. Deliberately the plainest icon in the set: the folder is
+      // scaffolding, and the name beside it is what the user reads.
+      case 'folder':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
           </StrokeIcon>
         );
     }
