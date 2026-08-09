@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 /**
  * The OS "Share to Weavr" target — the whole of Android silent capture.
  *
- * `Theme.NoDisplay` + `noHistory` + `excludeFromRecents` (see the manifest
+ * Theme.NoDisplay + noHistory + excludeFromRecents (see the manifest
  * entry the config plugin adds) mean this is never actually seen: it reads
  * the shared content, enqueues the appropriate WorkManager worker so the upload
  * survives after this Activity is gone, shows a brief Toast, and finishes.
@@ -26,8 +26,8 @@ import java.util.concurrent.TimeUnit
  * opt-in rather than the default.
  *
  * Supported MIME types:
- *  - `text/plain` → [ShareUploadWorker] (URL / text)
- *  - `image/*`    → [ShareImageUploadWorker] (screenshot / photo)
+ *  - text/plain  -> ShareUploadWorker  (URL / text)
+ *  - image types -> ShareImageUploadWorker (screenshot / photo)
  */
 class ShareReceiverActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
