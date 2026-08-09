@@ -140,7 +140,12 @@ class ShareReceiverActivity : Activity() {
     private fun readSharedImageUri(intent: Intent?): Uri? {
         if (intent?.action != Intent.ACTION_SEND) return null
         if (intent.type?.startsWith("image/") != true) return null
-        return intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        @Suppress("DEPRECATION")
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        }
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
