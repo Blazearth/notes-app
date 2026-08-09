@@ -112,6 +112,38 @@ selected }}` on a `Pressable` — what `Segmented` uses for its tabs — produce
 `null` and a "which tab is open" assertion silently checks nothing. Assert on
 the rendered *content* of the open tab instead; it is what the user sees, and
 it also catches a tab that is selected but renders the wrong body.
+`Segmented` now also sets an explicit `accessibilityLabel` per tab — without
+one, a tab whose only text is a child node has no stable handle to *click*
+either, so a probe cannot switch tabs at all. That was a real accessibility
+gap, not a test affordance: a screen reader had the same problem.
+
+**A route file existing is not a route working.** `app/session/[nodeId].tsx`
+was created, typechecked, bundled, and rendered perfectly when its URL was
+visited directly — and the button that pushed to it navigated nowhere, because
+no matching `<Stack.Screen>` had been added to `app/_layout.tsx`. Nothing but a
+*click* catches this: a direct `Page.navigate` resolves the file-system route
+and looks fine, so screenshotting the destination proves the screen and not the
+way in. Drive the affordance the user actually taps, then assert `location.href`
+changed — a text assertion alone reads as "the destination is wrong" rather than
+"you never left".
+
+**A dismissed `Modal` still eats the next click.** React Native Web portals a
+`Modal` *above* the document, and a `Input.dispatchMouseEvent` fired straight
+after clicking its dismiss control lands on the backdrop that has not finished
+unmounting. The click silently does nothing, which is indistinguishable from a
+broken handler on the element underneath — and the click helper reports success,
+because the element was found and in view. This cost a debugging pass on the K7
+run: the same click worked in isolation on a clean document. **Re-navigate after
+closing a modal** rather than sleeping longer and hoping; `goto()` gives a
+document with no portal in it, which is a guarantee rather than a race.
+
+**Build the selector by comparing the attribute, not by interpolating into
+one.** `document.querySelector('[aria-label="…"]')` breaks on the first label
+containing a quote or an apostrophe ("Farmer's carry"), and escaping schemes get
+one case wrong. `[...document.querySelectorAll('[aria-label]')].find(e =>
+e.getAttribute('aria-label') === L)` with `L` injected as `JSON.stringify(label)`
+has no escaping problem at all. The failure is a `SyntaxError` from
+`Runtime.evaluate`, which reads as a broken probe rather than a bad label.
 
 **Three things a CDP run can check that a screenshot cannot, and they are where
 the bugs are:** `localStorage` (the local-first store's snapshot is a plain JSON
@@ -212,7 +244,7 @@ repair, and the fast English model is ~2 MB against ~15 MB for the accurate one.
 
 ```bash
 cd api
-./mvnw test           # 416 tests, ~30s, NO database or .env needed (6 skip: see below)
+./mvnw test           # 431 tests, ~30s, NO database or .env needed (6 skip: see below)
 ./mvnw clean verify   # the above plus packaging
 ```
 

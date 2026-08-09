@@ -1,6 +1,6 @@
 # Feature status
 
-**As of 2026-08-05, the Shipaton build window (Aug 1 – Sep 30).**
+**As of 2026-08-10, the Shipaton build window (Aug 1 – Sep 30).**
 
 ## The bar
 
@@ -108,6 +108,10 @@ motion blur and stylised fonts are exactly where tesseract fails hard.
 | Spaces — CRUD, roles, invites | ✅ Done | Authorisation verified live, including 404-vs-403 |
 | Spaces — comments, votes, activity | ✅ Done | Verified live |
 | Spaces — duplicate detection | 🟠 Unverified | The 0.15 threshold is a guess; no two real saves compared |
+| **Knowledge collections** — entity merge (K1–K2) | ✅ Done | [docs/knowledge-collections.md](knowledge-collections.md). `collection/` merges item-bearing types' items into cross-source entities; `entity_states` holds per-(user, entity) state. Verified live against Supabase twice with throwaway users — a "Blue Box" shared across two saves merged to `sourceCount: 2` with `genre` unioned and each source's `reason` un-blended, and a `PATCH /v1/entity-state` round trip showed `doneCount` follow |
+| Knowledge collections — hierarchy (K6) | 🟠 Unverified | The axis chain: a type subdivides by a *chain* of axes, each reading the save's field or the merged entity's, each possibly multi-valued — Itineraries → Japan → Tokyo, Recommendations → Anime → Romance, Workouts → Push → Bench press. `workout` joined the item-bearing types. 15 new backend tests (431/431), 69 node-standalone assertions, 39 CDP checks against mock data; **never run on a device**, and the tree has not been exercised against a real multi-save library on the server |
+| Knowledge collections — domain state & actions (K7) | 🟠 Unverified | Three-state watchlist + ratings on the row, per-type detail fields, per-type leaf tabs (a destination's Overview is each trip's route in order), and a workout session over the merged exercises. App-only — `entity_states.state` is jsonb written by full replace, so no migration. 53 further node-standalone assertions, 39 CDP checks; **never run on a device**, so haptics, `useKeepAwake` and the countdown are unproven |
+| Knowledge collections — manual merge/rename UI (K4) | ⛔ Not built | The endpoints and the merge-core threading exist and are tested; only pin has UI. Nothing yet gives a user a duplicate to point at, and the measured-first rule still forbids auto-merge |
 | Spaces — knowledge-first IA (S0) | 🟠 Unverified | [docs/knowledge-spaces.md](knowledge-spaces.md). Saves→Sources rename, an Overview tab leading the strip, and default-tab-by-whether-the-Space-merges. App-only: the collections are derived from the local store by the same merge core the server runs, so S0 needed no endpoint. Driven through headless Chrome against mock data (26 checks) plus 29 node-standalone assertions; never run on a device |
 | Spaces — space-scoped collections (S1) | ⛔ Not built | `CollectionService` needs a scope parameter and two `/v1/spaces/{id}/collections` endpoints. The client already derives this locally; what only the server can add is `addedBy` — a save's owner is not on `SaveResponse` |
 | Spaces — shared progress + merged list (S2) | ⛔ Not built | The batched all-members `entity_states` read, per-member rollups, and the discussion block. Blocks the Overview from showing a watchlist or any done count — with only the viewer's own global state, "1 watched" reads as a claim about the group. Carries an undecided disclosure question (see the doc) |
@@ -150,7 +154,7 @@ RevenueCat hackathon; this is a submission requirement, not a feature.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Push notification on `ready` | ⛔ Not built | No `expo-notifications`, nothing server-side. **This matters more than it looks:** the app deliberately does not poll, because the notification is meant to be the signal. Without it a save shows "Processing" until you pull to refresh |
+| Push notification on `ready` | ⛔ Not built | No `expo-notifications`, nothing server-side. Less load-bearing than it was: `SavesProvider` now polls whatever the *store* says is still `processing` (feed-driven, so a save made on another device advances too), with a timeout. The notification is still the intended signal — polling is a stopgap that stops after the timeout |
 | Weekly digest | 🟠 Unverified | Built and deployed 2026-08-06 — `GET /v1/digest`, generated on demand, Home's tile wired to it. `V8__digests.sql` confirmed applied live and `generate_digest` confirmed registered in the job runner. No longer sample content, but the endpoint itself has not yet been hit against a real week of saves |
 | AI Project Builder | ⛔ Not built | In the spec's budget planning; no code |
 
@@ -178,8 +182,8 @@ renders that screen correctly whether the fix is right or not.
 
 ## Data layer — how the app reads and writes
 
-The plan is [docs/local-first.md](local-first.md). **L1 and L2 landed
-2026-08-09; L3–L5 have not.**
+The plan is [docs/local-first.md](local-first.md). **L1–L5 all landed
+2026-08-09; that plan is complete.**
 
 | Feature | Status | Where it stands today |
 |---|---|---|
@@ -187,12 +191,9 @@ The plan is [docs/local-first.md](local-first.md). **L1 and L2 landed
 | Render-from-cache startup | ✅ Built (L1) | `SavesProvider` reads the store through `useLive` and holds the **whole** library, not page 0. Confirmed over CDP: a second load paints the feed, Continue rail, groups grid and Spaces strip within 2.5s with no spinner |
 | Reads served locally | ✅ Built (L2) | Home, Library, Spaces, Space detail, Save detail, Collection detail, Group detail, Shopping list, Settings and Workout compare all read the store. `SpacesScreen`'s per-focus N+1 is gone — members come from the store, fetched by the sync engine off the render path |
 | Groups / collections derived on-device | ✅ Built (L2) | `app/src/groups/tree.ts` + `app/src/knowledge/facets.ts` port `GroupService`/`KnowledgeFacets`; `@/collections/merge` already ported `CollectionService`. `GET /v1/groups` and `GET /v1/collections` are no longer called (both stay implemented, for `mockRepository` parity) |
-| Offline writes | ⛔ Not built (L3) | Optimistic updates now write through the store rather than component state, so they survive navigation — but they are still not durable: a crash between the local flip and the server echo loses the write, with no queue and no retry |
-| Delta sync (`GET /v1/sync?since=`) | ⛔ Not built (L4) | Sync is a full fetch-and-replace. The API still has **zero** sync primitives: no `since`, no cursor, no ETag, no tombstones, and no `saves (user_id, updated_at)` index |
-| Tombstones | ⛔ Not built (L4) | Seven hard-delete call sites leave no record. A deleted Space would live forever in any client that cached it |
-| Local search | ⛔ Not built (L5) | Search is server-only (FTS + pgvector RRF), debounced per keystroke. `enableFTS` is deliberately still unset on the `expo-sqlite` plugin until there is a consumer |
-| Image disk cache | ⛔ Not built (L5) | `SaveThumb` uses React Native's `Image`; no explicit cache policy |
-| Generalised idempotency | ⛔ Not built (L5) | `Idempotency-Key` is read by exactly one endpoint (`POST /v1/saves`, V2), and the app has never sent it. `POST /v1/spaces`, `/invites` and `/comments` each duplicate on retry |
+| Offline writes | ✅ Built (L3) | `app/src/local/outbox.ts` — every write lands in the store and drains from a durable queue with backoff. The revert logic is *gone*, and its absence is the deliverable: a failed request used to be silently undone, which is indistinguishable from "your tap never registered". A write the server rejects is surfaced on Settings (`PendingWrites`) rather than rolled back. Last-write-wins is the real semantics, not a compromise — every one of these endpoints is a documented full replace, so a retry is harmless with no conflict-resolution code |
+| Delta sync | ✅ Built (L4) | `V15__sync.sql` + `GET /v1/sync` over seven tables on one shared timestamp cursor. The plan's `(updated_at, id)` keyset could not be built — four of the seven have composite PKs and no scalar id to tie-break on — so `SyncWindow` never ends a page *inside* a timestamp group. Full pulls stay, but only on pull-to-refresh, because `replaceAll` reaping is the only way to recover from a missed tombstone. **`GET /v1/sync` has still never been called over HTTP** |
+| Local full-text search | ✅ Built (L5) | `saves_fts` (FTS5 on native, linear scan on web) — the last read path that could only answer from the network. Deliberately not debounced locally and every local term is a prefix, so the local result set is a *superset* of the server's, which is what makes appending local-only hits safe. A failed server search now leaves the local results on screen and says why, instead of replacing everything with an error card that offline reads as "you have nothing". The FTS table is created outside the main schema batch and allowed to fail, so a SQLite build without FTS5 loses search rather than the entire local database |
 
 Two traps that shaped the built layer, and still bind anything added to it:
 
@@ -238,7 +239,7 @@ Two traps that shaped the built layer, and still bind anything added to it:
 | Capture failure after dismissal has no surface | Warns to console; the save never appears. Needs a toast |
 | ~~Every screen refetches from zero on mount~~ | **Fixed 2026-08-09** by L1/L2 of [docs/local-first.md](local-first.md). Reads are served from the local store; `SpacesScreen`'s per-focus N+1 is gone. Writes are still network-first |
 | `sqliteStore.ts` has never run | Web resolves the memory shim and there is no device or emulator here, so the store *contract* is verified and its SQL is not |
-| No optimistic write survives a crash | The optimistic sites now write through the store, so a change survives navigation — but not a kill between the local flip and the server echo. Needs L3's outbox. `LifecycleStrip` additionally never reconciles into the store, so the feed's copy of that save goes stale |
+| ~~No optimistic write survives a crash~~ | **Fixed 2026-08-09** by L3's outbox. Every write goes through `@/local/writes` — store patch plus a durable queued op with a stable idempotency key — so a kill between the local flip and the server echo loses nothing. `LifecycleStrip` reconciles too, via `writeSaveLifecycle`. What replaced the old failure is *visible*: a write the server rejects is surfaced on Settings rather than silently reverted |
 
 ---
 
@@ -361,11 +362,18 @@ starts — item 2 in particular can redirect what "the demo" even means.
 
 ## Summary
 
-**25 done, 16 unverified, 0 mock-only, 21 not built** (62 features).
+**32 done, 20 unverified, 0 mock-only, 24 not built** (76 features).
 
-Under a looser bar the first two columns merge and this reads as 39 of 62 —
+Under a looser bar the first two columns merge and this reads as 52 of 76 —
 roughly how it feels while writing it, and close to twice what has actually
 been proven.
+
+*Changed 2026-08-10: the local-first plan (L1–L5) is complete, so offline
+writes, delta sync and local search moved from not-built to built; knowledge
+collections gained four rows (K1–K2 done and live-verified, K6–K7 unverified,
+K4's merge/rename UI not built); the weekly digest is no longer sample
+content; and "the app deliberately does not poll" is no longer true. Counts
+above are recounted from the tables themselves rather than adjusted by hand.*
 
 *Changed since the first count (2026-08-01): AI groups, subgroups and their
 endpoint moved from mock-only to done, so nothing is mock-only any more, and

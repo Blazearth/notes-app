@@ -6,7 +6,12 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 
 ---
 
-## Where we are — 2026-07-30 (two days before the window opens)
+## Where we are — 2026-08-10
+
+*(The table below is kept current in place; the heading date is when it was last
+reviewed, not when the plan was written. Phases 7–8 are still the plan's own
+schedule — reality has run ahead of it in places, which is what the last row
+records.)*
 
 | Phase | Built | Exit criteria met |
 |---|---|---|
@@ -18,6 +23,7 @@ Read alongside [CLAUDE.md](../CLAUDE.md) (architecture and constraints) and [com
 | 5 — Product | **complete server-side**: search, the one Act, lifecycle, free-tier caps and the RevenueCat webhook — all verified live. Enrichment (a Phase 3 leftover) landed alongside | 4 of 6 — everything but the store listings and a real sandbox purchase, neither of which is code |
 | 6 — Spaces | CRUD, roles, revocable invites, space feed, comments, votes, activity, embedding-similarity duplicate detection. Authorisation verified live. **AI groups landed 2026-08-02** — `GET /v1/groups`, a derived tree costing no Gemini request | 2 of 3 — the two-device live-sync criterion needs devices; Realtime sync is not built |
 | 7–8 | — | — |
+| Beyond the numbered phases | Three tracks that grew their own docs rather than fitting a phase: **local-first** L1–L5 complete ([local-first.md](local-first.md)) — every read screen reads a local store, writes go through a durable outbox, `GET /v1/sync` is the delta; **knowledge collections** K0–K7 ([knowledge-collections.md](knowledge-collections.md)) — the Library's move from one-object-per-source to one-object-per-topic, now a multi-level hierarchy with per-type state and actions; **knowledge-first Spaces** S0 ([knowledge-spaces.md](knowledge-spaces.md)). Plus the weekly digest (2026-08-06, no scheduler by design) and the screenshot pipeline, which had never worked until four stacked bugs were found by putting one real screenshot through it (2026-08-09) | n/a — these have their own exit criteria in their own docs. The standing gap is unchanged and applies to all three: **almost none of it has run on a device** |
 
 **The pattern to notice: writing code is running well ahead of proving it.** The
 backend is roughly a phase early, and the app is far ahead of what Phase 1 asked

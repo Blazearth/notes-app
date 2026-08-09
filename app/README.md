@@ -56,17 +56,24 @@ so restart the bundler after changing them.
 | Capture sheet | **real, fix unverified on a device** — the tiles' rows collapsed to no height on Android (`flex: 1` on an auto-height column child is 0 in Yoga, not in CSS). Chrome renders this screen correctly either way, so the browser cannot confirm the fix |
 | Capture → `POST /v1/saves` | **real, not yet run on a device** — the sheet opens, but no link has actually been posted from a phone |
 | AI groups + subgroups | **real, backed by a live endpoint** — `GET /v1/groups`; the grid and `/group/[id]` render any depth from one screen. Verified in Chrome only |
-| Library / Spaces / Continue rail | **real** — all three read the API through the repository |
-| Weekly digest | **sample content** — the last of it; no endpoint serves a digest |
+| Library / Spaces / Continue rail | **real** — all three read the local store, which `@/local/sync` fills from the API. The Continue rail and the groups/collections trees are *derived on device* and cost no request at all |
+| Knowledge collections | **real** — the Library's top level for item-bearing types. Multi-level (Itineraries → Japan → Tokyo, Recommendations → Anime → Romance, Workouts → Push → Bench press), merged across sources, with per-type state and actions. See [docs/knowledge-collections.md](../docs/knowledge-collections.md) |
+| Weekly digest | **real** — `GET /v1/digest` landed 2026-08-06 (generated on demand, cached per Monday-UTC week); Home renders it only once a real one is `ready`, so `pending`/`empty` show nothing rather than a placeholder |
 | Other capture tiles | **inert** — visibly disabled until their capture surfaces exist |
 | Silent capture — Android | **built, never run on a device** — `ShareReceiverActivity` + `ShareUploadWorker` via a config plugin; no Android SDK on this machine to build or run it |
 | Silent capture — iOS | **absent** — the toggle exists, the native share extension does not |
 | RevenueCat | **absent** |
 
-The feed and Capture are wired to the real API. What is left on sample content is
-[src/data/sampleContent.ts](src/data/sampleContent.ts): the Continue rail, the
-weekly digest, Spaces and the Library groups all depend on pipeline output or
-collaboration features that no endpoint serves yet.
+Every screen is on real data now. [src/data/sampleContent.ts](src/data/sampleContent.ts)
+survives only as **static UI copy** — the greeting name and the Capture sheet's
+tile list. Its other exports (`CONTINUE_ITEMS`, `WEEKLY_DIGEST`, `ACTIVE_SPACES`,
+`AI_GROUPS`, `RECENTLY_CAPTURED`, `SPACE_DETAIL`…) are no longer imported by
+anything and are dead code awaiting deletion; do not read them as a statement
+about what is stubbed.
+
+What *does* stand in for the backend during development is
+[src/data/mockRepository.ts](src/data/mockRepository.ts), behind the
+`USE_MOCK_DATA` switch — a different thing entirely, and described below.
 
 ### Running without a backend
 
@@ -130,7 +137,7 @@ either way here, because no native project has been generated yet.
 
 ### Deferred by design — easy to mistake for bugs
 
-**Nothing polls, so a save keeps its "Processing" pill until you pull to refresh.** The pipeline is real now — the runner claims the job, the cascade extracts text and the classify call fills the card in — but the app still deliberately does not poll, because the push notification is meant to be that signal and does not exist yet. The pill is correct, not stuck.
+~~**Nothing polls, so a save keeps its "Processing" pill until you pull to refresh.**~~ **Closed** — `SavesProvider` polls whatever the store says is still `processing`, and the distinction that matters is that it is driven by the *feed*, not by whoever created the save. The old version started a timer inside `prepend`, so only the screen that made a save ever watched it: one left processing when the app closed sat there until something else refetched, and one made on another device never advanced at all. `local:` saves are excluded — they exist nowhere but on the device, so there is nothing to poll, and they become pollable the moment the outbox reconciles them onto a real id. There is still a timeout, after which the pill stops advancing on its own; push notification remains the intended real signal and does not exist yet.
 
 ~~**`POST /v1/saves` is not idempotent yet.**~~ **Closed** — `V2__save_idempotency.sql` added a partial unique index on `(user_id, idempotency_key)`, and a repeated `Idempotency-Key` header returns the existing save, including under a concurrent-retry race. No client sends the header yet; it exists for the iOS share extension's background upload.
 
