@@ -5,6 +5,7 @@ import { ActivityIndicator, TextInput, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
+import { getStore } from '@/local';
 import { AppText } from '@/components/AppText';
 import { Glyph } from '@/components/Glyph';
 import { Sheet } from '@/components/Sheet';
@@ -45,6 +46,9 @@ export function JoinSpaceSheet() {
       setError(null);
       try {
         const space = await repo.acceptInvite(trimmed);
+        // Same reason as CreateSpaceSheet: the list behind this sheet reads the
+        // store, so writing here is what makes the join visible immediately.
+        await getStore().putSpaces([space]);
         dismiss();
         router.push({ pathname: '/space/[id]', params: { id: space.id } });
       } catch (e) {

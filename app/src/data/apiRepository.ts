@@ -79,4 +79,6 @@ export const apiRepository: Repository = {
   unmergeEntity: client.unmergeEntity,
   renameEntity: client.renameEntity,
   renameCollection: client.renameCollection,
+
+  pullSync: client.getSync,
 };

@@ -2,9 +2,10 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { RefreshControl, TextInput, View } from 'react-native';
 
-import { ApiError } from '@/api/client';
-import { repo } from '@/data';
 import type { SaveResponse, Space, SpaceMember } from '@/api/types';
+import { useLive, useLiveValue } from '@/local';
+import { sync } from '@/local/sync';
+import { useTaskStatus } from '@/local/useSync';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -28,6 +29,10 @@ import { useTheme } from '@/theme/ThemeProvider';
  */
 
 const SEARCH_THRESHOLD = 4;
+
+/** Stable identities for "the store has nothing yet" — see `useLiveValue`. */
+const EMPTY_MEMBERS: Record<string, SpaceMember[]> = {};
+const EMPTY_RECENT: Record<string, SaveResponse[]> = {};
 
 function HeaderAction({
   glyph,
@@ -154,64 +159,54 @@ export function SpacesScreen() {
   const { palette, radius, spacing } = useTheme();
   const router = useRouter();
 
-  const [spaces, setSpaces] = useState<Space[] | null>(null);
-  const [membersById, setMembersById] = useState<Record<string, SpaceMember[]>>({});
-  const [recentById, setRecentById] = useState<Record<string, SaveResponse[]>>({});
-  const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState('');
 
-  const load = useCallback(async () => {
-    let list: Space[];
-    try {
-      list = await repo.listSpaces();
-      setSpaces(list);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Could not load your Spaces.');
-      return;
-    }
-
-    // Card enrichment (avatars, recent saves) is a second, non-fatal round of
-    // requests — a slow or broken one degrades a card to counts-only rather
-    // than blocking the list that just loaded successfully.
-    try {
-      const pairs = await Promise.all(
-        list.map(async (space) => {
-          const [members, recent] = await Promise.all([
-            repo.listSpaceMembers(space.id),
-            repo.listSpaceSaves(space.id, 0, 3),
-          ]);
-          return [space.id, members, recent] as const;
-        }),
-      );
-      const nextMembers: Record<string, SpaceMember[]> = {};
-      const nextRecent: Record<string, SaveResponse[]> = {};
-      for (const [id, members, recent] of pairs) {
-        nextMembers[id] = members;
-        nextRecent[id] = recent;
+  // The list, the avatar stacks and the recent-save chips all read the local
+  // store. What used to be here — one request for the Spaces plus **two per
+  // Space** for members and recent saves, re-run on every focus — is now the
+  // sync engine's business (`sync.syncSpaceMembers`), off the render path
+  // entirely. The card paints from cache instantly and its avatars fill in.
+  const { data: spaces, loading } = useLive<Space[]>(['spaces'], (store) => store.readSpaces());
+  const membersById = useLiveValue<Record<string, SpaceMember[]>>(
+    ['space_members'],
+    (store) => store.readAllSpaceMembers(),
+    EMPTY_MEMBERS,
+  );
+  // Derived rather than fetched: a save carries its own `spaceId`, and the
+  // whole library is local, so "the three most recent saves in this Space" is
+  // a group-by over data already on hand.
+  const recentById = useLiveValue<Record<string, SaveResponse[]>>(
+    ['saves'],
+    async (store) => {
+      const bySpace: Record<string, SaveResponse[]> = {};
+      for (const save of await store.readFeed()) {
+        if (!save.spaceId) continue;
+        const bucket = (bySpace[save.spaceId] ??= []);
+        if (bucket.length < 3) bucket.push(save);
       }
-      setMembersById(nextMembers);
-      setRecentById(nextRecent);
-    } catch {
-      // Swallowed — see comment above.
-    }
-  }, []);
+      return bySpace;
+    },
+    EMPTY_RECENT,
+  );
 
-  // Refetched on focus rather than once on mount: creating or joining a Space
-  // happens on a sheet stacked over this screen, and coming back to a stale
-  // list reads as the action having failed.
+  const task = useTaskStatus('delta', (spaces?.length ?? 0) > 0);
+  const error = task.error && !spaces?.length ? task.error.message : null;
+
+  // Still re-synced on focus, and still for the original reason: creating or
+  // joining a Space happens on a sheet stacked over this screen. The difference
+  // is that it no longer blocks anything — the list is already on screen from
+  // the store, and both sheets write their new Space into it directly, so this
+  // is a background reconciliation rather than the thing that fills the page.
   useFocusEffect(
     useCallback(() => {
-      void load();
-    }, [load]),
+      void sync.syncSpaces().then(() => sync.syncSpaceMembers());
+    }, []),
   );
 
   const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await load();
-    setRefreshing(false);
-  }, [load]);
+    await sync.syncSpaces();
+    await sync.syncSpaceMembers();
+  }, []);
 
   const sorted = useMemo(
     () =>
@@ -229,11 +224,13 @@ export function SpacesScreen() {
     return sorted.filter((s) => s.name.toLowerCase().includes(trimmed));
   }, [sorted, query]);
 
+  const showSkeleton = loading || (spaces?.length === 0 && task.firstLoad);
+
   const openCreate = useCallback(() => router.push('/space/create'), [router]);
   const openJoin = useCallback(() => router.push('/space/join'), [router]);
 
   return (
-    <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+    <Screen refreshControl={<RefreshControl refreshing={task.running} onRefresh={onRefresh} />}>
       <Reveal index={0} style={{ marginBottom: spacing.lg }}>
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <View style={{ flex: 1, paddingRight: spacing.md }}>
@@ -278,7 +275,10 @@ export function SpacesScreen() {
         </Reveal>
       ) : null}
 
-      {spaces === null && !error ? (
+      {/* The skeleton is now a genuinely-first-run state, not a per-visit one:
+          with anything cached the list is already painted above, and `firstLoad`
+          is false the moment the Spaces sync has landed once on this install. */}
+      {showSkeleton ? (
         <View style={{ gap: spacing.sm }}>
           {[0, 1, 2].map((i) => (
             <SpaceCardSkeleton key={i} />
@@ -297,7 +297,9 @@ export function SpacesScreen() {
         </Card>
       ) : null}
 
-      {spaces && spaces.length === 0 && !error ? <EmptyState onCreate={openCreate} onJoin={openJoin} /> : null}
+      {!showSkeleton && spaces?.length === 0 && !error ? (
+        <EmptyState onCreate={openCreate} onJoin={openJoin} />
+      ) : null}
 
       {spaces && spaces.length > 0 && filtered.length === 0 ? (
         <Card>

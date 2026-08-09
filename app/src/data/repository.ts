@@ -32,11 +32,18 @@ import type {
   SpaceInvite,
   SpaceMember,
   SpaceRole,
+  SyncResponse,
 } from '@/api/types';
 
 export interface Repository {
   // Saves
-  createSave(body: CreateSaveRequest): Promise<SaveResponse>;
+  /**
+   * @param idempotencyKey generated once when the write is queued and carried
+   *                       through every retry — a key minted per attempt would
+   *                       let a POST whose response was lost create a second
+   *                       save. See `@/local/outbox`.
+   */
+  createSave(body: CreateSaveRequest, idempotencyKey?: string): Promise<SaveResponse>;
   listSaves(page?: number, size?: number): Promise<SaveResponse[]>;
   listSavesByLifecycle(statuses: LifecycleStatus[], size?: number): Promise<SaveResponse[]>;
   getSave(id: string): Promise<SaveResponse>;
@@ -85,7 +92,13 @@ export interface Repository {
   // Spaces
   listSpaces(): Promise<Space[]>;
   getSpace(id: string): Promise<Space>;
-  createSpace(name: string, type?: string): Promise<Space>;
+  /**
+   * @param idempotencyKey a repeated key replays the first attempt's Space
+   *                       instead of minting a second one (V16). Stable across
+   *                       the retries that mean one Space, new for a genuinely
+   *                       new one — see `CreateSpaceSheet`.
+   */
+  createSpace(name: string, type?: string, idempotencyKey?: string): Promise<Space>;
   renameSpace(id: string, name: string): Promise<Space>;
   deleteSpace(id: string): Promise<void>;
   listSpaceSaves(id: string, page?: number, size?: number): Promise<SaveResponse[]>;
@@ -95,6 +108,7 @@ export interface Repository {
   createInvite(
     id: string,
     options?: { role?: SpaceRole; expiresInHours?: number; maxUses?: number },
+    idempotencyKey?: string,
   ): Promise<SpaceInvite>;
   listInvites(id: string): Promise<SpaceInvite[]>;
   revokeInvite(id: string, inviteId: string): Promise<void>;
@@ -107,7 +121,13 @@ export interface Repository {
 
   // Discussion
   listComments(saveId: string): Promise<SaveComment[]>;
-  addComment(saveId: string, body: string): Promise<SaveComment>;
+  /**
+   * @param idempotencyKey the outbox entry's own key, carried through every
+   *                       retry — this is the one queued write that creates a
+   *                       row, so a lost response would otherwise post the
+   *                       comment twice.
+   */
+  addComment(saveId: string, body: string, idempotencyKey?: string): Promise<SaveComment>;
   deleteComment(saveId: string, commentId: string): Promise<void>;
   setVote(saveId: string, value: 1 | -1 | 0): Promise<{ score: number }>;
 
@@ -150,6 +170,15 @@ export interface Repository {
   unmergeEntity(fromKey: string): Promise<void>;
   renameEntity(entityKey: string, name: string): Promise<void>;
   renameCollection(collectionId: string, name: string): Promise<void>;
+
+  /**
+   * `GET /v1/sync` — everything that changed since `since`, in one request.
+   *
+   * The primary read of the whole app. Omitting `since` is a first sync, not a
+   * different call: the window simply starts at the epoch, so there is no
+   * separate bootstrap path to keep correct.
+   */
+  pullSync(since?: string | null, limit?: number): Promise<SyncResponse>;
 }
 
 /**

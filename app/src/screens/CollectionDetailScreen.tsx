@@ -1,9 +1,11 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Image, Modal, ScrollView, View } from 'react-native';
 
-import { ApiError } from '@/api/client';
 import type { CollectionEntityResponse, CollectionNodeResponse } from '@/api/types';
+import { useLiveValue } from '@/local';
+import { DERIVED_TABLES, readCollectionEntities, readCollections } from '@/local/derived';
+import { writeEntityState } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -12,9 +14,11 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { collectionTypeMeta } from '@/collections/collectionMeta';
-import { repo } from '@/data';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/** Stable identity for the "nothing derived yet" case — see `useLiveValue`. */
+const EMPTY_ENTITIES: CollectionEntityResponse[] = [];
 
 function clean(value: unknown): string | null {
   if (typeof value === 'number') return String(value);
@@ -239,25 +243,24 @@ export function CollectionDetailScreen({ type }: { type: string }) {
   const { palette, spacing } = useTheme();
   const router = useRouter();
 
-  const [node, setNode] = useState<CollectionNodeResponse | null>(null);
-  const [entities, setEntities] = useState<CollectionEntityResponse[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const [tree, list] = await Promise.all([repo.listCollections(), repo.listCollectionEntities(type)]);
-      setNode(tree.find((n) => n.id === type) ?? null);
-      setEntities(list);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Could not open that collection');
-    }
-  }, [type]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // Both derived from the local store by the same merge core the server runs
+  // (`@/collections/merge` + `@/local/derived`), so there is no fetch and no
+  // error path: a collection that does not exist locally is one whose saves
+  // have not synced yet, not a failed request.
+  const node = useLiveValue<CollectionNodeResponse | null>(
+    DERIVED_TABLES,
+    async (store) => (await readCollections(store)).find((n) => n.id === type) ?? null,
+    null,
+    [type],
+  );
+  const entities = useLiveValue<CollectionEntityResponse[]>(
+    DERIVED_TABLES,
+    (store) => readCollectionEntities(store, type),
+    EMPTY_ENTITIES,
+    [type],
+  );
 
   const collMeta = collectionTypeMeta(type);
   const typeMeta = saveTypeMeta(type);
@@ -269,24 +272,22 @@ export function CollectionDetailScreen({ type }: { type: string }) {
   const done = entities.filter((e) => e.state?.done === true).sort(bySectionOrder);
   const selected = entities.find((e) => e.entityKey === selectedKey) ?? null;
 
-  const writeEntityState = useCallback(
-    (entity: CollectionEntityResponse, nextState: Record<string, unknown>) => {
-      setEntities((current) =>
-        current.map((e) => (e.entityKey === entity.entityKey ? { ...e, state: nextState } : e)),
-      );
-      repo.setEntityState(entity.entityKey, nextState).catch(() => {
-        void load();
-      });
-    },
-    [load],
-  );
+  /**
+   * Optimistic through the store rather than through local component state:
+   * the entity list, the section counts and the same entity's controls on a
+   * save's own detail screen all read `entity_states`, so one write updates
+   * every one of them without any of them knowing about the others.
+   */
+  const setEntityState = useCallback((entity: CollectionEntityResponse, nextState: Record<string, unknown>) => {
+    writeEntityState(entity.entityKey, nextState);
+  }, []);
   const toggleDone = useCallback(
-    (entity: CollectionEntityResponse) => writeEntityState(entity, { ...entity.state, done: entity.state?.done !== true }),
-    [writeEntityState],
+    (entity: CollectionEntityResponse) => setEntityState(entity, { ...entity.state, done: entity.state?.done !== true }),
+    [setEntityState],
   );
   const rate = useCallback(
-    (entity: CollectionEntityResponse, rating: number) => writeEntityState(entity, { ...entity.state, rating }),
-    [writeEntityState],
+    (entity: CollectionEntityResponse, rating: number) => setEntityState(entity, { ...entity.state, rating }),
+    [setEntityState],
   );
   /**
    * K4: pinning rides `entity_states`' existing `state` jsonb (`state.pinned`)
@@ -296,31 +297,14 @@ export function CollectionDetailScreen({ type }: { type: string }) {
    */
   const togglePin = useCallback(
     (entity: CollectionEntityResponse) =>
-      writeEntityState(entity, { ...entity.state, pinned: entity.state?.pinned !== true }),
-    [writeEntityState],
+      setEntityState(entity, { ...entity.state, pinned: entity.state?.pinned !== true }),
+    [setEntityState],
   );
 
-  if (error) {
-    return (
-      <Screen>
-        <Card>
-          <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
-            Collection unavailable
-          </AppText>
-          <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.md }}>
-            {error}
-          </AppText>
-          <Touchable accessibilityRole="button" onPress={() => router.back()} haptic="medium">
-            <AppText variant="label" tone="accent">
-              Go back
-            </AppText>
-          </Touchable>
-        </Card>
-      </Screen>
-    );
-  }
-
-  if (!node && entities.length === 0 && !error) {
+  // No error branch any more: reading a derived view of local data cannot
+  // fail the way a request could. An empty screen here means the saves behind
+  // this collection have not synced yet, which is a spinner, not a failure.
+  if (!node && entities.length === 0) {
     return (
       <Screen>
         <View style={{ paddingVertical: spacing.xxl, alignItems: 'center' }}>

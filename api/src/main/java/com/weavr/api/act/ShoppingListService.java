@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.weavr.api.common.NotFoundException;
+import com.weavr.api.sync.TombstoneService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -30,10 +31,12 @@ public class ShoppingListService {
 
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
+    private final TombstoneService tombstones;
 
-    ShoppingListService(JdbcClient jdbc, ObjectMapper objectMapper) {
+    ShoppingListService(JdbcClient jdbc, ObjectMapper objectMapper, TombstoneService tombstones) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
+        this.tombstones = tombstones;
     }
 
     public record Item(UUID id, String name, String quantity, String unit,
@@ -142,7 +145,7 @@ public class ShoppingListService {
 
         // Lines this recipe used to contribute to but no longer does — e.g. the
         // prompt changed, or the recipe was re-classified.
-        dropContributionsOf(listId, saveId);
+        dropContributionsOf(userId, listId, saveId);
 
         int added = 0;
         for (ShoppingListConverter.ItemDraft draft : drafts) {
@@ -158,7 +161,7 @@ public class ShoppingListService {
      * Removes this save's contribution from every line, deleting lines nothing
      * else contributes to and recomputing the rest.
      */
-    private void dropContributionsOf(UUID listId, UUID saveId) {
+    private void dropContributionsOf(UUID userId, UUID listId, UUID saveId) {
         for (ItemRow row : rowsContributedToBy(listId, saveId)) {
             List<Contribution> remaining = row.contributions().stream()
                     .filter(c -> !c.saveId().equals(saveId))
@@ -167,6 +170,7 @@ public class ShoppingListService {
                 jdbc.sql("delete from shopping_list_items where id = ?")
                         .param(row.id())
                         .update();
+                tombstones.record(userId, TombstoneService.SHOPPING_ITEM, row.id().toString());
             } else {
                 writeContributions(row.id(), remaining);
             }
@@ -367,18 +371,32 @@ public class ShoppingListService {
         if (deleted == 0) {
             throw new NotFoundException("That item is not on your list.");
         }
+        tombstones.record(userId, TombstoneService.SHOPPING_ITEM, itemId.toString());
     }
 
-    /** Clearing checked items is what "I've been shopping" means in practice. */
+    /**
+     * Clearing checked items is what "I've been shopping" means in practice.
+     *
+     * <p>{@code returning} rather than a plain row count, because each removed
+     * id needs a tombstone: a phone that ticked things off in the shop and
+     * cleared them there has the deletions locally already, but a second device
+     * — or the same one after a reinstall — learns about them only from here.
+     */
     @Transactional
     public int clearChecked(UUID userId) {
-        return jdbc.sql("""
+        List<UUID> removed = jdbc.sql("""
                         delete from shopping_list_items i
                         using shopping_lists l
                         where i.list_id = l.id and l.user_id = ? and i.checked
+                        returning i.id
                         """)
                 .param(userId)
-                .update();
+                .query(UUID.class)
+                .list();
+        for (UUID id : removed) {
+            tombstones.record(userId, TombstoneService.SHOPPING_ITEM, id.toString());
+        }
+        return removed.size();
     }
 
     /** Matches how a shopper reads a name: case and spacing are not differences. */

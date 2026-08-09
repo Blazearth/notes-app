@@ -1,16 +1,18 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, View } from 'react-native';
+import React, { useCallback } from 'react';
+import { Modal, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ApiError } from '@/api/client';
-import { repo } from '@/data';
 import type { SaveResponse, Space } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Glyph } from '@/components/Glyph';
 import { Touchable } from '@/components/Touchable';
+import { useLiveValue } from '@/local';
+import { writeSaveSpace } from '@/local/writes';
 import { spaceIdentity } from '@/spaces/spaceMeta';
-import { useSaves } from '@/saves/SavesProvider';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/** Stable identity for "the store has no Spaces" — see `useLiveValue`. */
+const EMPTY_SPACES: Space[] = [];
 
 interface AddToSpaceSheetProps {
   save: SaveResponse;
@@ -24,33 +26,20 @@ interface AddToSpaceSheetProps {
 export function AddToSpaceSheet({ save, onClose }: AddToSpaceSheetProps) {
   const { palette, radius, spacing, elevation } = useTheme();
   const insets = useSafeAreaInsets();
-  const { patch } = useSaves();
-  const [spaces, setSpaces] = useState<Space[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    repo.listSpaces().then(setSpaces).catch(() => setSpaces([])).finally(() => setLoading(false));
-  }, []);
+  // From the store, so the picker is populated the instant the sheet opens —
+  // this used to be a `repo.listSpaces()` on mount, which meant a spinner over a
+  // list the app already had, and an empty picker offline.
+  const spaces = useLiveValue<Space[]>(['spaces'], (store) => store.readSpaces(), EMPTY_SPACES);
 
   const apply = useCallback(
-    async (spaceId: string | null) => {
-      if (busy) return;
-      setBusy(spaceId ?? '__private__');
-      setError(null);
-      patch(save.id, { spaceId: spaceId ?? undefined });
-      try {
-        const updated = await repo.setSaveSpace(save.id, spaceId);
-        patch(save.id, updated);
-        onClose();
-      } catch (e) {
-        patch(save.id, { spaceId: save.spaceId });
-        setError(e instanceof ApiError ? e.message : 'Could not move that save.');
-        setBusy(null);
-      }
+    (spaceId: string | null) => {
+      // Local first, queued second. The sheet can close immediately because the
+      // move has already happened as far as every screen is concerned — there is
+      // no request to wait on, no busy state to show and nothing to revert.
+      writeSaveSpace(save.id, spaceId);
+      onClose();
     },
-    [busy, save.id, save.spaceId, patch, onClose],
+    [save.id, onClose],
   );
 
   return (
@@ -95,13 +84,9 @@ export function AddToSpaceSheet({ save, onClose }: AddToSpaceSheetProps) {
         </AppText>
 
         <ScrollView showsVerticalScrollIndicator={false} style={{ flexGrow: 0 }}>
-          {loading ? (
-            <View style={{ paddingVertical: spacing.xxl, alignItems: 'center' }}>
-              <ActivityIndicator color={palette.accent} />
-            </View>
-          ) : null}
-
-          {!loading && spaces.length === 0 ? (
+          {/* No loading branch: the Spaces come from the store, so they are
+              either there on the first frame or the user genuinely has none. */}
+          {spaces.length === 0 ? (
             <AppText variant="caption" tone="muted">
               You don't have any Spaces yet. Create one from the Spaces tab.
             </AppText>
@@ -115,8 +100,7 @@ export function AddToSpaceSheet({ save, onClose }: AddToSpaceSheetProps) {
                 color={palette.textFaint}
                 glyph="layers"
                 active={false}
-                busy={busy === '__private__'}
-                onPress={() => void apply(null)}
+                onPress={() => apply(null)}
               />
             ) : null}
 
@@ -130,18 +114,11 @@ export function AddToSpaceSheet({ save, onClose }: AddToSpaceSheetProps) {
                   color={identity.color}
                   glyph={identity.glyph}
                   active={active}
-                  busy={busy === space.id}
-                  onPress={active ? undefined : () => void apply(space.id)}
+                  onPress={active ? undefined : () => apply(space.id)}
                 />
               );
             })}
           </View>
-
-          {error ? (
-            <AppText variant="caption" style={{ color: palette.danger, marginTop: spacing.md }}>
-              {error}
-            </AppText>
-          ) : null}
         </ScrollView>
       </View>
     </Modal>
@@ -149,10 +126,10 @@ export function AddToSpaceSheet({ save, onClose }: AddToSpaceSheetProps) {
 }
 
 function SpaceRow({
-  label, color, glyph, active, busy, onPress,
+  label, color, glyph, active, onPress,
 }: {
   label: string; color: string; glyph: string;
-  active: boolean; busy: boolean; onPress?: () => void;
+  active: boolean; onPress?: () => void;
 }) {
   const { palette, radius, spacing, icon } = useTheme();
   return (
@@ -162,7 +139,7 @@ function SpaceRow({
       accessibilityState={{ selected: active }}
       onPress={onPress}
       haptic="selection"
-      disabled={active || busy}
+      disabled={active}
       baseOpacity={active ? 0.6 : 1}
       style={{
         flexDirection: 'row',
@@ -186,11 +163,7 @@ function SpaceRow({
         <Glyph name={glyph as any} size={16} weight={2} color={color} />
       </View>
       <AppText variant="cardTitle" style={{ flex: 1 }}>{label}</AppText>
-      {busy ? (
-        <ActivityIndicator size="small" color={color} />
-      ) : active ? (
-        <Glyph name="check" size={icon.sm} weight={2.5} color={color} />
-      ) : null}
+      {active ? <Glyph name="check" size={icon.sm} weight={2.5} color={color} /> : null}
     </Touchable>
   );
 }

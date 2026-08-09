@@ -5,6 +5,8 @@ import { ActivityIndicator, RefreshControl, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
+import { useLiveValue } from '@/local';
+import { sync } from '@/local/sync';
 import type {
   ActivityEntry,
   DuplicateSuggestion,
@@ -27,6 +29,10 @@ import { spaceIdentity } from '@/spaces/spaceMeta';
 import { useTheme } from '@/theme/ThemeProvider';
 
 type TabValue = 'saves' | 'people' | 'activity';
+
+/** Stable identities for the "store has nothing yet" case — see `useLiveValue`. */
+const EMPTY_SAVES: SaveResponse[] = [];
+const EMPTY_MEMBERS: SpaceMember[] = [];
 
 /** Past-tense phrasing per activity type, so the feed reads as sentences. */
 const ACTIVITY_VERBS: Record<string, string> = {
@@ -132,9 +138,6 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   const router = useRouter();
 
   const [tab, setTab] = useState<TabValue>('saves');
-  const [space, setSpace] = useState<Space | null>(null);
-  const [saves, setSaves] = useState<SaveResponse[]>([]);
-  const [members, setMembers] = useState<SpaceMember[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [duplicates, setDuplicates] = useState<DuplicateSuggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -142,26 +145,44 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   const [invite, setInvite] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // The Space, its saves and its members read the local store, so arriving here
+  // from the Spaces list paints the header and the saves tab on the first frame.
+  const space = useLiveValue<Space | null>(['spaces'], (store) => store.readSpace(spaceId), null, [spaceId]);
+  const saves = useLiveValue<SaveResponse[]>(
+    ['saves'],
+    (store) => store.readFeed({ spaceId }),
+    EMPTY_SAVES,
+    [spaceId],
+  );
+  const members = useLiveValue<SpaceMember[]>(
+    ['space_members'],
+    (store) => store.readSpaceMembers(spaceId),
+    EMPTY_MEMBERS,
+    [spaceId],
+  );
+
+  /**
+   * Activity and duplicates stay on-demand network reads, deliberately.
+   * Neither table carries an `updated_at`, so neither is delta-syncable
+   * (`docs/local-first.md`, "Honestly delta-syncable, and not"), and both are
+   * one tap off the default tab — caching them would buy a stale feed rather
+   * than a fast one.
+   */
   const load = useCallback(async () => {
-    try {
-      // One await of everything rather than a waterfall: the tabs are all
-      // visible within one tap of each other, and four sequential round trips
-      // on a phone network is the difference between instant and sluggish.
-      const [s, sv, m, a, d] = await Promise.all([
-        repo.getSpace(spaceId),
-        repo.listSpaceSaves(spaceId),
-        repo.listSpaceMembers(spaceId),
-        repo.getSpaceActivity(spaceId),
-        repo.listDuplicates(spaceId),
-      ]);
-      setSpace(s);
-      setSaves(sv);
-      setMembers(m);
-      setActivity(a);
-      setDuplicates(d);
+    // `pullSpace` writes the Space, its saves and its members into the store;
+    // the three `useLiveValue`s above pick that up on their own.
+    const [detail, a, d] = await Promise.allSettled([
+      sync.pullSpace(spaceId),
+      repo.getSpaceActivity(spaceId),
+      repo.listDuplicates(spaceId),
+    ] as const);
+    if (a.status === 'fulfilled') setActivity(a.value);
+    if (d.status === 'fulfilled') setDuplicates(d.value);
+    // Only fatal when there is nothing cached to show instead.
+    if (detail.status === 'rejected') {
+      setError(detail.reason instanceof ApiError ? detail.reason.message : 'Could not load this Space.');
+    } else {
       setError(null);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Could not load this Space.');
     }
   }, [spaceId]);
 

@@ -1,10 +1,12 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { ActivityIndicator, RefreshControl, View } from 'react-native';
 
-import { ApiError } from '@/api/client';
-import { repo } from '@/data';
-import type { ShoppingListItem } from '@/api/types';
+import type { ShoppingListItem, ShoppingListResponse } from '@/api/types';
+import { useLiveValue } from '@/local';
+import { writeClearCheckedShoppingItems, writeShoppingItemChecked } from '@/local/writes';
+import { sync } from '@/local/sync';
+import { useTaskStatus } from '@/local/useSync';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -13,6 +15,9 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/** Stable identity for the "store has nothing yet" case — see `useLiveValue`. */
+const EMPTY_LIST: ShoppingListResponse = { items: [], categories: [] };
 
 function ItemRow({
   item,
@@ -98,57 +103,42 @@ export function ShoppingListScreen() {
   const { palette, radius, spacing, icon } = useTheme();
   const router = useRouter();
 
-  const [items, setItems] = useState<ShoppingListItem[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [error, setError] = useState<ApiError | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  // Reads the store, so the list is on screen before the network is asked —
+  // which matters more here than anywhere else in the app: this is the one
+  // screen used standing in a shop, on the worst connection the app ever sees.
+  const list = useLiveValue<ShoppingListResponse>(
+    ['shopping_items', 'kv'],
+    (store) => store.readShoppingList(),
+    EMPTY_LIST,
+  );
+  const items = list.items;
+  const categories = list.categories;
 
-  const load = useCallback(async (isRefresh: boolean) => {
-    if (isRefresh) setRefreshing(true);
-    else setStatus('loading');
-    setError(null);
-    try {
-      const list = await repo.getShoppingList();
-      setItems(list.items);
-      setCategories(list.categories);
-      setStatus('ready');
-    } catch (e) {
-      setError(e instanceof ApiError ? e : new ApiError('server', 'Something went wrong', null));
-      setStatus('error');
-    } finally {
-      if (isRefresh) setRefreshing(false);
-    }
-  }, []);
+  const task = useTaskStatus('shoppingList', items.length > 0);
+  const status: 'loading' | 'ready' | 'error' =
+    items.length > 0 ? 'ready' : task.error ? 'error' : task.firstLoad ? 'loading' : 'ready';
+  const error = task.error;
 
   useEffect(() => {
-    void load(false);
-  }, [load]);
-
-  /**
-   * Optimistic, and deliberately so: ticking things off is the one interaction
-   * that happens repeatedly while standing in a shop, often on a bad
-   * connection. Waiting for a round trip per tap would make the list feel
-   * broken. On failure the tick is rolled back rather than left lying.
-   */
-  const toggle = useCallback(async (item: ShoppingListItem) => {
-    const next = !item.checked;
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, checked: next } : i)));
-    try {
-      await repo.setShoppingItemChecked(item.id, next);
-    } catch {
-      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, checked: !next } : i)));
-    }
+    void sync.syncShoppingList();
   }, []);
 
-  const clearChecked = useCallback(async () => {
-    const previous = items;
-    setItems((prev) => prev.filter((i) => !i.checked));
-    try {
-      await repo.clearCheckedShoppingItems();
-    } catch {
-      setItems(previous);
-    }
+  /**
+   * The interaction this whole layer exists for: repeated taps, standing in a
+   * shop, on the worst connection the app ever sees.
+   *
+   * The rollback that used to be here is gone, and its absence is the
+   * improvement. A tick undone by a failed request looks exactly like a tap the
+   * app never registered — so you tap again, and again. The tick now stands, the
+   * request is retried until it lands, and the only thing that can undo it is
+   * the server actually rejecting it.
+   */
+  const toggle = useCallback((item: ShoppingListItem) => {
+    writeShoppingItemChecked(item.id, !item.checked);
+  }, []);
+
+  const clearChecked = useCallback(() => {
+    writeClearCheckedShoppingItems(items);
   }, [items]);
 
   const checkedCount = items.filter((i) => i.checked).length;
@@ -160,8 +150,8 @@ export function ShoppingListScreen() {
     <Screen
       refreshControl={
         <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => void load(true)}
+          refreshing={task.running}
+          onRefresh={() => void sync.syncShoppingList()}
           tintColor={palette.accent}
           colors={[palette.accent]}
           progressBackgroundColor={palette.surface}
@@ -215,7 +205,7 @@ export function ShoppingListScreen() {
             <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.md }}>
               {error?.message}
             </AppText>
-            <Touchable accessibilityRole="button" onPress={() => void load(false)} haptic="medium">
+            <Touchable accessibilityRole="button" onPress={() => void sync.syncShoppingList()} haptic="medium">
               <AppText variant="label" tone="accent">
                 Try again
               </AppText>
@@ -247,7 +237,7 @@ export function ShoppingListScreen() {
                 {items
                   .filter((i) => i.category === category)
                   .map((item) => (
-                    <ItemRow key={item.id} item={item} onToggle={(i) => void toggle(i)} />
+                    <ItemRow key={item.id} item={item} onToggle={toggle} />
                   ))}
               </View>
             </Reveal>
@@ -258,7 +248,7 @@ export function ShoppingListScreen() {
               <Touchable
                 accessibilityRole="button"
                 accessibilityLabel={`Clear ${checkedCount} checked items`}
-                onPress={() => void clearChecked()}
+                onPress={clearChecked}
                 haptic="medium"
                 style={{
                   alignItems: 'center',

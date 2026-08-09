@@ -1,8 +1,7 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React from 'react';
 import { ActivityIndicator, ScrollView, View } from 'react-native';
 
-import { ApiError } from '@/api/client';
 import type { SaveResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -11,9 +10,12 @@ import { Reveal } from '@/components/Reveal';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
-import { repo } from '@/data';
+import { useLive } from '@/local';
 import { compareWorkouts, type WorkoutCompareRow } from '@/saves/workoutCompare';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/** Stable identity for the "store has nothing yet" case — see `useLive`. */
+const EMPTY_SAVES: SaveResponse[] = [];
 
 function Chip({ label, muted }: { label: string; muted?: boolean }) {
   const { palette, radius, spacing } = useTheme();
@@ -95,25 +97,18 @@ export function WorkoutCompareScreen({ ids }: { ids: string[] }) {
   const { palette, spacing } = useTheme();
   const router = useRouter();
 
-  const [saves, setSaves] = useState<SaveResponse[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
-
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const results = await Promise.all(ids.map((id) => repo.getSave(id)));
-      setSaves(results);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Could not load these workouts');
-    } finally {
-      setLoaded(true);
-    }
-  }, [ids]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // Straight from the store. This screen is only ever reached by selecting
+  // saves that were just listed from the store one screen back, so N fetches
+  // to re-read what is already local would be pure latency — and would break
+  // the comparison entirely offline.
+  const { data, loading } = useLive<SaveResponse[]>(
+    ['saves'],
+    (store) => store.readSavesByIds(ids),
+    [ids.join(',')],
+  );
+  const saves = data ?? EMPTY_SAVES;
+  const loaded = !loading;
+  const error = loaded && saves.length < ids.length ? 'Could not load these workouts' : null;
 
   if (error) {
     return (

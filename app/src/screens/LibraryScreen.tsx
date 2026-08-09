@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import type { CollectionNodeResponse, SaveResponse } from '@/api/types';
@@ -13,9 +13,11 @@ import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
-import { repo } from '@/data';
+import { useLiveValue } from '@/local';
+import { DERIVED_TABLES, readCollections } from '@/local/derived';
 import { saveTitle, STATUS_LABELS } from '@/saves/format';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
+import { writeSaveFlags } from '@/local/writes';
 import { useSaves } from '@/saves/SavesProvider';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -24,6 +26,9 @@ const FAVORITES = 'Favorites';
 const ARCHIVED = 'Archived';
 
 type SortKey = 'recent' | 'alphabetical';
+
+/** Stable identity for the "nothing derived yet" case — see `useLiveValue`. */
+const EMPTY_COLLECTIONS: CollectionNodeResponse[] = [];
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'recent', label: 'Recently added' },
@@ -124,7 +129,7 @@ function TypeTile({ type, count, onPress }: { type: string; count: number; onPre
  */
 export function LibraryScreen() {
   const { palette, layout, spacing } = useTheme();
-  const { saves, status, error, refresh, refreshing, patch } = useSaves();
+  const { saves, status, error, refresh, refreshing } = useSaves();
   const router = useRouter();
   const [filter, setFilter] = useState<string>(ALL);
   const [sortBy, setSortBy] = useState<SortKey>('recent');
@@ -134,23 +139,17 @@ export function LibraryScreen() {
 
   // K3: the Library's top level for entity-bearing types (recommendation_list,
   // itinerary, checklist) renders collections, not save rows — see
-  // docs/knowledge-collections.md. Fetched independently of `useSaves()`
-  // because it is a different derived view of the same saves, not a list of
-  // saves itself.
-  const [collections, setCollections] = useState<CollectionNodeResponse[]>([]);
-  const loadCollections = useCallback(() => {
-    repo
-      .listCollections()
-      .then(setCollections)
-      .catch(() => setCollections([]));
-  }, []);
-  useEffect(() => {
-    loadCollections();
-  }, [loadCollections]);
+  // docs/knowledge-collections.md.
+  //
+  // No longer `GET /v1/collections`. It is a *different derived view of the
+  // same saves*, and both the saves and the K2 entity state that gives it
+  // `doneCount` are already local — so it is computed from them, by the same
+  // merge core the server runs (`@/collections/merge`), and updates the instant
+  // a save or an entity state changes rather than on the next refetch.
+  const collections = useLiveValue<CollectionNodeResponse[]>(DERIVED_TABLES, readCollections, EMPTY_COLLECTIONS);
   const onRefresh = useCallback(() => {
     void refresh();
-    loadCollections();
-  }, [refresh, loadCollections]);
+  }, [refresh]);
 
   // A type only leaves the ordinary flat list once it actually produced a
   // collection — a recommendation_list save with no usable items (all
@@ -257,39 +256,30 @@ export function LibraryScreen() {
     [selectionMode, toggleSelected, router],
   );
 
-  /** Optimistic flip, reconciled with the server's echo; reverted on failure. */
+  /**
+   * Local first, queued second — see `@/local/writes`. There is no revert
+   * branch here any more and that is the point: a swipe that failed used to be
+   * silently undone, which is indistinguishable from "the swipe never
+   * registered". The write is now retried until it lands, or surfaced if the
+   * server rejects it outright.
+   */
   const setFlag = useCallback(
-    async (save: SaveResponse, changes: { favorite?: boolean; archived?: boolean }) => {
-      patch(save.id, changes);
-      try {
-        const updated = await repo.setSaveFlags(save.id, changes);
-        patch(save.id, updated);
-      } catch {
-        patch(save.id, { favorite: save.favorite, archived: save.archived });
-      }
+    (save: SaveResponse, changes: { favorite?: boolean; archived?: boolean }) => {
+      writeSaveFlags(save.id, changes);
     },
-    [patch],
+    [],
   );
 
   const bulkApply = useCallback(
-    async (changes: { favorite?: boolean; archived?: boolean }) => {
+    (changes: { favorite?: boolean; archived?: boolean }) => {
       const ids = [...selectedIds];
       exitSelection();
-      for (const id of ids) patch(id, changes);
-      await Promise.all(
-        ids.map((id) =>
-          repo
-            .setSaveFlags(id, changes)
-            .then((updated) => patch(id, updated))
-            .catch(() => {
-              // Best-effort: a failed bulk item just keeps its optimistic
-              // value rather than rolling the whole batch back, since a
-              // partial success is still progress the user asked for.
-            }),
-        ),
-      );
+      // No `Promise.all` and no partial-success caveat: each id is its own
+      // queued write, ordered per save and independent across saves, so one
+      // rejection can neither roll back nor hold up the rest.
+      for (const id of ids) writeSaveFlags(id, changes);
     },
-    [selectedIds, exitSelection, patch],
+    [selectedIds, exitSelection],
   );
 
   return (
@@ -327,12 +317,12 @@ export function LibraryScreen() {
               <HeaderAction
                 glyph="heart"
                 label="Favorite selected"
-                onPress={() => void bulkApply({ favorite: true })}
+                onPress={() => bulkApply({ favorite: true })}
               />
               <HeaderAction
                 glyph="archive"
                 label="Archive selected"
-                onPress={() => void bulkApply({ archived: true })}
+                onPress={() => bulkApply({ archived: true })}
               />
             </View>
           </>
@@ -521,8 +511,8 @@ export function LibraryScreen() {
                     selected={selectedIds.has(save.id)}
                     onPress={() => handleCardPress(save)}
                     onLongPress={() => handleLongPress(save.id)}
-                    onFavorite={() => void setFlag(save, { favorite: !save.favorite })}
-                    onArchive={() => void setFlag(save, { archived: !save.archived })}
+                    onFavorite={() => setFlag(save, { favorite: !save.favorite })}
+                    onArchive={() => setFlag(save, { archived: !save.archived })}
                     trailing={
                       save.status === 'ready' ? undefined : (
                         <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>

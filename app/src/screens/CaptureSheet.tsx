@@ -19,15 +19,16 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ApiError } from '@/api/client';
+// `API_BASE_URL` rather than `repo`: the screenshot upload is multipart and
+// cannot go through either the repository or the outbox — see `handleOpenScreenshot`.
 import { API_BASE_URL } from '@/api/config';
-import { repo } from '@/data';
+import { getStore } from '@/local';
+import { writeCreateSave } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { Glyph } from '@/components/Glyph';
 import { Touchable } from '@/components/Touchable';
 import { CAPTURE_OPTIONS, CAPTURE_SUBTITLE, type CaptureOption } from '@/data/sampleContent';
 import { useHaptic } from '@/motion/haptics';
-import { useSaves } from '@/saves/SavesProvider';
 import { Spring, staggerDelay } from '@/theme/motion';
 import { useTheme } from '@/theme/ThemeProvider';
 import { supabase } from '@/auth/supabase';
@@ -203,7 +204,6 @@ export function CaptureSheet() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const router = useRouter();
-  const { prepend } = useSaves();
   const haptic = useHaptic();
 
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -358,14 +358,18 @@ export function CaptureSheet() {
     setBusyId(null);
     dismiss();
 
-    void repo
-      .createSave({ sourceType: 'url', sourceUrl: clipboard })
-      .then(prepend)
-      .catch((e: unknown) => {
-        haptic('error');
-        console.warn('[capture] save failed:', e instanceof ApiError ? e.message : e);
-      });
-  }, [dismiss, haptic, prepend]);
+    // Local first: the card is in the feed before this function returns, with a
+    // `local:` id and `status: 'processing'` — which is honest either way, since
+    // the server's own 202 says exactly that. The POST is queued and retried
+    // until it lands, at which point the store moves the row onto the real id.
+    //
+    // This also closes the gap the old version documented and could not fix: a
+    // failure after dismissal had no surface to report on, so a save that failed
+    // simply never appeared. Nothing is lost now — a queued write survives a
+    // dead connection and even an app restart, and the only thing that can stop
+    // it is the server rejecting it outright, which `useOutbox` reports.
+    writeCreateSave({ sourceType: 'url', sourceUrl: clipboard });
+  }, [dismiss, haptic]);
 
   // `pasteLink` has to be stable too, or this changes every render and the
   // `React.memo` on the tiles is decorative.
@@ -440,7 +444,10 @@ export function CaptureSheet() {
 
       const saved = JSON.parse(uploadResult.body) as import('@/api/types').SaveResponse;
       haptic('success');
-      prepend(saved);
+      // Straight into the store rather than into a provider's list: every screen
+      // reads the store now, so this is what puts the card in the feed. **Not**
+      // `replaceAll` — this is one save, not a view of the library.
+      await getStore().putSaves([saved]);
       dismiss();
     } catch (e) {
       haptic('error');
@@ -449,7 +456,7 @@ export function CaptureSheet() {
     } finally {
       setBusyId(null);
     }
-  }, [dismiss, haptic, prepend]);
+  }, [dismiss, haptic]);
 
   const handleOpenScreenshotPress = useCallback(
     () => void handleOpenScreenshot(),
@@ -475,14 +482,13 @@ export function CaptureSheet() {
     setNoteText('');
     dismiss();
 
-    void repo
-      .createSave({ sourceType: 'text', text: body, title })
-      .then(prepend)
-      .catch((e: unknown) => {
-        haptic('error');
-        console.warn('[capture] note save failed:', e instanceof ApiError ? e.message : e);
-      });
-  }, [noteTitle, noteText, dismiss, haptic, prepend]);
+    // Same local-first path as `pasteLink`, and for a note the case is stronger
+    // still: this is text the user typed and nothing else holds a copy of it.
+    // A fire-and-forget POST that failed used to lose it outright — the sheet
+    // was already dismissed, so the `catch` had nowhere to report to. Queued, it
+    // survives a dead connection and an app restart.
+    writeCreateSave({ sourceType: 'text', text: body, title });
+  }, [noteTitle, noteText, dismiss, haptic]);
 
   const handleSaveNotePress = useCallback(() => void handleSaveNote(), [handleSaveNote]);
 

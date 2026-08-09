@@ -4,8 +4,16 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Linking, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
-import { repo } from '@/data';
 import type { SaveResponse } from '@/api/types';
+import { useLive, useLiveValue } from '@/local';
+import { sync } from '@/local/sync';
+import {
+  writeConvertToShoppingList,
+  writeEntityState,
+  writeNote,
+  writeSaveItemState,
+} from '@/local/writes';
+import { repo } from '@/data';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -21,7 +29,6 @@ import { buildDetailModel, type DetailField, type DetailObject, type EntityState
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { baseServings, scaleQuantity } from '@/saves/scaling';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
-import { useSaves } from '@/saves/SavesProvider';
 import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AddToSpaceSheet } from './AddToSpaceSheet';
@@ -686,16 +693,14 @@ function AddToShoppingList({ saveId }: { saveId: string }) {
   const [state, setState] = useState<'idle' | 'adding' | 'added' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
 
-  const add = async () => {
-    setState('adding');
+  // Queued rather than awaited: the conversion is a *server* job that spends a
+  // Gemini request, so nothing about waiting here told the user anything the
+  // "Adding…" copy did not. Queueing it means the same tap works on a train, and
+  // a rejection surfaces through the queue like every other terminal failure.
+  const add = () => {
+    setState('added');
     setMessage(null);
-    try {
-      await repo.convertToShoppingList(saveId);
-      setState('added');
-    } catch (e) {
-      setState('error');
-      setMessage(e instanceof ApiError ? e.message : 'Could not add this recipe.');
-    }
+    writeConvertToShoppingList(saveId);
   };
 
   if (state === 'added') {
@@ -773,22 +778,21 @@ function AddToShoppingList({ saveId }: { saveId: string }) {
 
 export function SaveDetailScreen({ id }: { id: string }) {
   const { palette, radius, spacing, icon } = useTheme();
-  const { saves, patch } = useSaves();
 
-  // Start from the feed's copy when it has one, so opening a card from Home is
-  // instant and the fetch below only fills in anything that changed. Arriving
-  // from a search result or a cold link has no cached copy and shows a spinner.
-  const cached = saves.find((s) => s.id === id) ?? null;
-  const [save, setSave] = useState<SaveResponse | null>(cached);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [loading, setLoading] = useState(!cached);
   const [showSpaceSheet, setShowSpaceSheet] = useState(false);
   const [cookModeOpen, setCookModeOpen] = useState(false);
-  // K2: this save's items' K2 entity state, keyed by Entities.key's output —
-  // fetched separately because it lives on the collection endpoint's merged
-  // entity payload, not on SaveResponse. Only recommendation_list has any
-  // entity-keyed control today.
-  const [entityStates, setEntityStates] = useState<EntityStates>(undefined);
+
+  // The save comes from the local store, so opening a card is instant from
+  // anywhere — the feed, the Library, a group, a search result, a cold deep
+  // link — rather than only from screens that happened to hold a copy. The
+  // pull below fills in anything that changed behind it.
+  const { data: stored, loading: reading } = useLive<SaveResponse | null>(
+    ['saves', 'item_states'],
+    (store) => store.readSave(id),
+    [id],
+  );
+  const save = stored ?? null;
+  const [error, setError] = useState<ApiError | null>(null);
 
   // Text-note inline editor state. Initialised from the save's structuredData
   // and kept in sync whenever the save refreshes (e.g., after a successful save).
@@ -808,47 +812,34 @@ export function SaveDetailScreen({ id }: { id: string }) {
   }, [save]);
 
   const load = useCallback(async () => {
-    setError(null);
-    try {
-      setSave(await repo.getSave(id));
-    } catch (e) {
-      setError(e instanceof ApiError ? e : new ApiError('server', 'Something went wrong', null));
-    } finally {
-      setLoading(false);
-    }
+    const pulled = await sync.pullSave(id);
+    // Only an error when there is nothing local to show instead — offline on a
+    // save you already have is not a failure, it is the point of this layer.
+    setError(pulled == null && stored == null ? new ApiError('server', 'Something went wrong', null) : null);
+  }, [id, stored]);
+
+  useEffect(() => {
+    void sync.pullSave(id);
   }, [id]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const loading = reading && save == null;
 
-  // K2: once the save's own type is known, fetch every entity of that type
-  // to pick up this save's own items' entity state — the same "state joined
-  // into K1's entity payload" reasoning `GET /v1/collections/{type}` already
-  // follows, reused here rather than inventing a second read path.
-  const knowledgeType = save?.knowledgeType;
-  useEffect(() => {
-    if (knowledgeType !== 'recommendation_list') return;
-    let cancelled = false;
-    repo
-      .listCollectionEntities('recommendation_list')
-      .then((entities) => {
-        if (cancelled) return;
-        const map: Record<string, Record<string, unknown>> = {};
-        for (const entity of entities) {
-          if (entity.state) map[entity.entityKey] = entity.state;
-        }
-        setEntityStates(map);
-      })
-      .catch(() => {
-        // Silent, same as RelatedRail: a missing watch-state overlay is not
-        // worth an error card on an otherwise-successful save view — the
-        // controls just fall back to item state (or unset) until it loads.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [knowledgeType]);
+  /**
+   * K2: this save's items' entity state, keyed by `Entities.key`'s output —
+   * read from `entity_states` rather than from a save's own `itemStates`,
+   * because it survives the same entity appearing in a later save.
+   *
+   * It used to be a `GET /v1/collections/recommendation_list` on mount purely
+   * to harvest the `state` off each merged entity. The sync engine already
+   * does that harvest (`sync.syncEntityStates`), so this is now a local read
+   * of the whole map — cheap enough not to need the type filter that request
+   * had.
+   */
+  const entityStates = useLiveValue<EntityStates>(
+    ['entity_states'],
+    (store) => store.readEntityStates(),
+    undefined,
+  );
 
   /**
    * The one handler behind every knowledge type's object behavior. Optimistic
@@ -859,49 +850,28 @@ export function SaveDetailScreen({ id }: { id: string }) {
    */
   const setItemState = useCallback(
     (itemPath: string, state: Record<string, unknown>) => {
-      setSave((current) =>
-        current ? { ...current, itemStates: { ...(current.itemStates ?? {}), [itemPath]: state } } : current,
-      );
-      repo
-        .setSaveItemState(id, itemPath, state)
-        .then((updated) => {
-          setSave(updated);
-          patch(id, { itemStates: updated.itemStates });
-        })
-        .catch(() => {
-          // The optimistic write may already be stale (a second tap could have
-          // landed since) — reload from the server rather than guessing what
-          // to revert to.
-          void load();
-        });
+      if (!save) return;
+      // Through the store, so the Home rail's course progress and the Library's
+      // card for this same save update with it — and then through the outbox, so
+      // a tick made offline is sent rather than lost. The "reload and let the
+      // server decide" fallback this used to have is gone: it could not run
+      // offline, which is precisely when it was needed.
+      writeSaveItemState(save, itemPath, state);
     },
-    [id, patch, load],
+    [save],
   );
 
   /**
    * K2's counterpart to `setItemState` — watched/rating for a
    * `recommendation_list` item, keyed by entity rather than by this save's
    * item path, so it survives the same title appearing in a later save.
-   * Same optimistic shape: flip local state, PATCH, adopt the echo, reload
-   * the entity list on failure rather than guessing what to revert to.
+   * Same optimistic shape, now written through the store: flip it locally,
+   * PATCH, adopt the echo — and because the collection screen reads the same
+   * `entity_states` table, marking something watched here is already reflected
+   * there without either screen knowing about the other.
    */
   const setEntityState = useCallback((entityKey: string, state: Record<string, unknown>) => {
-    setEntityStates((current) => ({ ...(current ?? {}), [entityKey]: state }));
-    repo.setEntityState(entityKey, state).then(
-      (echoed) => setEntityStates((current) => ({ ...(current ?? {}), [entityKey]: echoed })),
-      () => {
-        repo
-          .listCollectionEntities('recommendation_list')
-          .then((entities) => {
-            const map: Record<string, Record<string, unknown>> = {};
-            for (const entity of entities) {
-              if (entity.state) map[entity.entityKey] = entity.state;
-            }
-            setEntityStates(map);
-          })
-          .catch(() => {});
-      },
-    );
+    writeEntityState(entityKey, state);
   }, []);
 
   const model = save ? buildDetailModel(save, entityStates) : null;
@@ -921,23 +891,21 @@ export function SaveDetailScreen({ id }: { id: string }) {
       noteBody.trim() !== ((save?.structuredData?.body as string | undefined) ?? save?.rawCaption ?? '')
     );
 
-  /** Persist title + body. Optimistic local update then adopt the server echo. */
-  const saveNote = useCallback(async () => {
+  /**
+   * Persist title + body.
+   *
+   * Local first, and there is no `catch` because there is nothing useful to do
+   * in one: the edit is in the store and in the queue before this returns, and a
+   * request that cannot be delivered is retried rather than losing the user's
+   * writing. The old version kept the text "in the local state so the user can
+   * retry", which only held until the screen unmounted.
+   */
+  const saveNote = useCallback(() => {
     if (!save || noteSaving) return;
     setNoteSaving(true);
-    try {
-      const updated = await repo.updateNote(save.id, {
-        title: noteTitle.trim() || undefined,
-        body: noteBody.trim() || undefined,
-      });
-      setSave(updated);
-      patch(save.id, { structuredData: updated.structuredData, rawCaption: updated.rawCaption });
-    } catch {
-      // Non-blocking — the edit stays in the local state so the user can retry.
-    } finally {
-      setNoteSaving(false);
-    }
-  }, [save, noteTitle, noteBody, noteSaving, patch]);
+    writeNote(save, noteTitle.trim() || undefined, noteBody.trim() || undefined);
+    setNoteSaving(false);
+  }, [save, noteTitle, noteBody, noteSaving]);
 
   const recipeSteps =
     isRecipe && Array.isArray(save?.structuredData?.steps)
@@ -1239,7 +1207,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
               <Touchable
                 accessibilityRole="button"
                 accessibilityLabel="Save changes"
-                onPress={() => void saveNote()}
+                onPress={saveNote}
                 haptic="medium"
                 weight="tile"
                 style={{
@@ -1271,11 +1239,10 @@ export function SaveDetailScreen({ id }: { id: string }) {
               progress on — a save still being processed has no content yet. */}
           {save.status === 'ready' ? (
             <Reveal index={3 + (displayFields.length ?? 1)}>
-              <LifecycleStrip
-                saveId={save.id}
-                value={save.lifecycleStatus ?? 'saved'}
-                onChange={() => void load()}
-              />
+              {/* No `onChange` reload: the strip writes through the store, so
+                  `save.lifecycleStatus` above is already the new value on the
+                  next render — re-fetching would only confirm what we wrote. */}
+              <LifecycleStrip saveId={save.id} value={save.lifecycleStatus ?? 'saved'} />
             </Reveal>
           ) : null}
 

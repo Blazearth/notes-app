@@ -20,6 +20,7 @@ import type {
   SpaceInvite,
   SpaceMember,
   SpaceRole,
+  SyncResponse,
 } from './types';
 
 /** Anything the UI needs to distinguish, without inspecting a status code. */
@@ -150,17 +151,24 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
  *
  * The server is idempotent on a repeated `Idempotency-Key`: the same key
  * returns the existing save instead of creating a second one (see
- * `SaveService.create`). This tile doesn't send one — a duplicate tap here is
- * a fresh user action, not a retry. The header exists for the iOS share
- * extension, whose background `URLSession` retries the *same* upload attempt
- * on the OS's schedule; that extension is native code outside this app and
- * still needs to generate the key once per share and attach it to every
- * retry — nothing to plumb here until it exists.
+ * `SaveService.create`), and since L3 the app finally sends one. It is generated
+ * *once*, when the write is queued, and carried through every retry — the
+ * failure it protects against is a POST that reached the server and whose
+ * response was lost, so a key minted per attempt would be a different key and
+ * the server would mint a second save. The iOS share extension and the Android
+ * `ShareUploadWorker` follow the same rule for the same reason; this endpoint
+ * has had the column for it since V2 and no caller in the app until now.
  */
-export function createSave(body: CreateSaveRequest): Promise<SaveResponse> {
+export function createSave(
+  body: CreateSaveRequest,
+  idempotencyKey?: string,
+): Promise<SaveResponse> {
   return request<SaveResponse>('/v1/saves', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
     body: JSON.stringify(body),
   });
 }
@@ -380,10 +388,26 @@ export function getSpace(id: string): Promise<Space> {
   return request<Space>(`/v1/spaces/${id}`);
 }
 
-export function createSpace(name: string, type = 'general'): Promise<Space> {
+/**
+ * `POST /v1/spaces`.
+ *
+ * Idempotent on a repeated `Idempotency-Key` since V16 — the server replays the
+ * first attempt's Space rather than minting a second. Load-bearing wherever the
+ * same request can be sent twice: this mints a new Space on every call, so a
+ * response lost in transit and then retried leaves the user with two
+ * identically-named Spaces and no way to tell which one anybody joined.
+ */
+export function createSpace(
+  name: string,
+  type = 'general',
+  idempotencyKey?: string,
+): Promise<Space> {
   return request<Space>('/v1/spaces', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
     body: JSON.stringify({ name, type }),
   });
 }
@@ -430,14 +454,26 @@ export function removeMember(id: string, memberId: string): Promise<void> {
  * link". Omitting `expiresInHours` means it never expires — worth choosing
  * deliberately, since an unbounded link posted in a group chat is exactly what
  * revocation exists for.
+ *
+ * `Idempotency-Key` is accepted (V16) and **no caller sends one yet**, which is
+ * a decision rather than an oversight. A replay has to return the *same code*,
+ * so the key has to be stable across the two sends that mean one invite — and
+ * two taps of "Invite" are genuinely ambiguous between "the first one did not
+ * register" and "I want a second link for somebody else". The server-side half
+ * is in place for the day this write is queued, where the queue makes the
+ * answer unambiguous: one entry, one key, however many attempts.
  */
 export function createInvite(
   id: string,
   options: { role?: SpaceRole; expiresInHours?: number; maxUses?: number } = {},
+  idempotencyKey?: string,
 ): Promise<SpaceInvite> {
   return request<SpaceInvite>(`/v1/spaces/${id}/invites`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
     body: JSON.stringify({ role: options.role ?? 'editor', ...options }),
   });
 }
@@ -495,10 +531,26 @@ export function listComments(saveId: string): Promise<SaveComment[]> {
   return request<SaveComment[]>(`/v1/saves/${saveId}/comments`);
 }
 
-export function addComment(saveId: string, body: string): Promise<SaveComment> {
+/**
+ * `POST /v1/saves/{id}/comments`.
+ *
+ * The one queued write in `@/local/outbox` that *creates* a row rather than
+ * setting a value, which is what makes it the only one a retry could duplicate
+ * — every other op is an absolute set, and replaying one of those is a no-op by
+ * construction. Idempotent on a repeated key since V16, and the outbox has
+ * always generated one per entry; before L5 it simply had nowhere to send it.
+ */
+export function addComment(
+  saveId: string,
+  body: string,
+  idempotencyKey?: string,
+): Promise<SaveComment> {
   return request<SaveComment>(`/v1/saves/${saveId}/comments`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
     body: JSON.stringify({ body }),
   });
 }
@@ -642,4 +694,33 @@ export function renameCollection(collectionId: string, name: string): Promise<vo
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ collectionId, name }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Sync (L4)
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /v1/sync` — everything that changed since the client last asked.
+ *
+ * The one read the local-first client makes on launch. It replaces what used to
+ * be seven full-table fetches: the paged walk of `GET /v1/saves` to exhaustion,
+ * `GET /v1/spaces`, one `GET /v1/spaces/{id}/members` per Space, and three
+ * `GET /v1/collections/{type}` calls whose only purpose was to harvest entity
+ * state off the merged payload. On a warm client the whole thing returns empty
+ * lists.
+ *
+ * @param since the `until` from the last **fully applied** page. Omitted for a
+ *              first sync, which is the same code path with a window that starts
+ *              at the epoch — there is deliberately no separate bootstrap
+ *              endpoint to keep correct alongside this one.
+ * @param limit rows per entity type. The server clamps it, and may return more
+ *              than this when a page has to close on a whole-timestamp boundary
+ *              (see `SyncWindow`) — so never treat `limit` as the page's exact
+ *              size, only `hasMore` as whether to ask again.
+ */
+export function getSync(since?: string | null, limit = 200): Promise<SyncResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (since) params.set('since', since);
+  return request<SyncResponse>(`/v1/sync?${params.toString()}`);
 }

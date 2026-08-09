@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View } from 'react-native';
 
-import { repo } from '@/data';
 import type { LifecycleStatus } from '@/api/types';
+import { writeSaveLifecycle } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
@@ -34,27 +34,17 @@ export function LifecycleStrip({
   onChange?: (next: LifecycleStatus) => void;
 }) {
   const { palette, radius, spacing } = useTheme();
-  // Optimistic, and reverted on failure. A tap here should feel instant; it is
-  // one small column on one row, so the cost of being wrong for a moment is
-  // far lower than the cost of a laggy control.
-  const [local, setLocal] = useState<LifecycleStatus>(value);
-  const [busy, setBusy] = useState(false);
-
-  const select = async (next: LifecycleStatus) => {
-    if (busy || next === local) return;
-    const previous = local;
-    setLocal(next);
-    setBusy(true);
-    try {
-      const updated = await repo.setSaveLifecycle(saveId, next);
-      // Trust the server's echo rather than the optimistic guess.
-      setLocal(updated.lifecycleStatus ?? next);
-      onChange?.(updated.lifecycleStatus ?? next);
-    } catch {
-      setLocal(previous);
-    } finally {
-      setBusy(false);
-    }
+  // No local mirror of the value any more, and no `busy` flag.
+  //
+  // `value` comes from the save in the local store, which the write below
+  // updates before the request is even queued — so the strip re-renders from the
+  // real source of truth on the same frame as the tap, and there is nothing to
+  // keep in step, nothing to roll back, and no reason to disable the control
+  // while a request is in flight.
+  const select = (next: LifecycleStatus) => {
+    if (next === value) return;
+    writeSaveLifecycle(saveId, next);
+    onChange?.(next);
   };
 
   return (
@@ -62,14 +52,14 @@ export function LifecycleStrip({
       <SectionLabel>Progress</SectionLabel>
       <View style={{ flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' }}>
         {STEPS.map((step) => {
-          const active = step.value === local;
+          const active = step.value === value;
           return (
             <Touchable
               key={step.value}
               accessibilityRole="radio"
-              accessibilityState={{ selected: active, disabled: busy }}
+              accessibilityState={{ selected: active }}
               accessibilityLabel={step.label}
-              onPress={() => void select(step.value)}
+              onPress={() => select(step.value)}
               haptic="selection"
               style={{
                 paddingVertical: spacing.xs + 3,
@@ -78,7 +68,6 @@ export function LifecycleStrip({
                 borderWidth: 1,
                 borderColor: active ? palette.accent : palette.border,
                 backgroundColor: active ? palette.accent : palette.surface,
-                opacity: busy ? 0.6 : 1,
               }}
             >
               <AppText

@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.weavr.api.auth.CurrentUser;
+import com.weavr.api.common.IdempotencyService;
 import com.weavr.api.save.SaveService;
 import com.weavr.api.save.dto.SaveResponse;
 import jakarta.validation.Valid;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -40,11 +42,14 @@ class SpaceController {
     private final SpaceService spaces;
     private final SaveService saves;
     private final DuplicateDetector duplicates;
+    private final IdempotencyService idempotency;
 
-    SpaceController(SpaceService spaces, SaveService saves, DuplicateDetector duplicates) {
+    SpaceController(SpaceService spaces, SaveService saves, DuplicateDetector duplicates,
+                    IdempotencyService idempotency) {
         this.spaces = spaces;
         this.saves = saves;
         this.duplicates = duplicates;
+        this.idempotency = idempotency;
     }
 
     record CreateSpaceRequest(
@@ -75,10 +80,21 @@ class SpaceController {
     record SetRoleRequest(SpaceRole role) {
     }
 
+    /**
+     * {@code Idempotency-Key} is optional and load-bearing for any retrying
+     * caller: this mints a new Space every time it is called, so a request whose
+     * response was lost and was then retried would leave the user with two
+     * identically-named Spaces and no way to tell which one anybody joined. See
+     * {@link IdempotencyService}.
+     */
     @PostMapping
     ResponseEntity<SpaceService.Space> create(@CurrentUser UUID userId,
-                                              @Valid @RequestBody CreateSpaceRequest request) {
-        SpaceService.Space space = spaces.create(userId, request.name(), request.type());
+                                              @Valid @RequestBody CreateSpaceRequest request,
+                                              @RequestHeader(value = "Idempotency-Key", required = false)
+                                              String idempotencyKey) {
+        SpaceService.Space space = idempotency.execute(
+                userId, idempotencyKey, "POST /v1/spaces", SpaceService.Space.class,
+                () -> spaces.create(userId, request.name(), request.type()));
         return ResponseEntity.created(URI.create("/v1/spaces/" + space.id())).body(space);
     }
 
@@ -142,12 +158,21 @@ class SpaceController {
      * The response carries the code rather than a full URL: the deep-link
      * scheme is the client's business, and the QR code is generated on the
      * device from whatever the client decides the link should look like.
+     *
+     * <p>That is also why {@code Idempotency-Key} matters more here than
+     * anywhere: a replay has to return the <em>same code</em>, not merely avoid
+     * creating a second invite. A retry that succeeded with an empty body would
+     * leave the caller without the one thing the request exists to produce.
      */
     @PostMapping("/{id}/invites")
     SpaceService.Invite createInvite(@CurrentUser UUID userId, @PathVariable UUID id,
-                                     @Valid @RequestBody CreateInviteRequest request) {
+                                     @Valid @RequestBody CreateInviteRequest request,
+                                     @RequestHeader(value = "Idempotency-Key", required = false)
+                                     String idempotencyKey) {
         SpaceRole role = request.role() == null ? SpaceRole.EDITOR : request.role();
-        return spaces.createInvite(userId, id, role, request.expiresInHours(), request.maxUses());
+        return idempotency.execute(
+                userId, idempotencyKey, "POST /v1/spaces/{id}/invites", SpaceService.Invite.class,
+                () -> spaces.createInvite(userId, id, role, request.expiresInHours(), request.maxUses()));
     }
 
     @GetMapping("/{id}/invites")

@@ -2,12 +2,14 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { Platform, View } from 'react-native';
 
-import { repo } from '@/data';
 import type { MeResponse } from '@/api/types';
+import { KV, useLiveValue } from '@/local';
+import { sync } from '@/local/sync';
 import { useSession } from '@/auth/SessionProvider';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
+import { PendingWrites } from '@/components/PendingWrites';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { SettingLink, SettingSwitch } from '@/components/SettingRow';
@@ -147,26 +149,19 @@ export function SettingsScreen() {
   const [pushNotifications, setPushNotifications] = useState(true);
   const [weeklyDigestEmail, setWeeklyDigestEmail] = useState(true);
 
-  // Null until it loads, and null again if it fails. PlanCard renders the
-  // heading either way — a settings screen that shows nothing where the plan
-  // should be reads as broken, and the plan is not what the user came here to
-  // change.
-  const [me, setMe] = useState<MeResponse | null>(null);
+  // Null until the store has one, and null on a genuinely first run. PlanCard
+  // renders the heading either way — a settings screen that shows nothing
+  // where the plan should be reads as broken, and the plan is not what the
+  // user came here to change.
+  //
+  // Every other row on this screen is local state that works offline; the plan
+  // card now matches, rather than being the one thing that needs a network.
+  const me = useLiveValue<MeResponse | null>(['kv'], (store) => store.readKv<MeResponse>(KV.me), null);
 
   useEffect(() => {
-    let cancelled = false;
-    repo.getMe()
-      .then((response) => {
-        if (!cancelled) setMe(response);
-      })
-      .catch(() => {
-        // Deliberately silent. Every other row on this screen is local state
-        // that works offline; failing the whole screen because one card could
-        // not load would be the wrong trade.
-      });
-    return () => {
-      cancelled = true;
-    };
+    // Deliberately unawaited and deliberately unhandled: a failure leaves
+    // whatever the store already had, which is the right answer here.
+    void sync.syncMe();
   }, []);
 
   const email = session?.user.email ?? '';
@@ -232,6 +227,11 @@ export function SettingsScreen() {
       </Card>
 
       <PlanCard me={me} />
+
+      {/* Renders nothing unless the outbox has something to report — see
+          `PendingWrites` for why a rejected write is shown rather than
+          silently rolled back. */}
+      <PendingWrites />
 
       <SectionLabel>Preferences</SectionLabel>
       <View style={{ marginBottom: spacing.xxl }}>

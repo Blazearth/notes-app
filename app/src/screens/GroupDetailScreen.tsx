@@ -1,9 +1,11 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
-import { ApiError } from '@/api/client';
 import type { SaveResponse } from '@/api/types';
+import { useLive, useLiveValue } from '@/local';
+import { DERIVED_TABLES, readGroup, readGroupSaves } from '@/local/derived';
+import { useTaskStatus } from '@/local/useSync';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -12,9 +14,12 @@ import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
-import { repo, type KnowledgeGroup } from '@/data';
+import { type KnowledgeGroup } from '@/data';
 import { STATUS_LABELS } from '@/saves/format';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/** Stable identity for the "store has nothing yet" case — see `useLiveValue`. */
+const EMPTY_SAVES: SaveResponse[] = [];
 
 /**
  * One row in the subgroup list.
@@ -96,9 +101,6 @@ export function GroupDetailScreen({ id }: { id: string }) {
   const { palette, spacing, radius } = useTheme();
   const router = useRouter();
 
-  const [group, setGroup] = useState<KnowledgeGroup | null>(null);
-  const [saves, setSaves] = useState<SaveResponse[]>([]);
-  const [error, setError] = useState<string | null>(null);
   // K5: the only group this applies to is workout — the local-compute
   // alternative to AI synthesis (docs/knowledge-collections.md, K5) needs at
   // least two sources selected, so this is multi-select scoped to one type
@@ -106,22 +108,27 @@ export function GroupDetailScreen({ id }: { id: string }) {
   const [comparing, setComparing] = useState(false);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      // Both at once: they are independent, and serialising them would show
-      // the header a beat before the list for no reason.
-      const [detail, items] = await Promise.all([repo.getGroup(id), repo.listGroupSaves(id)]);
-      setGroup(detail);
-      setSaves(items);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Could not open that group');
-    }
-  }, [id]);
+  // Both the group and its saves come from the local store — the group tree is
+  // derived (`@/groups/tree`, the port of `GroupService`), and the saves it
+  // names are already held. No request, no waterfall, and no stale header: a
+  // save whose type or facet changes re-files itself the moment it lands.
+  const { data: group, loading } = useLive<KnowledgeGroup | null>(
+    DERIVED_TABLES,
+    (store) => readGroup(store, id),
+    [id],
+  );
+  const saves = useLiveValue<SaveResponse[]>(
+    DERIVED_TABLES,
+    (store) => readGroupSaves(store, id),
+    EMPTY_SAVES,
+    [id],
+  );
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // A group is a view over saves, so "not found" and "not synced yet" are the
+  // same shape locally. Only the first is an error, and only once the store has
+  // had a chance to be filled.
+  const savesTask = useTaskStatus('delta', true);
+  const error = !loading && group == null && savesTask.completed ? 'That group no longer exists.' : null;
 
   const isWorkoutGroup = id === 'workout' || id.startsWith('workout~');
 

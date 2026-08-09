@@ -202,6 +202,10 @@ public class DuplicateDetector {
                 .orElseThrow(() -> new com.weavr.api.common.NotFoundException(
                         "That suggestion is no longer open."));
 
+        // No tombstone here, deliberately: this is an UPDATE, not a delete, so
+        // the `saves_set_updated_at` trigger bumps `updated_at` and the ordinary
+        // delta already carries the row — with `spaceId` now null, which is
+        // exactly what the owner's client needs to see. See V15__sync.sql.
         jdbc.sql("update saves set space_id = null where id = ?").param(saveId).update();
         jdbc.sql("update save_duplicates set status = 'merged' where id = ?").param(suggestionId).update();
         log.info("Duplicate {} merged out of space {} by {}", saveId, spaceId, userId);

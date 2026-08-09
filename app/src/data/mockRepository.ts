@@ -98,6 +98,23 @@ const spaceSaves: Record<string, string[]> = { 'sp-japan': ['sv-02', 'sv-06'], '
 /** K2 entity state, keyed by `Entities.key`'s output — mirrors `entity_states`. */
 const entityStates: Record<string, Record<string, unknown>> = {};
 
+/**
+ * `Idempotency-Key` → the save it created — mirrors V2's partial unique index.
+ *
+ * Worth mocking rather than ignoring: L3's outbox retries a `createSave` with
+ * the same key after a lost response, and a mock that minted a second save on
+ * the replay would make the one bug the key exists to prevent invisible in the
+ * only environment this project can drive end to end.
+ */
+const savesByIdempotencyKey: Record<string, string> = {};
+
+/**
+ * `tombstones` — mirrors V15. Pushed to by the delete paths below so that mock
+ * mode exercises the client's deletion-apply path rather than only its upserts;
+ * a delta whose deletions are never tested is the half most likely to be wrong.
+ */
+const tombstones: { type: string; id: string; at: string }[] = [];
+
 /** K4c curation — mirrors `collection_overrides`. Chained merges are resolved to their final target on write, same as `CollectionOverrideService.resolveChains`. */
 const mergeRedirects: Record<string, string> = {};
 const entityNameOverrides: Record<string, string> = {};
@@ -144,6 +161,10 @@ function doneEntityKeys(): Set<string> {
   return done;
 }
 
+function tomb(type: string, id: string): void {
+  tombstones.push({ type, id, at: now() });
+}
+
 function requireSave(id: string): SaveResponse {
   const found = saves.find((s) => s.id === id);
   if (!found) throw new ApiError('notFound', 'That save could not be found.', 404);
@@ -159,7 +180,14 @@ function requireSpace(id: string): Space {
 export const mockRepository: Repository = {
   // ---------------------------------------------------------------- saves
 
-  createSave(body: CreateSaveRequest): Promise<SaveResponse> {
+  createSave(body: CreateSaveRequest, idempotencyKey?: string): Promise<SaveResponse> {
+    if (idempotencyKey) {
+      const existingId = savesByIdempotencyKey[idempotencyKey];
+      const existing = existingId ? saves.find((s) => s.id === existingId) : undefined;
+      // The replay case, exactly as `SaveService.create` handles it: the same
+      // key returns the save it already made instead of minting a second one.
+      if (existing) return delay(copy(existing));
+    }
     const save: SaveResponse = {
       id: nextId('sv'),
       sourceType: body.sourceType,
@@ -174,6 +202,7 @@ export const mockRepository: Repository = {
       updatedAt: now(),
     };
     saves.unshift(save);
+    if (idempotencyKey) savesByIdempotencyKey[idempotencyKey] = save.id;
 
     // The pipeline, compressed. Lets the feed's processing → ready transition
     // be watched without a backend, which is otherwise untestable here.
@@ -380,13 +409,15 @@ export const mockRepository: Repository = {
 
   deleteShoppingItem(itemId: string): Promise<void> {
     shoppingList.items = shoppingList.items.filter((i) => i.id !== itemId);
+    tomb('shopping_item', itemId);
     return delay(undefined);
   },
 
   clearCheckedShoppingItems(): Promise<{ removed: number }> {
-    const before = shoppingList.items.length;
+    const removed = shoppingList.items.filter((i) => i.checked);
     shoppingList.items = shoppingList.items.filter((i) => !i.checked);
-    return delay({ removed: before - shoppingList.items.length });
+    removed.forEach((item) => tomb('shopping_item', item.id));
+    return delay({ removed: removed.length });
   },
 
   // --------------------------------------------------------------- spaces
@@ -422,6 +453,7 @@ export const mockRepository: Repository = {
   deleteSpace(id: string): Promise<void> {
     const index = spaces.findIndex((s) => s.id === id);
     if (index >= 0) spaces.splice(index, 1);
+    tomb('space', id);
     return delay(undefined);
   },
 
@@ -443,6 +475,8 @@ export const mockRepository: Repository = {
     members[id] = (members[id] ?? []).filter((m) => m.userId !== memberId);
     const space = spaces.find((s) => s.id === id);
     if (space) space.memberCount = members[id].length;
+    // Composite id, exactly as `TombstoneService` writes it.
+    tomb('space_member', `${id}|${memberId}`);
     return delay(undefined);
   },
 
@@ -503,6 +537,7 @@ export const mockRepository: Repository = {
 
   deleteComment(saveId: string, commentId: string): Promise<void> {
     comments[saveId] = (comments[saveId] ?? []).filter((c) => c.id !== commentId);
+    tomb('comment', commentId);
     return delay(undefined);
   },
 
@@ -578,6 +613,7 @@ export const mockRepository: Repository = {
 
   unmergeEntity(fromKey: string): Promise<void> {
     delete mergeRedirects[fromKey];
+    tomb('collection_override', `entity_merge|${fromKey}`);
     return delay(undefined);
   },
 
@@ -589,6 +625,77 @@ export const mockRepository: Repository = {
   renameCollection(collectionId: string, name: string): Promise<void> {
     collectionNameOverrides[collectionId] = name;
     return delay(undefined);
+  },
+
+  // ------------------------------------------------------------------ sync (L4)
+
+  /**
+   * `GET /v1/sync`, as far as fixtures can honestly go.
+   *
+   * **Saves and deletions are genuinely windowed** — both carry a timestamp, so
+   * `since` filters them exactly as the server does, and that covers the two
+   * halves most likely to be wrong client-side (an upsert that should not have
+   * arrived, and a deletion that should have).
+   *
+   * **Everything else is re-sent in full on every page**, because the fixture
+   * store has no per-row change tracking to window by: `Space` carries no
+   * `updatedAt` at all, and member lists, entity state and overrides are plain
+   * maps. Over-delivering is safe rather than merely convenient — apply is an
+   * upsert by id and the watermark advances only on success, which is the same
+   * property that makes the server's own deliberate window overlap safe. It does
+   * mean mock mode never exercises "this page was empty", so a bug that only
+   * appears when nothing changed would not show up here.
+   *
+   * `hasMore` is always false: paging over fixtures would test the loop against
+   * a page size nothing here comes close to.
+   */
+  pullSync(since?: string | null): Promise<import('@/api/types').SyncResponse> {
+    const changed = (at: string) => !since || at > since;
+    return delay({
+      until: now(),
+      hasMore: false,
+      saves: copy(saves.filter((s) => changed(s.updatedAt))).map((s) => {
+        // The server sends saves without `itemStates` — they travel as their own
+        // list. Mirrored here so the store's strip/re-attach path is exercised
+        // the same way in both modes.
+        const { itemStates: _dropped, ...rest } = s;
+        return rest;
+      }),
+      spaces: copy(spaces),
+      spaceMembers: Object.entries(members).map(([spaceId, list]) => ({
+        spaceId,
+        members: copy(list),
+      })),
+      itemStates: saves.flatMap((save) =>
+        Object.entries(save.itemStates ?? {}).map(([itemPath, state]) => ({
+          saveId: save.id,
+          itemPath,
+          state: copy(state),
+        })),
+      ),
+      entityStates: Object.entries(entityStates).map(([entityKey, state]) => ({
+        entityKey,
+        state: copy(state),
+      })),
+      overrides: [
+        ...Object.entries(mergeRedirects).map(([subjectKey, into]) => ({
+          overrideType: 'entity_merge',
+          subjectKey,
+          payload: { into } as Record<string, unknown>,
+        })),
+        ...Object.entries(entityNameOverrides).map(([subjectKey, name]) => ({
+          overrideType: 'entity_rename',
+          subjectKey,
+          payload: { name } as Record<string, unknown>,
+        })),
+        ...Object.entries(collectionNameOverrides).map(([subjectKey, name]) => ({
+          overrideType: 'collection_rename',
+          subjectKey,
+          payload: { name } as Record<string, unknown>,
+        })),
+      ],
+      deleted: tombstones.filter((t) => changed(t.at)).map(({ type, id }) => ({ type, id })),
+    });
   },
 };
 

@@ -14,6 +14,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { MISSING_CONFIG } from '@/api/config';
 import { SessionProvider, useSession } from '@/auth/SessionProvider';
 import { USE_MOCK_DATA } from '@/data/config';
+import { openStore } from '@/local';
+import { SyncProvider } from '@/local/SyncProvider';
 import { PreferencesProvider, usePreferences } from '@/prefs/PreferencesProvider';
 import { SavesProvider } from '@/saves/SavesProvider';
 import { ConfigErrorScreen } from '@/screens/ConfigErrorScreen';
@@ -126,11 +128,29 @@ function Routes() {
 function SplashGate({ fontsReady }: { fontsReady: boolean }) {
   const { hydrated: prefsReady } = usePreferences();
   const { hydrated: sessionReady } = useSession();
-  const ready = fontsReady && prefsReady && sessionReady;
 
-  // Hold the splash until the stored preferences, the stored session and the
-  // Sora faces are all in. Releasing early renders the first frame in the wrong
-  // theme, or flashes sign-in at an already-signed-in user.
+  // The fourth gate: the local store. Screens read from it during their first
+  // render (see `useLive`), so it has to be open before any of them mount —
+  // and it is the *reason* the first frame can have content at all rather than
+  // a spinner, which is what makes it worth blocking on. `openStore` never
+  // rejects: a storage failure degrades to an empty cache that the sync refills
+  // (`@/local/index`), never to a splash that will not lift.
+  const [storeReady, setStoreReady] = React.useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void openStore().then(() => {
+      if (!cancelled) setStoreReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const ready = fontsReady && prefsReady && sessionReady && storeReady;
+
+  // Hold the splash until the stored preferences, the stored session, the local
+  // store and the Sora faces are all in. Releasing early renders the first frame
+  // in the wrong theme, or flashes sign-in at an already-signed-in user.
   useEffect(() => {
     if (ready) SplashScreen.hideAsync().catch(() => {});
   }, [ready]);
@@ -139,9 +159,14 @@ function SplashGate({ fontsReady }: { fontsReady: boolean }) {
 
   return (
     <ThemeProvider>
-      <SavesProvider>
-        <Routes />
-      </SavesProvider>
+      {/* Between the session and everything that reads data: it wipes a store
+          belonging to a different account before a screen can render it, and
+          starts the background sync that fills the store the screens read. */}
+      <SyncProvider>
+        <SavesProvider>
+          <Routes />
+        </SavesProvider>
+      </SyncProvider>
     </ThemeProvider>
   );
 }

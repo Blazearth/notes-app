@@ -49,7 +49,14 @@
           }
         }
       ],
-      "./plugins/withAndroidShareReceiver"
+      "./plugins/withAndroidShareReceiver",
+      [
+        "expo-sqlite",
+        {
+          "enableFTS": true
+        }
+      ],
+      "expo-image"
     ],
     "experiments": {
       "typedRoutes": true
