@@ -19,8 +19,8 @@ import org.springframework.web.client.RestClient;
  * <p>Bucket and object-path ownership:
  * <ul>
  *   <li>Bucket: {@code weavr.supabase.storage-bucket} (default {@code screenshots})</li>
- *   <li>Path: {@code {userId}/{saveId}.jpg} — userId is the folder key so RLS
- *       policies can scope reads per-user if we add them later.</li>
+ *   <li>Path: {@code {userId}/{objectKey}.jpg} — userId is the folder key so
+ *       RLS policies can scope reads per-user if we add them later.</li>
  * </ul>
  */
 @Component
@@ -43,20 +43,23 @@ public class SupabaseStorageClient {
      * re-sends the same save ID simply overwrites the object rather than
      * returning a 409.
      *
-     * @param userId   owner — used as the folder prefix
-     * @param saveId   save UUID — the filename (with {@code .jpg} suffix)
-     * @param bytes    JPEG image bytes
-     * @param mimeType MIME type of the image (e.g. {@code image/jpeg})
+     * @param userId    owner — used as the folder prefix
+     * @param objectKey the filename (with {@code .jpg} suffix). Deliberately
+     *                  not the save id: the row cannot exist yet, because the
+     *                  URL this returns is what satisfies the
+     *                  {@code saves_has_content} check on insert.
+     * @param bytes     JPEG image bytes
+     * @param mimeType  MIME type of the image (e.g. {@code image/jpeg})
      * @return the publicly accessible URL for the uploaded object
      */
-    public String upload(UUID userId, UUID saveId, byte[] bytes, String mimeType) {
+    public String upload(UUID userId, UUID objectKey, byte[] bytes, String mimeType) {
         String bucket = bucket();
-        String objectPath = userId + "/" + saveId + ".jpg";
+        String objectPath = userId + "/" + objectKey + ".jpg";
         String baseUrl = trimmedUrl();
         String uploadUrl = baseUrl + "/storage/v1/object/" + bucket + "/" + objectPath;
 
-        log.debug("Supabase Storage upload: save={} bucket={} path={} bytes={}",
-                saveId, bucket, objectPath, bytes.length);
+        log.debug("Supabase Storage upload: bucket={} path={} bytes={}",
+                bucket, objectPath, bytes.length);
 
         http.put()
                 .uri(uploadUrl)

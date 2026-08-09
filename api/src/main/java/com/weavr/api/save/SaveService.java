@@ -381,15 +381,33 @@ public class SaveService {
      */
     @Transactional
     public Save createFromImage(UUID userId, byte[] imageBytes, String mimeType, UUID spaceId) {
+        // Same lazy upsert create() does, and for the same reason: saves.user_id
+        // is an FK to profiles, and a user who has only ever signed in has no
+        // profile row yet. Omitting it made a screenshot the one thing a brand
+        // new account could not do — the FK violation surfaces as a 500.
+        profiles.ensureExists(userId);
+
         if (spaceId != null) {
             spaces.requireRole(userId, spaceId, SpaceRole.EDITOR);
         }
 
-        // Generate the save ID first so we can derive the storage path from it.
-        UUID saveId = UUID.randomUUID();
-        String publicUrl = storage.upload(userId, saveId, imageBytes, mimeType);
+        // Upload first, then insert the row once, fully formed. The object key
+        // is its own UUID rather than the save id: deriving it from the save id
+        // would mean either pre-assigning that id (which makes Spring Data
+        // merge instead of persist) or filling the URL in after the insert
+        // (which trips saves_has_content). Save.acceptedImage has the detail.
+        //
+        // Nothing downstream needs key == save id — the pipeline re-downloads
+        // from source_url — and the old code randomised the key per request
+        // anyway, so the x-upsert-on-retry property this cost was never real.
+        //
+        // Tradeoff, stated rather than hidden: a failure between here and the
+        // commit leaves the object in the bucket with no row pointing at it.
+        // The old ordering had the same hole and hit it on every single call;
+        // this one only on a genuine insert failure. There is no sweeper yet.
+        String publicUrl = storage.upload(userId, UUID.randomUUID(), imageBytes, mimeType);
 
-        Save save = saves.save(Save.acceptedImage(userId, saveId, publicUrl, spaceId));
+        Save save = saves.save(Save.acceptedImage(userId, publicUrl, spaceId));
 
         jobs.enqueueForUser(
                 JobType.PROCESS_SAVE,

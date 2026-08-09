@@ -128,18 +128,36 @@ public class Save {
     }
 
     /**
-     * Creates a save for an uploaded image (screenshot share). The caller
-     * generates {@code saveId} before this call so the storage path can be
-     * derived from it; we honour it here by assigning it to the {@code id}
-     * field before the row is inserted.
+     * Creates a save for an uploaded image (screenshot share).
      *
-     * @param publicUrl the Supabase Storage public URL — stored as both
-     *                  {@code source_url} and {@code thumbnail_url} so the
-     *                  card renders the real screenshot immediately.
+     * <p><strong>The id is deliberately left unset, and the image must already
+     * be uploaded before this is called.</strong> Both halves of that are
+     * load-bearing, and each one broke the endpoint on its own:
+     * <ul>
+     *   <li>This entity has no {@code @Version} field, so Spring Data's
+     *       {@code isNew()} is exactly {@code id == null}. Pre-assigning an id
+     *       here — tempting, since the storage path used to be derived from it
+     *       — routes {@code save()} through {@code merge()} instead of
+     *       {@code persist()}, and merging a detached entity whose row does not
+     *       exist throws {@code StaleObjectStateException}. That 500s every
+     *       upload, not just concurrent ones.</li>
+     *   <li>Persisting first and filling the URL in afterwards does not work
+     *       either: {@code persist()} snapshots the field state at persist
+     *       time, so the INSERT carries a null {@code source_url} and trips the
+     *       {@code saves_has_content} check constraint before the follow-up
+     *       UPDATE can run.</li>
+     * </ul>
+     * So the object key is its own random UUID rather than the save id, and the
+     * row is inserted once, fully formed.
+     *
+     * @param publicUrl the Supabase Storage public URL — stored as
+     *                  {@code source_url}, {@code thumbnail_url} and
+     *                  {@code media_storage_path} so the card renders the real
+     *                  screenshot immediately and the pipeline can re-download
+     *                  the bytes for the vision call.
      */
-    public static Save acceptedImage(UUID userId, UUID saveId, String publicUrl, UUID spaceId) {
+    public static Save acceptedImage(UUID userId, String publicUrl, UUID spaceId) {
         Save save = new Save(userId, SourceType.IMAGE);
-        save.id = saveId;
         save.sourceUrl = publicUrl;
         save.thumbnailUrl = publicUrl;
         save.mediaStoragePath = publicUrl;

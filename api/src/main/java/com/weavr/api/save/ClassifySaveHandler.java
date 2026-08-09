@@ -102,8 +102,19 @@ class ClassifySaveHandler implements JobHandler {
             return;
         }
 
-        // Read the extracted text from stage 1.
-        String text = extractText(saveId, save);
+        // Read the image stage BEFORE the text stage. For a screenshot save the
+        // bytes *are* the input, and extractText() would throw looking for the
+        // text stage that the image path never writes (it records
+        // STAGE_IMAGE_READY instead) — which made the vision branch below
+        // unreachable and failed every screenshot with "no_extraction".
+        Map<String, Object> imageStage = save.getSourceType() == SourceType.IMAGE
+                ? readStage(saveId, ProcessSaveHandler.STAGE_IMAGE_READY)
+                : null;
+        boolean hasImage = imageStage != null
+                && imageStage.get("image_b64") instanceof String b64 && !b64.isBlank();
+
+        // Read the extracted text from stage 1 — text path only.
+        String text = hasImage ? null : extractText(saveId, save);
 
         // The free-tier cap, checked before the budget rather than after: both
         // guard the same shared pool, but this one is about *whose* share it is.
@@ -120,17 +131,12 @@ class ClassifySaveHandler implements JobHandler {
         // Acquire budget — throws RetryAfterException if daily pool is exhausted.
         BudgetApproved budget = budgetService.acquire();
 
-        // For IMAGE saves that went through the upload endpoint, we have the
-        // raw image bytes in save_stages. Send them directly to Gemini Vision
-        // so it sees full visual context (UI, overlay text, layout) rather than
-        // reconstructed text from a lossy OCR intermediate.
-        Map<String, Object> imageStage = save.getSourceType() == SourceType.IMAGE
-                ? readStage(saveId, ProcessSaveHandler.STAGE_IMAGE_READY)
-                : null;
-
-        // Call Gemini — vision path for image saves, text path for everything else.
+        // Call Gemini — vision path for image saves (the raw bytes are in
+        // save_stages, so Gemini sees full visual context: UI, overlay text,
+        // layout, rather than a lossy OCR intermediate), text path otherwise.
         GeminiResponse response;
-        if (imageStage != null && imageStage.get("image_b64") instanceof String b64 && !b64.isBlank()) {
+        if (hasImage) {
+            String b64 = imageStage.get("image_b64").toString();
             byte[] imageBytes = java.util.Base64.getDecoder().decode(b64);
             String mimeType = imageStage.getOrDefault("mime_type", "image/jpeg").toString();
             log.info("Save {} routing to Gemini image classify ({} bytes)", saveId, imageBytes.length);
@@ -148,9 +154,9 @@ class ClassifySaveHandler implements JobHandler {
             try {
                 BudgetApproved fallbackBudget = budgetService.acquireFor(
                         geminiProps.fallbackModel(), geminiProps.fallbackRpd());
-                GeminiResponse fallback = (imageStage != null && imageStage.get("image_b64") instanceof String b64)
+                GeminiResponse fallback = hasImage
                         ? geminiClient.classifyImage(saveId,
-                            java.util.Base64.getDecoder().decode(b64.toString()),
+                            java.util.Base64.getDecoder().decode(imageStage.get("image_b64").toString()),
                             imageStage.getOrDefault("mime_type", "image/jpeg").toString(),
                             fallbackBudget)
                         : geminiClient.classify(saveId, text, fallbackBudget);
@@ -219,8 +225,11 @@ class ClassifySaveHandler implements JobHandler {
     }
 
     private String extractText(UUID saveId, Save save) {
-        // For TEXT saves, use rawCaption directly.
-        if (save.getSourceType() == com.weavr.api.save.SourceType.TEXT) {
+        // For TEXT saves, use rawCaption directly. An IMAGE save reaching here
+        // is a legacy on-device-OCR save (no uploaded bytes, so no image stage)
+        // and its OCR text lives in the same place — without this it would look
+        // for a URL extraction stage that was never written.
+        if (save.getSourceType() == SourceType.TEXT || save.getSourceType() == SourceType.IMAGE) {
             String text = save.getRawCaption();
             if (text == null || text.isBlank()) {
                 throw new PermanentJobException("no_text", "This save has no content to classify.");

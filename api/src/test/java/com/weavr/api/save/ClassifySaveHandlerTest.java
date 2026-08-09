@@ -2,6 +2,7 @@ package com.weavr.api.save;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -315,5 +316,67 @@ class ClassifySaveHandlerTest {
                 .isInstanceOf(PermanentJobException.class)
                 .hasMessageContaining("no_extraction");
         verify(budgetService, never()).acquire();
+    }
+
+    /**
+     * The regression that made every screenshot save fail. {@code extractText}
+     * used to run before the image branch was considered, so an IMAGE save went
+     * looking for {@code STAGE_EXTRACTED} — which the image path never writes,
+     * because {@code ProcessSaveHandler} records {@code STAGE_IMAGE_READY}
+     * instead — and threw {@code no_extraction} before the vision call it was
+     * about to make. Verified end to end on 2026-08-09 against a real
+     * screenshot: the same image now classifies as {@code movie} at 0.95.
+     */
+    @Test
+    void imageSaveWithStagedBytesGoesToVisionInsteadOfFailingOnMissingText() {
+        UUID saveId = UUID.randomUUID();
+        when(saves.findById(saveId)).thenReturn(Optional.of(imageSave()));
+        stageRows.put(ProcessSaveHandler.STAGE_IMAGE_READY, Map.of(
+                "image_b64", Base64.getEncoder().encodeToString(new byte[] { 1, 2, 3, 4 }),
+                "mime_type", "image/png"));
+        BudgetApproved primary = budget("gemini-2.5-flash-lite", 500);
+        when(budgetService.acquire()).thenReturn(primary);
+        when(geminiClient.classifyImage(eq(saveId), any(), eq("image/png"), any()))
+                .thenReturn(new GeminiResponse("movie", 0.95,
+                        new HashMap<>(Map.of("title", "The Reincarnation of the Strongest Exorcist")),
+                        100, 20, "gemini-2.5-flash-lite"));
+
+        handler.handle(classifyJob(saveId));
+
+        verify(geminiClient).classifyImage(eq(saveId), any(), eq("image/png"), any());
+        verify(geminiClient, never()).classify(any(), any(), any());
+
+        ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.captor();
+        verify(stages).record(eq(saveId), eq(ClassifySaveHandler.STAGE_CLASSIFIED), payload.capture());
+        assertThat(payload.getValue()).containsEntry("knowledgeType", "movie");
+    }
+
+    /**
+     * A legacy on-device-OCR image save has no staged bytes, so it must fall
+     * back to its {@code rawCaption} rather than hunting for the URL pipeline's
+     * extraction stage — the other half of the same wrong-branch bug.
+     */
+    @Test
+    void legacyImageSaveWithoutStagedBytesClassifiesItsOcrText() {
+        UUID saveId = UUID.randomUUID();
+        Save legacy = Save.accepted(UUID.randomUUID(), SourceType.IMAGE, null,
+                "Anime name: The Reincarnation of the Strongest Exorcist", null, null);
+        when(saves.findById(saveId)).thenReturn(Optional.of(legacy));
+        // No STAGE_IMAGE_READY row — this save pre-dates the upload endpoint.
+        BudgetApproved primary = budget("gemini-2.5-flash-lite", 500);
+        when(budgetService.acquire()).thenReturn(primary);
+        when(geminiClient.classify(eq(saveId), contains("Reincarnation"), any()))
+                .thenReturn(new GeminiResponse("movie", 0.9, new HashMap<>(),
+                        100, 20, "gemini-2.5-flash-lite"));
+
+        handler.handle(classifyJob(saveId));
+
+        verify(geminiClient).classify(eq(saveId), contains("Reincarnation"), any());
+        verify(geminiClient, never()).classifyImage(any(), any(), any(), any());
+    }
+
+    private static Save imageSave() {
+        return Save.acceptedImage(UUID.randomUUID(),
+                "https://example.supabase.co/storage/v1/object/public/screenshots/u/o.jpg", null);
     }
 }
