@@ -1,5 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import { BlurView } from 'expo-blur';
+import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -419,26 +420,25 @@ export function CaptureSheet() {
         return;
       }
 
-      // Build multipart form — React Native's fetch handles the boundary automatically
-      const form = new FormData();
-      form.append('file', {
-        uri: asset.uri,
-        name: `screenshot_${Date.now()}.jpg`,
-        type: 'image/jpeg',
-      } as unknown as Blob);
+      // Build multipart upload via expo-file-system — more reliable than
+      // fetch + FormData in React Native (avoids "Unsupported FormDataPart")
+      const uploadResult = await uploadAsync(
+        `${API_BASE_URL}/v1/saves/image`,
+        asset.uri,
+        {
+          httpMethod: 'POST',
+          uploadType: FileSystemUploadType.MULTIPART,
+          fieldName: 'file',
+          mimeType: 'image/jpeg',
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
 
-      const response = await fetch(`${API_BASE_URL}/v1/saves/image`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
-      });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => response.status.toString());
-        throw new Error(`Upload failed (${response.status}): ${text}`);
+      if (uploadResult.status < 200 || uploadResult.status >= 300) {
+        throw new Error(`Upload failed (${uploadResult.status}): ${uploadResult.body}`);
       }
 
-      const saved = await response.json() as import('@/api/types').SaveResponse;
+      const saved = JSON.parse(uploadResult.body) as import('@/api/types').SaveResponse;
       haptic('success');
       prepend(saved);
       dismiss();
