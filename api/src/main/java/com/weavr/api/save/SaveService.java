@@ -356,6 +356,17 @@ public class SaveService {
         return save;
     }
 
+    /**
+     * Permanently deletes a save. Caller must own it.
+     */
+    @Transactional
+    public void delete(UUID userId, UUID saveId) {
+        Save save = saves.findByIdAndUserId(saveId, userId)
+                .orElseThrow(() -> new NotFoundException("Save not found"));
+        saves.delete(save);
+        log.info("Deleted save id={} user={}", saveId, userId);
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
     }

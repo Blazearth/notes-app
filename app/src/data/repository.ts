@@ -54,6 +54,8 @@ export interface Repository {
   updateNote(id: string, data: { title?: string; body?: string }): Promise<SaveResponse>;
   /** Move a save into a Space, or pass null to return it to the private feed. */
   setSaveSpace(id: string, spaceId: string | null): Promise<SaveResponse>;
+  /** Permanently delete a save. */
+  deleteSave(id: string): Promise<void>;
   /**
    * The one mechanism behind every knowledge type's object behavior —
    * exercise ticks, checklist items, watch status + rating, "continue where

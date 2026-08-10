@@ -21,6 +21,7 @@ export const apiRepository: Repository = {
   setSaveFlags: client.setSaveFlags,
   updateNote: client.updateNote,
   setSaveSpace: client.setSaveSpace,
+  deleteSave: client.deleteSave,
   setSaveItemState: client.setSaveItemState,
   searchSaves: client.searchSaves,
   getRelatedSaves: client.getRelatedSaves,

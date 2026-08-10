@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Alert, RefreshControl, ScrollView, View } from 'react-native';
 
 import type { CollectionNodeResponse, SaveResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
@@ -17,7 +17,7 @@ import { useLiveValue } from '@/local';
 import { DERIVED_TABLES, readCollections } from '@/local/derived';
 import { saveTitle, STATUS_LABELS } from '@/saves/format';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
-import { writeSaveFlags } from '@/local/writes';
+import { writeSaveFlags, writeDeleteSave } from '@/local/writes';
 import { useSaves } from '@/saves/SavesProvider';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -292,6 +292,32 @@ export function LibraryScreen() {
     [selectedIds, exitSelection],
   );
 
+  const confirmDelete = useCallback((saveId: string) => {
+    Alert.alert(
+      'Delete save',
+      'This will permanently delete this save. It cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => writeDeleteSave(saveId) },
+      ],
+    );
+  }, []);
+
+  const bulkDelete = useCallback(() => {
+    const ids = [...selectedIds];
+    Alert.alert(
+      `Delete ${ids.length} save${ids.length > 1 ? 's' : ''}`,
+      'This will permanently delete the selected saves. It cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive',
+          onPress: () => { exitSelection(); for (const id of ids) writeDeleteSave(id); },
+        },
+      ],
+    );
+  }, [selectedIds, exitSelection]);
+
   return (
     <Screen
       refreshControl={
@@ -333,6 +359,11 @@ export function LibraryScreen() {
                 glyph="archive"
                 label="Archive selected"
                 onPress={() => bulkApply({ archived: true })}
+              />
+              <HeaderAction
+                glyph="close"
+                label="Delete selected"
+                onPress={bulkDelete}
               />
             </View>
           </>
@@ -475,6 +506,7 @@ export function LibraryScreen() {
                       onLongPress={() => handleLongPress(save.id)}
                       onFavorite={() => void setFlag(save, { favorite: !save.favorite })}
                       onArchive={() => void setFlag(save, { archived: !save.archived })}
+                      onDelete={() => confirmDelete(save.id)}
                       trailing={
                         save.status === 'ready' ? undefined : (
                           <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>
@@ -523,6 +555,7 @@ export function LibraryScreen() {
                     onLongPress={() => handleLongPress(save.id)}
                     onFavorite={() => setFlag(save, { favorite: !save.favorite })}
                     onArchive={() => setFlag(save, { archived: !save.archived })}
+                    onDelete={() => confirmDelete(save.id)}
                     trailing={
                       save.status === 'ready' ? undefined : (
                         <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>

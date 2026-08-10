@@ -218,6 +218,11 @@ export function setSaveLifecycle(
   });
 }
 
+/** `DELETE /v1/saves/{id}` — permanently delete a save. Returns void (204). */
+export function deleteSave(id: string): Promise<void> {
+  return request<void>(`/v1/saves/${id}`, { method: 'DELETE' });
+}
+
 /**
  * `PATCH /v1/saves/{id}/space` — move a save into a Space or back to private.
  * Pass `null` to remove it from its current Space.

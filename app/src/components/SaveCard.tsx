@@ -69,6 +69,8 @@ export interface SaveCardProps {
   onFavorite?: () => void;
   /** Swipe-left action, same rule as `onFavorite`. */
   onArchive?: () => void;
+  /** Swipe-left-further or bulk action to permanently delete. */
+  onDelete?: () => void;
 }
 
 export function SaveCard({
@@ -81,6 +83,7 @@ export function SaveCard({
   selected,
   onFavorite,
   onArchive,
+  onDelete,
 }: SaveCardProps) {
   const { palette, spacing, radius } = useTheme();
   const model = buildCardModel(save);
@@ -171,13 +174,14 @@ export function SaveCard({
     );
   }
 
-  if (!onFavorite && !onArchive) return card;
+  if (!onFavorite && !onArchive && !onDelete) return card;
 
   return (
     <SwipeableRow
       disabled={selectionMode}
       onFavorite={onFavorite}
       onArchive={onArchive}
+      onDelete={onDelete}
     >
       {card}
     </SwipeableRow>

@@ -270,6 +270,12 @@ export const mockRepository: Repository = {
     return delay(copy(save));
   },
 
+  deleteSave(id: string): Promise<void> {
+    const idx = saves.findIndex((s) => s.id === id);
+    if (idx >= 0) saves.splice(idx, 1);
+    return delay(undefined as void);
+  },
+
   setSaveItemState(
     id: string,
     itemPath: string,

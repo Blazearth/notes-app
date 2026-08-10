@@ -54,6 +54,7 @@ export type OutboxOp =
   | 'setSaveFlags'
   | 'setSaveLifecycle'
   | 'setSaveSpace'
+  | 'deleteSave'
   | 'setSaveItemState'
   | 'setEntityState'
   | 'setShoppingItemChecked'
@@ -76,6 +77,8 @@ export interface OutboxPayloads {
   setSaveFlags: { id: string; flags: { favorite?: boolean; archived?: boolean } };
   setSaveLifecycle: { id: string; lifecycleStatus: LifecycleStatus };
   setSaveSpace: { id: string; spaceId: string | null };
+  deleteSave: { id: string };
+  deleteSave: { id: string };
   setSaveItemState: { id: string; itemPath: string; state: Record<string, unknown> };
   setEntityState: { entityKey: string; state: Record<string, unknown> };
   setShoppingItemChecked: { itemId: string; checked: boolean };
@@ -313,6 +316,8 @@ export function describeOp(op: OutboxOp): string {
       return 'Progress';
     case 'setSaveSpace':
       return 'Moving a save into a Space';
+    case 'deleteSave':
+      return 'Deleting a save';
     case 'setSaveItemState':
     case 'setEntityState':
       return 'Ticking something off';

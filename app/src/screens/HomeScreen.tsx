@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useRef } from 'react';
-import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Alert, RefreshControl, ScrollView, View } from 'react-native';
 
 import { MOCK_CATEGORIES, MOCK_SOURCE_LABELS, type KnowledgeGroup } from '@/data';
 import type { DigestResponse, SaveResponse, Space } from '@/api/types';
@@ -22,6 +22,7 @@ import { morphFrom } from '@/motion/morph';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
+import { writeSaveFlags, writeDeleteSave } from '@/local/writes';
 import { useTheme } from '@/theme/ThemeProvider';
 
 /**
@@ -242,6 +243,8 @@ function subgroupPreview(group: KnowledgeGroup): string | null {
 function RecentlyCaptured({ limit }: { limit: number }) {
   const { palette, spacing } = useTheme();
   const { saves, status, error, refresh } = useSaves();
+  // Don't show archived saves on Home — they belong in the Archived filter in Library
+  const visibleSaves = saves.filter((s) => !s.archived);
   const router = useRouter();
 
   if (status === 'loading') {
@@ -289,7 +292,18 @@ function RecentlyCaptured({ limit }: { limit: number }) {
   // Home shows a fixed number and stops. The full list is what the Library is
   // for, and a home screen that grows without bound stops being a summary —
   // every section below it becomes unreachable without a long scroll.
-  const shown = saves.slice(0, limit);
+  const shown = visibleSaves.slice(0, limit);
+
+  const confirmDelete = (saveId: string) => {
+    Alert.alert(
+      'Delete save',
+      'This will permanently delete this save. It cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => writeDeleteSave(saveId) },
+      ],
+    );
+  };
 
   return (
     <View style={{ gap: spacing.smd }}>
@@ -297,11 +311,11 @@ function RecentlyCaptured({ limit }: { limit: number }) {
         <SaveCard
           key={save.id}
           save={save}
-          // Tappable whatever the status: a processing or failed save is a
-          // legitimate thing to open, and the detail screen explains itself
-          // rather than rendering empty.
           onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
           subtitleOverride={sourceLine(save)}
+          onFavorite={() => writeSaveFlags(save.id, { favorite: !save.favorite })}
+          onArchive={() => writeSaveFlags(save.id, { archived: true })}
+          onDelete={() => confirmDelete(save.id)}
           trailing={
             save.status === 'ready' ? undefined : (
               <StatusPill label={STATUS_LABELS[save.status]} tint={tintFor(save.status)} />
@@ -309,7 +323,7 @@ function RecentlyCaptured({ limit }: { limit: number }) {
           }
         />
       ))}
-      {saves.length > shown.length ? (
+      {visibleSaves.length > shown.length ? (
         <Touchable
           accessibilityRole="button"
           onPress={() => router.push('/search')}
@@ -317,7 +331,7 @@ function RecentlyCaptured({ limit }: { limit: number }) {
           style={{ alignSelf: 'center', paddingVertical: spacing.sm }}
         >
           <AppText variant="label" tone="accent" style={{ fontSize: 13 }}>
-            See all {saves.length}
+            See all {visibleSaves.length}
           </AppText>
         </Touchable>
       ) : null}

@@ -755,6 +755,12 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
     await getStore().patchSave(entry.payload.id, updated);
   },
 
+  async deleteSave(entry) {
+    await repo.deleteSave(entry.payload.id);
+    // Server confirmed deletion — remove from store in case it reappeared via sync
+    await getStore().removeSave(entry.payload.id);
+  },
+
   async setSaveItemState(entry) {
     const updated = await repo.setSaveItemState(
       entry.payload.id,

@@ -45,6 +45,15 @@ export function writeSaveFlags(
 }
 
 /**
+ * Permanently deletes a save — removes it from the local store immediately
+ * and queues the DELETE request. Cannot be undone.
+ */
+export function writeDeleteSave(id: string): void {
+  void getStore().removeSave(id);
+  void sync.enqueue('deleteSave', { id }, id);
+}
+
+/**
  * Edits a text note's title and body.
  *
  * The optimistic write has to reach `structuredData` as well as `rawCaption`,

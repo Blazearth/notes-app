@@ -17,6 +17,7 @@ import com.weavr.api.save.dto.UpdateSpaceRequest;
 import com.weavr.api.search.SearchService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -157,6 +158,16 @@ class SaveController {
                           @RequestBody UpdateSpaceRequest request) {
         return SaveResponse.from(
                 saveService.setSpace(userId, id, request.spaceId()));
+    }
+
+    /**
+     * Permanently deletes a save. The caller must own it.
+     * Returns 204 No Content on success.
+     */
+    @DeleteMapping("/{id}")
+    ResponseEntity<Void> delete(@CurrentUser UUID userId, @PathVariable UUID id) {
+        saveService.delete(userId, id);
+        return ResponseEntity.noContent().build();
     }
 
     /**
