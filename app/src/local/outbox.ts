@@ -78,7 +78,6 @@ export interface OutboxPayloads {
   setSaveLifecycle: { id: string; lifecycleStatus: LifecycleStatus };
   setSaveSpace: { id: string; spaceId: string | null };
   deleteSave: { id: string };
-  deleteSave: { id: string };
   setSaveItemState: { id: string; itemPath: string; state: Record<string, unknown> };
   setEntityState: { entityKey: string; state: Record<string, unknown> };
   setShoppingItemChecked: { itemId: string; checked: boolean };
