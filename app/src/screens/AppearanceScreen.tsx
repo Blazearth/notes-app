@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { ScrollView, TextInput, View, useColorScheme } from 'react-native';
+import { ScrollView, View, useColorScheme } from 'react-native';
 
 import { useSession } from '@/auth/SessionProvider';
 import { AppText } from '@/components/AppText';
@@ -468,27 +468,6 @@ export function AppearanceScreen() {
         />
       </Group>
 
-      <Group title="Greeting">
-        <Card>
-          <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.sm }}>
-            Name shown on Home
-          </AppText>
-          <TextInput
-            value={prefs.userName}
-            onChangeText={(value) => setPreference('userName', value)}
-            placeholder="Maya"
-            placeholderTextColor={palette.textFaint}
-            style={{
-              color: palette.text,
-              fontSize: 15,
-              paddingVertical: spacing.sm,
-              paddingHorizontal: spacing.md,
-              borderRadius: radius.sm,
-              backgroundColor: palette.surfaceVariant,
-            }}
-          />
-        </Card>
-      </Group>
 
       <Group title="Account">
         <Card style={{ gap: spacing.md }}>
