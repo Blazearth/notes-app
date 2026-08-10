@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 
 import type { ApiError } from '@/api/client';
 import type { SaveResponse } from '@/api/types';
+import { useSession } from '@/auth/SessionProvider';
 import { getStore, useLive } from '@/local';
 import { isLocalId } from '@/local/outbox';
 import { useStoreReady } from '@/local/SyncProvider';
@@ -56,14 +57,19 @@ const EMPTY: SaveResponse[] = [];
  */
 export function SavesProvider({ children }: { children: React.ReactNode }) {
   const storeReady = useStoreReady();
+  const { session } = useSession();
+  // The logged-in user's UUID — used to exclude space-mates' saves from the
+  // personal feed. Their saves are stored locally so SpaceDetailScreen can
+  // read them offline, but Library and Home should only show the caller's own.
+  const myUserId = session?.user.id;
 
   // `includeArchived` because the Library computes its archived count and its
   // `Archived` chip from this same list — the filtering is a presentation
   // decision, and pushing it down here would make that chip impossible.
   const { data, loading } = useLive(
     ['saves', 'item_states'],
-    (store) => store.readFeed({ includeArchived: true }),
-    [storeReady],
+    (store) => store.readFeed({ includeArchived: true, ownedByUserId: myUserId }),
+    [storeReady, myUserId],
   );
   const saves = data ?? EMPTY;
 

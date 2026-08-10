@@ -70,6 +70,11 @@ export interface SaveResponse {
   itemStates?: Record<string, Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
+  /**
+   * The save's owner UUID. Present in the JSON stored locally so the
+   * personal feed (Library / Home) can exclude space-mates' saves.
+   */
+  userId?: string;
 }
 
 /**

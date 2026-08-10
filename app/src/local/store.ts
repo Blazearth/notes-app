@@ -50,6 +50,13 @@ export interface FeedQuery {
   /** `createdAt` desc (the feed's order) or `updatedAt` desc (last touched). */
   orderBy?: 'created' | 'updated';
   limit?: number;
+  /**
+   * When set, only saves whose `userId` matches are returned.
+   * Used by Library and Home to exclude space-mates' saves from the
+   * personal feed while keeping all of the caller's own saves (whether
+   * or not they are in a shared space).
+   */
+  ownedByUserId?: string;
 }
 
 export interface LocalStore {
@@ -419,5 +426,6 @@ export function matchesQuery(save: SaveResponse, query: FeedQuery): boolean {
   if (!query.includeArchived && save.archived) return false;
   if (query.spaceId !== undefined && (save.spaceId ?? null) !== query.spaceId) return false;
   if (query.knowledgeType !== undefined && save.knowledgeType !== query.knowledgeType) return false;
+  if (query.ownedByUserId !== undefined && save.userId !== query.ownedByUserId) return false;
   return true;
 }

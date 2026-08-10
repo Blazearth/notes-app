@@ -52,7 +52,15 @@ public record SaveResponse(
         Map<String, Map<String, Object>> itemStates,
 
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+
+        /**
+         * The save's owner. Included so the client can distinguish its own saves
+         * from space-mates' saves in the local store — used to exclude others'
+         * saves from the personal feed (Library / Home) while keeping them
+         * accessible inside the Space.
+         */
+        UUID userId
 ) {
 
     /** For callers that have no item-state lookup available (mostly tests). */
@@ -80,6 +88,7 @@ public record SaveResponse(
                 save.getErrorMessage(),
                 itemStates == null || itemStates.isEmpty() ? null : itemStates,
                 save.getCreatedAt(),
-                save.getUpdatedAt());
+                save.getUpdatedAt(),
+                save.getUserId());
     }
 }

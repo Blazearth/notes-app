@@ -367,6 +367,12 @@ export function createSqliteStore(): LocalStore {
         where.push('knowledge_type = ?');
         params.push(query.knowledgeType);
       }
+      // Exclude saves created by other users (e.g. space-mates).
+      // We use json_extract so no schema migration is needed.
+      if (query.ownedByUserId !== undefined) {
+        where.push("json_extract(json, '$.userId') = ?");
+        params.push(query.ownedByUserId);
+      }
       const sql =
         `select json from saves` +
         (where.length ? ` where ${where.join(' and ')}` : '') +
