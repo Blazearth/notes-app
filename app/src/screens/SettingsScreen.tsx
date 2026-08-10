@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { Alert, Platform, TextInput, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, TextInput, View } from 'react-native';
 
 import type { MeResponse } from '@/api/types';
 import { ApiError, patchUsername } from '@/api/client';
@@ -168,33 +168,41 @@ export function SettingsScreen() {
   const email = session?.user.email ?? '';
   const initial = (prefs.userName || email || 'W').charAt(0).toUpperCase();
 
-  const promptSetUsername = () => {
-    let draft = '';
-    Alert.prompt(
-      prefs.userName ? 'Change username' : 'Set username',
-      'Letters, digits and underscores only. 3–20 characters.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Save',
-          onPress: async (value: string | undefined) => {
-            const trimmed = (value ?? '').trim();
-            if (!trimmed) return;
-            try {
-              await patchUsername(trimmed);
-              setPreference('userName', trimmed);
-            } catch (e) {
-              Alert.alert(
-                'Could not set username',
-                e instanceof ApiError ? e.message : 'That username may already be taken.',
-              );
-            }
-          },
-        },
-      ],
-      'plain-text',
-      prefs.userName,
-    );
+  // ---- username modal state ----
+  const [showUsernameModal, setShowUsernameModal] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
+  const [usernameBusy, setUsernameBusy] = useState(false);
+  const [usernameError, setUsernameError] = useState<string | null>(null);
+  const usernameRef = useRef<TextInput>(null);
+
+  const USERNAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_]{1,18}[a-zA-Z0-9]$|^[a-zA-Z0-9]{3}$/;
+  const usernameInputValid = USERNAME_RE.test(usernameInput.trim());
+
+  const openUsernameModal = () => {
+    setUsernameInput(prefs.userName ?? '');
+    setUsernameError(null);
+    setShowUsernameModal(true);
+    // Small delay so the modal is visible before keyboard pops
+    setTimeout(() => usernameRef.current?.focus(), 150);
+  };
+
+  const saveUsername = async () => {
+    const trimmed = usernameInput.trim();
+    if (!usernameInputValid) {
+      setUsernameError('3–20 chars · letters, digits and _ only · no leading/trailing _');
+      return;
+    }
+    setUsernameBusy(true);
+    setUsernameError(null);
+    try {
+      await patchUsername(trimmed);
+      setPreference('userName', trimmed);
+      setShowUsernameModal(false);
+    } catch (e) {
+      setUsernameError(e instanceof ApiError ? e.message : 'That username may already be taken.');
+    } finally {
+      setUsernameBusy(false);
+    }
   };
 
   return (
@@ -258,7 +266,7 @@ export function SettingsScreen() {
           </View>
           <Touchable
             accessibilityRole="button"
-            onPress={promptSetUsername}
+            onPress={openUsernameModal}
             style={{ padding: spacing.xs }}
           >
             <AppText variant="label" tone="accent" style={{ fontSize: 11.5 }}>
@@ -340,6 +348,91 @@ export function SettingsScreen() {
           Log out
         </AppText>
       </Touchable>
+      {/* ---- Username Modal (cross-platform, works on Android) ---- */}
+      <Modal
+        visible={showUsernameModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowUsernameModal(false)}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <Pressable
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', paddingHorizontal: spacing.xl }}
+            onPress={() => !usernameBusy && setShowUsernameModal(false)}
+          >
+            <Pressable onPress={() => {}} style={{ backgroundColor: palette.surface, borderRadius: radius.lg, padding: spacing.xl, gap: spacing.md }}>
+              <AppText variant="cardTitle">
+                {prefs.userName ? 'Change username' : 'Set username'}
+              </AppText>
+              <AppText variant="caption" tone="muted">
+                Letters, digits and underscores · 3–20 characters · must be unique
+              </AppText>
+
+              <TextInput
+                ref={usernameRef}
+                value={usernameInput}
+                onChangeText={(t) => { setUsernameInput(t.replace(/\s/g, '')); setUsernameError(null); }}
+                placeholder="e.g. blaze_42"
+                placeholderTextColor={palette.textFaint}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!usernameBusy}
+                onSubmitEditing={() => void saveUsername()}
+                returnKeyType="done"
+                style={{
+                  color: palette.text,
+                  fontSize: 16,
+                  paddingVertical: spacing.md,
+                  paddingHorizontal: spacing.md,
+                  borderRadius: radius.sm,
+                  backgroundColor: palette.surfaceVariant,
+                  borderWidth: usernameError ? 1 : 0,
+                  borderColor: palette.danger,
+                }}
+              />
+
+              {usernameError ? (
+                <AppText variant="caption" style={{ color: palette.danger }}>
+                  {usernameError}
+                </AppText>
+              ) : null}
+
+              <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.xs }}>
+                <Touchable
+                  accessibilityRole="button"
+                  onPress={() => setShowUsernameModal(false)}
+                  disabled={usernameBusy}
+                  style={{
+                    flex: 1, alignItems: 'center', paddingVertical: spacing.md,
+                    borderRadius: radius.pill, backgroundColor: palette.surfaceVariant,
+                  }}
+                >
+                  <AppText variant="label" style={{ fontSize: 14 }}>Cancel</AppText>
+                </Touchable>
+                <Touchable
+                  accessibilityRole="button"
+                  onPress={() => void saveUsername()}
+                  disabled={usernameBusy || !usernameInputValid}
+                  haptic="medium"
+                  baseOpacity={usernameBusy || !usernameInputValid ? 0.45 : 1}
+                  style={{
+                    flex: 1, alignItems: 'center', paddingVertical: spacing.md,
+                    borderRadius: radius.pill, backgroundColor: palette.accent,
+                  }}
+                >
+                  {usernameBusy
+                    ? <ActivityIndicator color={palette.onAccent} />
+                    : <AppText variant="label" style={{ fontSize: 14, color: palette.onAccent }}>Save</AppText>
+                  }
+                </Touchable>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
     </Screen>
   );
 }
