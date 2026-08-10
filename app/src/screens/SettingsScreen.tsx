@@ -1,8 +1,9 @@
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Platform, View } from 'react-native';
+import { Alert, Platform, TextInput, View } from 'react-native';
 
 import type { MeResponse } from '@/api/types';
+import { ApiError, patchUsername } from '@/api/client';
 import { KV, useLiveValue } from '@/local';
 import { sync } from '@/local/sync';
 import { useSession } from '@/auth/SessionProvider';
@@ -165,7 +166,36 @@ export function SettingsScreen() {
   }, []);
 
   const email = session?.user.email ?? '';
-  const initial = (email || 'W').charAt(0).toUpperCase();
+  const initial = (prefs.userName || email || 'W').charAt(0).toUpperCase();
+
+  const promptSetUsername = () => {
+    let draft = '';
+    Alert.prompt(
+      prefs.userName ? 'Change username' : 'Set username',
+      'Letters, digits and underscores only. 3–20 characters.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Save',
+          onPress: async (value: string | undefined) => {
+            const trimmed = (value ?? '').trim();
+            if (!trimmed) return;
+            try {
+              await patchUsername(trimmed);
+              setPreference('userName', trimmed);
+            } catch (e) {
+              Alert.alert(
+                'Could not set username',
+                e instanceof ApiError ? e.message : 'That username may already be taken.',
+              );
+            }
+          },
+        },
+      ],
+      'plain-text',
+      prefs.userName,
+    );
+  };
 
   return (
     <Screen reserveNavSpace={false}>
@@ -216,13 +246,25 @@ export function SettingsScreen() {
           </View>
           <View style={{ flex: 1 }}>
             <AppText variant="cardTitle">{prefs.userName.trim() || 'You'}</AppText>
-            <AppText variant="caption" tone="muted" numberOfLines={1}>
-              {email || 'Not signed in'}
-            </AppText>
+            {prefs.userName ? (
+              <AppText variant="caption" tone="accent" numberOfLines={1}>
+                @{prefs.userName}
+              </AppText>
+            ) : (
+              <AppText variant="caption" tone="muted" numberOfLines={1}>
+                {email || 'Not signed in'}
+              </AppText>
+            )}
           </View>
-          <AppText variant="label" tone="accent" style={{ fontSize: 11.5 }}>
-            Edit
-          </AppText>
+          <Touchable
+            accessibilityRole="button"
+            onPress={promptSetUsername}
+            style={{ padding: spacing.xs }}
+          >
+            <AppText variant="label" tone="accent" style={{ fontSize: 11.5 }}>
+              {prefs.userName ? 'Change' : 'Set username'}
+            </AppText>
+          </Touchable>
         </View>
       </Card>
 

@@ -238,6 +238,8 @@ export interface SaveComment {
  */
 export interface MeResponse {
   userId: string;
+  /** Unique username chosen by the user. Null if not yet set. */
+  username?: string | null;
   pro: boolean;
   entitlement?: string;
   subscriptionStatus?: string;

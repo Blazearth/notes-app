@@ -3,9 +3,11 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { supabase } from './supabase';
+import { getMe } from '@/api/client';
 import { USE_MOCK_DATA } from '@/data/config';
 import { MOCK_USER_ID } from '@/data/mockData';
 import { mirrorShareSession } from '@/share/nativeShareConfig';
+import { usePreferences } from '@/prefs/PreferencesProvider';
 
 /**
  * A session that satisfies the route guards without Supabase being involved.
@@ -100,6 +102,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => listener.remove();
   }, []);
 
+  const { setPreference } = usePreferences();
+
   const signIn = useCallback(async (email: string, password: string) => {
     if (USE_MOCK_DATA) {
       setSession(MOCK_SESSION);
@@ -110,7 +114,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       password,
     });
     if (error) throw new Error(error.message);
-  }, []);
+    // Sync the server-authoritative username to local prefs so returning
+    // users see their username on any device without re-entering it.
+    try {
+      const me = await getMe();
+      if (me.username) setPreference('userName', me.username);
+    } catch {
+      // Non-fatal — prefs.userName may already be set, or the user will
+      // see the email fallback until they visit Settings.
+    }
+  }, [setPreference]);
 
   const signUp = useCallback(async (email: string, password: string, name?: string) => {
     if (USE_MOCK_DATA) {

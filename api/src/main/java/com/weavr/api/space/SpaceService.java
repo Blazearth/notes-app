@@ -215,7 +215,8 @@ public class SpaceService {
     public List<Member> members(UUID userId, UUID spaceId) {
         requireMember(userId, spaceId);
         return jdbc.sql("""
-                        select m.user_id, m.role, m.joined_at, p.display_name
+                        select m.user_id, m.role, m.joined_at,
+                               coalesce(p.username, p.display_name, 'Weavr user') as display_name
                         from space_members m
                         join profiles p on p.id = m.user_id
                         where m.space_id = ?
@@ -431,7 +432,7 @@ public class SpaceService {
     private InviteRow loadUsableInvite(String code) {
         return jdbc.sql("""
                         select i.id, i.space_id, i.role, s.name as space_name,
-                               coalesce(p.display_name, 'A Weavr user') as created_by_name
+                               coalesce(p.username, p.display_name, 'Weavr user') as created_by_name
                         from space_invites i
                         join spaces s on s.id = i.space_id
                         join profiles p on p.id = i.created_by
@@ -504,7 +505,7 @@ public class SpaceService {
         requireMember(userId, spaceId);
         return jdbc.sql("""
                         select a.id, a.user_id, a.save_id, a.type, a.created_at,
-                               coalesce(p.display_name, 'A Weavr user') as display_name,
+                               coalesce(p.username, p.display_name, 'Weavr user') as display_name,
                                coalesce(s.structured_data ->> 'title',
                                         s.structured_data ->> 'name') as save_title
                         from space_activity a

@@ -301,6 +301,23 @@ export function getMe(): Promise<MeResponse> {
 }
 
 /**
+ * Sets or updates the caller's username.
+ *
+ * Returns the full updated {@link MeResponse} so the caller can sync
+ * `prefs.userName` from the server-canonical value in one round trip.
+ *
+ * Throws {@link ApiError} with kind `'bad_request'` if the username is
+ * already taken or the format is invalid.
+ */
+export function patchUsername(username: string): Promise<MeResponse> {
+  return request<MeResponse>('/v1/me/username', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
+}
+
+/**
  * `GET /v1/saves/search` — Postgres full-text and pgvector similarity, fused
  * server-side with Reciprocal Rank Fusion.
  *

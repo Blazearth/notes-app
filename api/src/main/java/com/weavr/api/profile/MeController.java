@@ -1,11 +1,14 @@
 package com.weavr.api.profile;
 
+import java.util.Map;
 import java.util.UUID;
 
 import com.weavr.api.auth.CurrentUser;
 import com.weavr.api.billing.EntitlementService;
 import com.weavr.api.billing.UsageService;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -22,12 +25,13 @@ import org.springframework.web.bind.annotation.RestController;
 class MeController {
 
     /**
-     * @param savesLimit {@code -1} for unlimited — either the user is Pro or
-     *                   caps are not being enforced yet. The client renders a
-     *                   usage meter only when this is positive.
+     * @param username    Unique username chosen by the user, or {@code null} if not yet set.
+     * @param savesLimit  {@code -1} for unlimited — either the user is Pro or
+     *                    caps are not being enforced yet. The client renders a
+     *                    usage meter only when this is positive.
      */
-    record MeResponse(UUID userId, boolean pro, String entitlement, String subscriptionStatus,
-                      java.time.Instant renewsAt,
+    record MeResponse(UUID userId, String username, boolean pro, String entitlement,
+                      String subscriptionStatus, java.time.Instant renewsAt,
                       int savesUsed, int savesLimit, int actsUsed, int actsLimit) {
     }
 
@@ -49,8 +53,10 @@ class MeController {
 
         EntitlementService.Entitlement entitlement = entitlements.forUser(userId);
         UsageService.UsageSummary summary = usage.summary(userId);
+        String username = profiles.getUsername(userId).orElse(null);
         return new MeResponse(
                 userId,
+                username,
                 entitlement.pro(),
                 entitlement.id(),
                 entitlement.status(),
@@ -59,5 +65,19 @@ class MeController {
                 summary.savesLimit(),
                 summary.actsUsed(),
                 summary.actsLimit());
+    }
+
+    /**
+     * Sets or updates the caller's username.
+     *
+     * <p>Idempotent — re-submitting the same username is a no-op.
+     * Returns 400 if the format is invalid or the username is already taken.
+     */
+    @PatchMapping("/v1/me/username")
+    MeResponse setUsername(@CurrentUser UUID userId,
+                           @RequestBody Map<String, String> body) {
+        String username = body.get("username");
+        profiles.setUsername(userId, username);
+        return me(userId);
     }
 }
