@@ -49,11 +49,24 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>{@link #COLLECTION_OVERRIDE} — {@code "<overrideType>|<subjectKey>"}</li>
  * </ul>
  *
- * <p>There is deliberately no type for a deleted save or a deleted item state:
- * nothing in this codebase deletes either. There is no delete-a-save endpoint at
- * all, and {@code save_item_states} only ever loses rows by cascading from a
- * save that cannot be deleted. Declaring a constant for a delete that does not
- * exist would be a thing to forget rather than a thing to build on.
+ * <p><b>Known gap: {@code DELETE /v1/saves/&#123;id&#125;} writes no tombstone.</b> This
+ * class previously reasoned that no type was needed for a deleted save because no
+ * delete path existed — "declaring a constant for a delete that does not exist
+ * would be a thing to forget rather than a thing to build on." The delete endpoint
+ * landed without the constant, which is precisely the forgetting that predicted.
+ * The consequence is silent: a save deleted on one device stays cached on every
+ * other device of the same user until a pull-to-refresh, because
+ * {@code replaceAll} reaping is the only thing that can currently notice. The
+ * cascade compounds it — a deleted save takes its {@code save_item_states},
+ * comments and votes with it, and a shared save leaves every Space member holding
+ * it. Fixing it means a {@code SAVE} constant recorded against
+ * {@link com.weavr.api.sync.TombstoneService#audienceForSave} (read the audience
+ * <i>before</i> the delete, same ordering rule as a Space) plus a client-side
+ * handler for the new type.
+ *
+ * <p>There is still deliberately no type for a deleted item state:
+ * {@code save_item_states} only ever loses rows by cascading from its save, so
+ * the save's own tombstone is what a client needs.
  */
 @Service
 public class TombstoneService {

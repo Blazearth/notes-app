@@ -889,8 +889,8 @@ it work.
    sync, which pages `GET /v1/sync` to exhaustion instead; measure once there is a
    user with more than a few hundred saves.
 4. **Does the tombstone table need a retention policy, and what is it?** Nothing
-   prunes it. Growth is slow (deletes are rare, and there is no delete-a-save path
-   at all), but the answer depends on how long a client may stay offline and still
+   prunes it. Growth is slow (deletes are rare), but the answer depends on how long
+   a client may stay offline and still
    be trusted to hold a consistent cache — a decision, not a measurement, and one
    that has to be made before the table is big enough to matter.
 5. **Is the outbox's `MAX_DRAIN_STEPS = 100` per drain the right bound?** It exists
