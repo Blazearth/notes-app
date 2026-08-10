@@ -85,7 +85,7 @@ public class EntityCommentService {
         spaces.requireMember(userId, spaceId);
         return jdbc.sql("""
                         select c.id, c.entity_key, c.user_id, c.body, c.created_at,
-                               coalesce(p.display_name, 'A Weavr user') as display_name
+                               coalesce(p.username, p.display_name, 'Weavr user') as display_name
                         from entity_comments c
                         left join profiles p on p.id = c.user_id
                         where c.space_id = ? and c.entity_key = ?
@@ -140,7 +140,7 @@ public class EntityCommentService {
     public List<EntityComment> recent(UUID spaceId, int limit) {
         return jdbc.sql("""
                         select c.id, c.entity_key, c.user_id, c.body, c.created_at,
-                               coalesce(p.display_name, 'A Weavr user') as display_name
+                               coalesce(p.username, p.display_name, 'Weavr user') as display_name
                         from entity_comments c
                         left join profiles p on p.id = c.user_id
                         where c.space_id = ?

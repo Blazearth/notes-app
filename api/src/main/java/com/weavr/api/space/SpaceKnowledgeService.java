@@ -370,12 +370,12 @@ public class SpaceKnowledgeService {
         Map<String, List<MemberState>> byEntity = new LinkedHashMap<>();
         jdbc.sql("""
                         select es.entity_key, es.user_id, es.state::text as state,
-                               coalesce(p.display_name, 'A Weavr user') as display_name
+                               coalesce(p.username, p.display_name, 'Weavr user') as display_name
                         from entity_states es
                         join space_members m on m.user_id = es.user_id
                         left join profiles p on p.id = es.user_id
                         where m.space_id = ? and es.entity_key = any(?::text[])
-                        order by p.display_name, es.user_id
+                        order by coalesce(p.username, p.display_name), es.user_id
                         """)
                 .param(spaceId)
                 .param(entityKeys.toArray(String[]::new))
@@ -409,7 +409,7 @@ public class SpaceKnowledgeService {
     public List<SpaceComment> recentComments(UUID spaceId, int limit) {
         return jdbc.sql("""
                         select c.id, c.save_id, c.user_id, c.body, c.created_at,
-                               coalesce(p.display_name, 'A Weavr user') as display_name,
+                               coalesce(p.username, p.display_name, 'Weavr user') as display_name,
                                coalesce(s.structured_data ->> 'title',
                                         s.structured_data ->> 'name') as save_title
                         from save_comments c

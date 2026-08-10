@@ -67,7 +67,7 @@ public class SaveSocialService {
         requireVisible(userId, saveId);
         return jdbc.sql("""
                         select c.id, c.user_id, c.body, c.created_at,
-                               coalesce(p.display_name, 'A Weavr user') as display_name
+                               coalesce(p.username, p.display_name, 'Weavr user') as display_name
                         from save_comments c
                         join profiles p on p.id = c.user_id
                         where c.save_id = ?

@@ -104,7 +104,7 @@ public class SpacePinService {
         return jdbc.sql("""
                         select p.id, p.kind, p.subject, p.payload::text as payload,
                                p.created_by, p.created_at,
-                               coalesce(pr.display_name, 'A Weavr user') as created_by_name,
+                               coalesce(pr.username, pr.display_name, 'Weavr user') as created_by_name,
                                coalesce(s.structured_data ->> 'title',
                                         s.structured_data ->> 'name') as save_title,
                                (s.id is not null) as save_present
