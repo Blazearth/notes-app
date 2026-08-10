@@ -7,6 +7,7 @@ import type {
   CreateSaveRequest,
   DigestResponse,
   DuplicateSuggestion,
+  EntityComment,
   InvitePreview,
   KnowledgeGroupResponse,
   LifecycleStatus,
@@ -17,8 +18,11 @@ import type {
   SearchHit,
   ShoppingListResponse,
   Space,
+  SpaceEntityResponse,
   SpaceInvite,
+  SpaceKnowledgeOverview,
   SpaceMember,
+  SpacePin,
   SpaceRole,
   SyncResponse,
 } from './types';
@@ -437,6 +441,132 @@ export function listSpaceSaves(id: string, page = 0, size = 25): Promise<SaveRes
 
 export function listSpaceMembers(id: string): Promise<SpaceMember[]> {
   return request<SpaceMember[]>(`/v1/spaces/${id}/members`);
+}
+
+/**
+ * `GET /v1/spaces/{id}/knowledge` (S2) — the Overview's shared half.
+ *
+ * Everything else on that tab is derived on-device from saves already in the
+ * store, so this is exactly the part the client *cannot* compute: other
+ * members' progress, the discussion block, and the group-scoped done counts.
+ * A failure here leaves the Overview rendering, minus those sections.
+ */
+export function getSpaceKnowledge(id: string, comments = 8): Promise<SpaceKnowledgeOverview> {
+  return request<SpaceKnowledgeOverview>(`/v1/spaces/${id}/knowledge?comments=${comments}`);
+}
+
+/**
+ * `GET /v1/spaces/{id}/collections/{nodeId}` (S1) — one node's merged
+ * entities, Space-scoped.
+ *
+ * The same node-id scheme as `listCollectionEntities`, so a node derived
+ * locally can be handed straight here. What the server adds is the two things
+ * derivation cannot: `addedBy` on each source, and every member's state.
+ */
+export function listSpaceCollectionEntities(
+  id: string,
+  nodeId: string,
+): Promise<SpaceEntityResponse[]> {
+  return request<SpaceEntityResponse[]>(
+    `/v1/spaces/${id}/collections/${encodeURIComponent(nodeId)}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// S3 — entity comments
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /v1/spaces/{id}/entity-comments?entityKey=…`
+ *
+ * **The key is a query parameter, never a path segment**, and that is the same
+ * call `PATCH /v1/entity-state` and `PATCH /v1/saves/{id}/item-state` both made:
+ * an entity key is `"screen:blue box"` — a colon and a space — and threading
+ * that through a path means encoding it correctly in every client forever.
+ */
+export function listEntityComments(id: string, entityKey: string): Promise<EntityComment[]> {
+  const params = new URLSearchParams({ entityKey });
+  return request<EntityComment[]>(`/v1/spaces/${id}/entity-comments?${params.toString()}`);
+}
+
+/**
+ * `POST /v1/spaces/{id}/entity-comments`.
+ *
+ * Idempotent on a repeated key (V16), and the app always sends one: like
+ * `addComment`, this is a queued write that *creates* a row, so a lost response
+ * followed by a retry is the difference between one remark and two identical
+ * ones.
+ */
+export function addEntityComment(
+  id: string,
+  entityKey: string,
+  body: string,
+  idempotencyKey?: string,
+): Promise<EntityComment> {
+  return request<EntityComment>(`/v1/spaces/${id}/entity-comments`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
+    body: JSON.stringify({ entityKey, body }),
+  });
+}
+
+export function deleteEntityComment(id: string, commentId: string): Promise<void> {
+  return request<void>(`/v1/spaces/${id}/entity-comments/${commentId}`, { method: 'DELETE' });
+}
+
+// ---------------------------------------------------------------------------
+// S4 — pins and the shared shopping list
+// ---------------------------------------------------------------------------
+
+/** `GET /v1/spaces/{id}/pins`. Also carried on `/knowledge`, so the Overview costs one request. */
+export function listSpacePins(id: string): Promise<SpacePin[]> {
+  return request<SpacePin[]>(`/v1/spaces/${id}/pins`);
+}
+
+/**
+ * `POST /v1/spaces/{id}/pins` — editor only.
+ *
+ * An upsert on `(space, kind, subject)`, so a double tap is one pin and a
+ * retried request is harmless without an idempotency key: the write is already
+ * idempotent by construction, which is a stronger guarantee than a replayed
+ * response.
+ */
+export function pinInSpace(
+  id: string,
+  kind: string,
+  subject: string,
+  payload: Record<string, unknown> = {},
+): Promise<SpacePin> {
+  return request<SpacePin>(`/v1/spaces/${id}/pins`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, subject, payload }),
+  });
+}
+
+export function unpinInSpace(id: string, pinId: string): Promise<void> {
+  return request<void>(`/v1/spaces/${id}/pins/${pinId}`, { method: 'DELETE' });
+}
+
+/**
+ * `GET /v1/spaces/{id}/shopping-list` — S4's shared list.
+ *
+ * A separate route rather than a `?spaceId=` on the personal one, because these
+ * are two lists and not two views of one. The *item* mutations are shared
+ * (`setShoppingItemChecked` addresses exactly one row on exactly one list, and
+ * the server proves access per statement), which is why there is no Space
+ * variant of those.
+ */
+export function getSpaceShoppingList(id: string): Promise<ShoppingListResponse> {
+  return request<ShoppingListResponse>(`/v1/spaces/${id}/shopping-list`);
+}
+
+/** "We've been shopping", on the Space's list. Scoped, so it can never empty the caller's own. */
+export function clearCheckedSpaceShoppingItems(id: string): Promise<{ removed: number }> {
+  return request<{ removed: number }>(`/v1/spaces/${id}/shopping-list/checked`, { method: 'DELETE' });
 }
 
 export function setMemberRole(id: string, memberId: string, role: SpaceRole): Promise<void> {

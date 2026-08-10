@@ -62,7 +62,11 @@ export type OutboxOp =
   | 'convertToShoppingList'
   | 'addComment'
   | 'deleteComment'
-  | 'setVote';
+  | 'setVote'
+  | 'addEntityComment'
+  | 'deleteEntityComment'
+  | 'pinInSpace'
+  | 'unpinInSpace';
 
 /** The payload shape per op, so the drain's dispatch is exhaustively typed. */
 export interface OutboxPayloads {
@@ -81,11 +85,23 @@ export interface OutboxPayloads {
   setSaveItemState: { id: string; itemPath: string; state: Record<string, unknown> };
   setEntityState: { entityKey: string; state: Record<string, unknown> };
   setShoppingItemChecked: { itemId: string; checked: boolean };
-  clearCheckedShoppingItems: Record<string, never>;
+  /**
+   * `spaceId` absent means the caller's own list — S4 added the Space's, and
+   * the scope is part of the payload because clearing one list must never
+   * empty the other. Entries written before S4 carry no field at all, which
+   * reads as the personal list, which is what they were.
+   */
+  clearCheckedShoppingItems: { spaceId?: string };
   convertToShoppingList: { saveId: string };
   addComment: { saveId: string; body: string };
   deleteComment: { saveId: string; commentId: string };
   setVote: { saveId: string; value: 1 | -1 | 0 };
+  /** S3. Space-scoped, unlike `setEntityState` — see `EntityCommentService`. */
+  addEntityComment: { spaceId: string; entityKey: string; body: string };
+  deleteEntityComment: { spaceId: string; commentId: string };
+  /** S4. An upsert on `(space, kind, subject)`, so replaying one is a no-op. */
+  pinInSpace: { spaceId: string; kind: string; subject: string; payload: Record<string, unknown> };
+  unpinInSpace: { spaceId: string; pinId: string };
 }
 
 export type OutboxStatus = 'pending' | 'failed';
@@ -327,8 +343,13 @@ export function describeOp(op: OutboxOp): string {
       return 'Adding a recipe to your list';
     case 'addComment':
     case 'deleteComment':
+    case 'addEntityComment':
+    case 'deleteEntityComment':
       return 'A comment';
     case 'setVote':
       return 'A vote';
+    case 'pinInSpace':
+    case 'unpinInSpace':
+      return 'Pinning something in a Space';
   }
 }

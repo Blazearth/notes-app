@@ -53,6 +53,23 @@ public interface SaveRepository extends JpaRepository<Save, UUID> {
     List<Save> findByUserIdAndStatusOrderByCreatedAtDesc(UUID userId, SaveStatus status);
 
     /**
+     * The same shape one scope over: a whole Space's finished saves, for the
+     * Space-scoped collection merge (S1, {@code docs/knowledge-spaces.md}).
+     * Served by {@code saves_space_created_idx}.
+     *
+     * <p>Unpaged for the same reason as the personal query above — a Space's
+     * knowledge is a shape over <em>all</em> of its saves, and a count derived
+     * from the first page would be wrong in a way nobody could see.
+     *
+     * <p>No {@code userId}: this is the one read here that deliberately crosses
+     * users, because merging several members' saves is the entire feature.
+     * Membership is established by {@code SpaceKnowledgeService} before this is
+     * called — every save with this {@code space_id} is visible to every member
+     * by definition.
+     */
+    List<Save> findBySpaceIdAndStatusOrderByCreatedAtDesc(UUID spaceId, SaveStatus status);
+
+    /**
      * The delta window for {@code GET /v1/sync}, ascending so the last row is
      * the page's cursor. Served by {@code saves_user_updated_idx} (V15) — V1's
      * index is on {@code created_at} and cannot serve this.

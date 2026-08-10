@@ -20,6 +20,7 @@ import type {
   CreateSaveRequest,
   DigestResponse,
   DuplicateSuggestion,
+  EntityComment,
   InvitePreview,
   LifecycleStatus,
   MeResponse,
@@ -28,24 +29,33 @@ import type {
   SearchHit,
   ShoppingListResponse,
   Space,
+  SpaceEntityResponse,
   SpaceInvite,
+  SpaceKnowledgeOverview,
   SpaceMember,
+  SpaceMemberState,
+  SpaceCommentEntry,
+  SpacePin,
   SpaceRole,
 } from '@/api/types';
 import { ApiError } from '@/api/client';
 import {
   buildTree,
+  mergeNode,
   mergeType,
   withDoneCount,
   type CollectionOverrides,
   type CollectionSaveFacts,
 } from '@/collections/merge';
+import { rollUpMemberProgress } from '@/spaces/spaceProgress';
 import { MOCK_LATENCY_MS } from './config';
 import {
   MOCK_ACTIVITY,
   MOCK_COMMENTS,
   MOCK_GROUPS,
+  MOCK_MEMBER_ENTITY_STATES,
   MOCK_MEMBERS,
+  MOCK_SAVE_OWNERS,
   MOCK_SAVES,
   MOCK_SHOPPING_LIST,
   MOCK_SPACES,
@@ -94,6 +104,16 @@ const activity: Record<string, ActivityEntry[]> = copy(MOCK_ACTIVITY);
 const comments: Record<string, SaveComment[]> = copy(MOCK_COMMENTS);
 const shoppingList: ShoppingListResponse = copy(MOCK_SHOPPING_LIST);
 const votes: Record<string, number> = {};
+/**
+ * S3 — `entity_comments`, keyed by Space. Space-scoped, unlike `entityStates`
+ * below, and that shape difference is the feature: a status is a fact about a
+ * person and travels with them, a remark was said in a room and stays there.
+ */
+const entityComments: Record<string, EntityComment[]> = {};
+/** S4 — `space_pins`, keyed by Space. */
+const spacePins: Record<string, SpacePin[]> = {};
+/** S4 — one shared shopping list per Space, alongside the personal one above. */
+const spaceShoppingLists: Record<string, ShoppingListResponse> = {};
 /** K2 entity state, keyed by `Entities.key`'s output — mirrors `entity_states`. */
 const entityStates: Record<string, Record<string, unknown>> = {};
 
@@ -149,6 +169,144 @@ function readySaveFacts(): CollectionSaveFacts[] {
       structuredData: s.structuredData ?? {},
       createdAt: s.createdAt,
     }));
+}
+
+/**
+ * One Space's ready saves, as merge facts — mirrors
+ * `SpaceKnowledgeService.readySaves`. Filtered on the save's own `spaceId`,
+ * like every other Space read here.
+ */
+function spaceSaveFacts(spaceId: string): CollectionSaveFacts[] {
+  return saves
+    .filter((s) => s.spaceId === spaceId && s.status === 'ready')
+    .map((s) => ({
+      id: s.id,
+      knowledgeType: s.knowledgeType,
+      structuredData: s.structuredData ?? {},
+      createdAt: s.createdAt,
+    }));
+}
+
+/**
+ * Every member's state for the given entity keys — the mock's stand-in for
+ * S2's `space_members` × `entity_states` join.
+ *
+ * The signed-in user's own states come from the mutable `entityStates` above,
+ * so a tap on the Space screen moves the group's numbers immediately; everyone
+ * else's come from the fixture, which is what a tap can never change. Members
+ * with no state simply do not appear, exactly like the real join.
+ */
+function spaceMemberStates(
+  spaceId: string,
+  entityKeys: ReadonlySet<string>,
+): Record<string, SpaceMemberState[]> {
+  const roster = members[spaceId] ?? [];
+  const byEntity: Record<string, SpaceMemberState[]> = {};
+  entityKeys.forEach((key) => {
+    const fixture = MOCK_MEMBER_ENTITY_STATES[key] ?? {};
+    const forEntity: SpaceMemberState[] = [];
+    for (const member of roster) {
+      const state =
+        member.userId === MOCK_USER_ID ? entityStates[key] : fixture[member.userId];
+      if (state) forEntity.push({ userId: member.userId, displayName: member.displayName, state });
+    }
+    if (forEntity.length > 0) byEntity[key] = forEntity;
+  });
+  return byEntity;
+}
+
+/** Entities anyone in the Space has finished — mirrors `SpaceKnowledgeService.doneKeys`. */
+function doneAcrossMembers(states: Record<string, SpaceMemberState[]>): Set<string> {
+  const done = new Set<string>();
+  for (const [key, forEntity] of Object.entries(states)) {
+    if (forEntity.some((m) => m.state?.done === true)) done.add(key);
+  }
+  return done;
+}
+
+/**
+ * Latest comments across a Space's saves — the join
+ * `SpaceKnowledgeService.recentComments` does in SQL, done here by walking the
+ * per-save comment fixture, so the mock cannot show discussion from a save
+ * that is not in the Space.
+ */
+function spaceComments(spaceId: string, limit: number): SpaceCommentEntry[] {
+  const inSpace = saves.filter((s) => s.spaceId === spaceId);
+  const entries: SpaceCommentEntry[] = [];
+  for (const save of inSpace) {
+    for (const comment of comments[save.id] ?? []) {
+      entries.push({
+        id: comment.id,
+        saveId: save.id,
+        saveTitle:
+          (save.structuredData?.title as string | undefined) ??
+          (save.structuredData?.name as string | undefined),
+        userId: comment.userId,
+        displayName: comment.displayName,
+        body: comment.body,
+        createdAt: comment.createdAt,
+      });
+    }
+  }
+  // S3's half of the same block. Interleaved by time and capped together —
+  // "what's being talked about in here" is one question, so a remark on Blue
+  // Box and a remark on the Reel that mentioned it compete for the same rows,
+  // exactly as `SpaceKnowledgeService.discussion` merges them.
+  for (const comment of entityComments[spaceId] ?? []) {
+    entries.push({
+      id: comment.id,
+      entityKey: comment.entityKey,
+      entityName: entityDisplayName(spaceId, comment.entityKey),
+      userId: comment.userId,
+      displayName: comment.displayName,
+      body: comment.body,
+      createdAt: comment.createdAt,
+    });
+  }
+  return entries
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, Math.max(1, limit));
+}
+
+/**
+ * An entity key's readable name, by re-merging the Space — the same thing
+ * `SpaceKnowledgeService.entityNames` does, and for the same reason: a key is
+ * `"screen:blue box"`, casefolded, and the name only exists on the merged
+ * entity.
+ */
+function entityDisplayName(spaceId: string, entityKey: string): string {
+  const type = entityKey.includes(':') ? entityKey.slice(entityKey.indexOf(':') + 1) : entityKey;
+  const facts = spaceSaveFacts(spaceId);
+  for (const node of buildTree(facts)) {
+    const found = mergeNode(facts, node.id).find((e) => e.entityKey === entityKey);
+    if (found) return found.name;
+  }
+  return type;
+}
+
+/**
+ * A Space's shared list, created on first use — mirrors
+ * `ShoppingListService.openListId(userId, spaceId)`.
+ *
+ * The aisle vocabulary is copied from the personal list rather than re-declared:
+ * it ships with the payload precisely so a new aisle is a server change and
+ * nothing else, and two mock lists disagreeing about it would be a second
+ * source of truth for the one thing that is explicitly meant to have one.
+ */
+function spaceListFor(spaceId: string): ShoppingListResponse {
+  if (!spaceShoppingLists[spaceId]) {
+    spaceShoppingLists[spaceId] = {
+      id: nextId('sl'),
+      items: [],
+      categories: shoppingList.categories,
+    };
+  }
+  return spaceShoppingLists[spaceId];
+}
+
+/** Every list an item could be on. See `setShoppingItemChecked` for why both scopes are searched. */
+function allShoppingLists(): ShoppingListResponse[] {
+  return [shoppingList, ...Object.values(spaceShoppingLists)];
 }
 
 /** Which entity keys the caller has marked `done: true` — mirrors `CollectionService.doneEntityKeys`. */
@@ -377,28 +535,34 @@ export const mockRepository: Repository = {
       })
       .filter((v): v is string => v !== null);
 
+    // S4: the target follows the *save*, not the caller — a recipe in a Space
+    // feeds the Space's shared list, so the same recipe always lands in the
+    // same place however many members convert it.
+    const list = save.spaceId ? spaceListFor(save.spaceId) : shoppingList;
+
     // Contribution-per-save, exactly as the server folds it: re-converting the
-    // same recipe replaces its lines instead of doubling every quantity.
-    for (const item of shoppingList.items) {
+    // same recipe replaces its lines instead of doubling every quantity. That
+    // property is what makes two *people's* recipes merge correctly too.
+    for (const item of list.items) {
       item.sources = item.sources.filter((s) => s !== saveId);
     }
     let index = 0;
     for (const line of ingredients) {
-      const existing = shoppingList.items.find((i) => line.toLowerCase().includes(i.name.toLowerCase()));
+      const existing = list.items.find((i) => line.toLowerCase().includes(i.name.toLowerCase()));
       if (existing) {
         if (!existing.sources.includes(saveId)) existing.sources.push(saveId);
       } else {
-        shoppingList.items.push({
+        list.items.push({
           id: nextId('it'),
           name: line,
-          category: shoppingList.categories[index % shoppingList.categories.length],
+          category: list.categories[index % list.categories.length],
           checked: false,
           sources: [saveId],
         });
       }
       index += 1;
     }
-    shoppingList.items = shoppingList.items.filter((i) => i.sources.length > 0);
+    list.items = list.items.filter((i) => i.sources.length > 0);
     return delay({ status: 'accepted' });
   },
 
@@ -406,14 +570,26 @@ export const mockRepository: Repository = {
     return delay(copy(shoppingList));
   },
 
+  /**
+   * An item id addresses exactly one row on exactly one list, which is why the
+   * server needs no Space variant of this — and why the mock has to search both
+   * scopes rather than assuming the personal one.
+   */
   setShoppingItemChecked(itemId: string, checked: boolean): Promise<void> {
-    const item = shoppingList.items.find((i) => i.id === itemId);
-    if (item) item.checked = checked;
+    for (const list of allShoppingLists()) {
+      const item = list.items.find((i) => i.id === itemId);
+      if (item) {
+        item.checked = checked;
+        break;
+      }
+    }
     return delay(undefined);
   },
 
   deleteShoppingItem(itemId: string): Promise<void> {
-    shoppingList.items = shoppingList.items.filter((i) => i.id !== itemId);
+    for (const list of allShoppingLists()) {
+      list.items = list.items.filter((i) => i.id !== itemId);
+    }
     tomb('shopping_item', itemId);
     return delay(undefined);
   },
@@ -474,6 +650,148 @@ export const mockRepository: Repository = {
   },
 
   listSpaceMembers: (id) => delay(copy(members[id] ?? [])),
+
+  /**
+   * S2, derived exactly the way `SpaceKnowledgeService.overview` derives it:
+   * the same merge over the Space's saves, the same rollup rules
+   * (`@/spaces/spaceProgress`, the port), the same "done means anyone" answer.
+   * A hand-authored overview fixture would have proved nothing about either.
+   */
+  getSpaceKnowledge(id: string, comments = 8): Promise<SpaceKnowledgeOverview> {
+    const facts = spaceSaveFacts(id);
+    const tree = buildTree(facts);
+    const allKeys = new Set<string>();
+    const collect = (node: (typeof tree)[number]) => {
+      node.entityKeys.forEach((key) => allKeys.add(key));
+      node.subgroups.forEach(collect);
+    };
+    tree.forEach(collect);
+
+    const states = spaceMemberStates(id, allKeys);
+    const done = doneAcrossMembers(states);
+
+    return delay(
+      copy<SpaceKnowledgeOverview>({
+        collections: tree.map((node) => withDoneCount(node, done)),
+        entityCount: allKeys.size,
+        doneCount: done.size,
+        members: rollUpMemberProgress(states),
+        recentComments: spaceComments(id, comments),
+        pins: spacePins[id] ?? [],
+      }),
+    );
+  },
+
+  /** S1: the Space-scoped merge, plus the two things the client cannot derive. */
+  listSpaceCollectionEntities(id: string, nodeId: string): Promise<SpaceEntityResponse[]> {
+    const merged = mergeNode(spaceSaveFacts(id), nodeId);
+    const states = spaceMemberStates(id, new Set(merged.map((e) => e.entityKey)));
+    return delay(
+      copy<SpaceEntityResponse[]>(
+        merged.map((entity) => {
+          const forEntity = states[entity.entityKey] ?? [];
+          return {
+            ...entity,
+            sources: entity.sources.map((source) => ({
+              ...source,
+              addedBy: MOCK_SAVE_OWNERS[source.saveId] ?? MOCK_USER_ID,
+            })),
+            state: forEntity.find((m) => m.userId === MOCK_USER_ID)?.state,
+            memberStates: forEntity,
+            commentCount: (entityComments[id] ?? []).filter(
+              (c) => c.entityKey === entity.entityKey,
+            ).length,
+          };
+        }),
+      ),
+    );
+  },
+
+  // ---------------------------------------------------- S3: entity comments
+
+  listEntityComments(id: string, entityKey: string): Promise<EntityComment[]> {
+    return delay(copy((entityComments[id] ?? []).filter((c) => c.entityKey === entityKey)));
+  },
+
+  addEntityComment(id: string, entityKey: string, body: string): Promise<EntityComment> {
+    const comment: EntityComment = {
+      id: nextId('ec'),
+      entityKey,
+      userId: MOCK_USER_ID,
+      displayName: 'Maya',
+      body,
+      createdAt: now(),
+      mine: true,
+    };
+    entityComments[id] = [...(entityComments[id] ?? []), comment];
+    return delay(copy(comment));
+  },
+
+  deleteEntityComment(id: string, commentId: string): Promise<void> {
+    entityComments[id] = (entityComments[id] ?? []).filter((c) => c.id !== commentId);
+    tomb('entity_comment', commentId);
+    return delay(undefined);
+  },
+
+  // ------------------------------------------- S4: pins and the shared list
+
+  listSpacePins: (id) => delay(copy(spacePins[id] ?? [])),
+
+  /**
+   * An upsert on `(kind, subject)`, exactly like the server's — which is what
+   * makes a double-tapped pin one pin, here as there.
+   */
+  pinInSpace(
+    id: string,
+    kind: string,
+    subject: string,
+    payload: Record<string, unknown> = {},
+  ): Promise<SpacePin> {
+    const existing = (spacePins[id] ?? []).find((p) => p.kind === kind && p.subject === subject);
+    if (existing) {
+      existing.payload = payload;
+      return delay(copy(existing));
+    }
+    const save = saves.find((s) => s.id === subject);
+    const pin: SpacePin = {
+      id: nextId('pin'),
+      kind,
+      subject,
+      label:
+        kind === 'save'
+          ? ((save?.structuredData?.title as string | undefined) ??
+            (save?.structuredData?.name as string | undefined))
+          : undefined,
+      payload,
+      createdBy: MOCK_USER_ID,
+      createdByName: 'Maya',
+      // Resolved rather than assumed, like the server's join: a pin whose save
+      // has left the Space still shows, marked unavailable, so an editor can
+      // clear it instead of it being invisibly stuck.
+      available: kind !== 'save' || save?.spaceId === id,
+      createdAt: now(),
+    };
+    spacePins[id] = [...(spacePins[id] ?? []), pin];
+    return delay(copy(pin));
+  },
+
+  unpinInSpace(id: string, pinId: string): Promise<void> {
+    spacePins[id] = (spacePins[id] ?? []).filter((p) => p.id !== pinId);
+    tomb('space_pin', pinId);
+    return delay(undefined);
+  },
+
+  getSpaceShoppingList(id: string): Promise<ShoppingListResponse> {
+    return delay(copy(spaceListFor(id)));
+  },
+
+  clearCheckedSpaceShoppingItems(id: string): Promise<{ removed: number }> {
+    const list = spaceListFor(id);
+    const removed = list.items.filter((i) => i.checked);
+    list.items = list.items.filter((i) => !i.checked);
+    removed.forEach((item) => tomb('shopping_item', item.id));
+    return delay({ removed: removed.length });
+  },
 
   setMemberRole(id: string, memberId: string, role: SpaceRole): Promise<void> {
     const member = (members[id] ?? []).find((m) => m.userId === memberId);

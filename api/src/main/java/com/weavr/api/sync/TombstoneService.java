@@ -76,7 +76,17 @@ public class TombstoneService {
     public static final String SPACE = "space";
     public static final String SPACE_MEMBER = "space_member";
     public static final String COMMENT = "comment";
+    /**
+     * S3's entity-level comment. A separate type from {@link #COMMENT} because
+     * the two live in different tables with different audiences — a save comment
+     * is addressed to everyone who can see the save (its owner included, even
+     * for a private save), an entity comment to the Space's members and nobody
+     * else.
+     */
+    public static final String ENTITY_COMMENT = "entity_comment";
     public static final String VOTE = "vote";
+    /** S4's pin. Audience is the Space's members, read before the delete. */
+    public static final String SPACE_PIN = "space_pin";
     public static final String SHOPPING_ITEM = "shopping_item";
     public static final String COLLECTION_OVERRIDE = "collection_override";
 

@@ -1,10 +1,17 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, RefreshControl, View } from 'react-native';
 
+import { ApiError } from '@/api/client';
 import type { ShoppingListItem, ShoppingListResponse } from '@/api/types';
+import { repo } from '@/data';
 import { useLiveValue } from '@/local';
-import { writeClearCheckedShoppingItems, writeShoppingItemChecked } from '@/local/writes';
+import {
+  writeClearCheckedShoppingItems,
+  writeClearCheckedSpaceShoppingItems,
+  writeShoppingItemChecked,
+  writeSpaceShoppingItemChecked,
+} from '@/local/writes';
 import { sync } from '@/local/sync';
 import { useTaskStatus } from '@/local/useSync';
 import { AppText } from '@/components/AppText';
@@ -99,29 +106,83 @@ function ItemRow({
   );
 }
 
-export function ShoppingListScreen() {
+/**
+ * The shopping list — the caller's own, or a Space's shared one (S4).
+ *
+ * @param spaceId when set, this is the Space's list: four people planning
+ *                Saturday shop from one list rather than four. The two scopes
+ *                read from different places on purpose — see below.
+ */
+export function ShoppingListScreen({ spaceId }: { spaceId?: string } = {}) {
   const { palette, radius, spacing, icon } = useTheme();
   const router = useRouter();
 
   // Reads the store, so the list is on screen before the network is asked —
   // which matters more here than anywhere else in the app: this is the one
   // screen used standing in a shop, on the worst connection the app ever sees.
-  const list = useLiveValue<ShoppingListResponse>(
+  const personal = useLiveValue<ShoppingListResponse>(
     ['shopping_items', 'kv'],
     (store) => store.readShoppingList(),
     EMPTY_LIST,
   );
+
+  /**
+   * The Space's list is an on-demand read this screen holds itself, **not** a
+   * second scope in the local store.
+   *
+   * Adding one would mean a `SCHEMA_VERSION` bump, and L5 established the rule
+   * that a bump is only for a change the local data cannot survive — never for
+   * one it can re-fetch — because a bump drops the `outbox` and with it writes
+   * the server has never seen. The ticks themselves still go through the queue,
+   * so the offline guarantee that matters (a tap made in a shop is delivered)
+   * holds either way; what a shared list gives up is painting before the
+   * network answers.
+   */
+  const [spaceList, setSpaceList] = useState<ShoppingListResponse | null>(null);
+  const [spaceError, setSpaceError] = useState<ApiError | null>(null);
+  const [loadingSpace, setLoadingSpace] = useState(false);
+
+  const loadSpaceList = useCallback(async () => {
+    if (!spaceId) return;
+    setLoadingSpace(true);
+    try {
+      setSpaceList(await repo.getSpaceShoppingList(spaceId));
+      setSpaceError(null);
+    } catch (e) {
+      setSpaceError(e instanceof ApiError ? e : null);
+    } finally {
+      setLoadingSpace(false);
+    }
+  }, [spaceId]);
+
+  const list = spaceId ? (spaceList ?? EMPTY_LIST) : personal;
   const items = list.items;
   const categories = list.categories;
 
   const task = useTaskStatus('shoppingList', items.length > 0);
-  const status: 'loading' | 'ready' | 'error' =
-    items.length > 0 ? 'ready' : task.error ? 'error' : task.firstLoad ? 'loading' : 'ready';
-  const error = task.error;
+  const status: 'loading' | 'ready' | 'error' = spaceId
+    ? spaceList
+      ? 'ready'
+      : spaceError
+        ? 'error'
+        : 'loading'
+    : items.length > 0
+      ? 'ready'
+      : task.error
+        ? 'error'
+        : task.firstLoad
+          ? 'loading'
+          : 'ready';
+  const error = spaceId ? spaceError : task.error;
+
+  const refresh = useCallback(() => {
+    if (spaceId) void loadSpaceList();
+    else void sync.syncShoppingList();
+  }, [spaceId, loadSpaceList]);
 
   useEffect(() => {
-    void sync.syncShoppingList();
-  }, []);
+    refresh();
+  }, [refresh]);
 
   /**
    * The interaction this whole layer exists for: repeated taps, standing in a
@@ -133,13 +194,42 @@ export function ShoppingListScreen() {
    * request is retried until it lands, and the only thing that can undo it is
    * the server actually rejecting it.
    */
-  const toggle = useCallback((item: ShoppingListItem) => {
-    writeShoppingItemChecked(item.id, !item.checked);
-  }, []);
+  const toggle = useCallback(
+    (item: ShoppingListItem) => {
+      if (spaceId) {
+        // The optimistic copy lives here rather than in the store, for the
+        // reason stated on `spaceList`. The queued op is the *same* one the
+        // personal list uses: an item id addresses exactly one row on exactly
+        // one list, and the server proves access per statement — which is why
+        // there is no Space variant of this endpoint anywhere.
+        setSpaceList((current) =>
+          current
+            ? {
+                ...current,
+                items: current.items.map((i) =>
+                  i.id === item.id ? { ...i, checked: !item.checked } : i,
+                ),
+              }
+            : current,
+        );
+        writeSpaceShoppingItemChecked(item.id, !item.checked);
+        return;
+      }
+      writeShoppingItemChecked(item.id, !item.checked);
+    },
+    [spaceId],
+  );
 
   const clearChecked = useCallback(() => {
+    if (spaceId) {
+      setSpaceList((current) =>
+        current ? { ...current, items: current.items.filter((i) => !i.checked) } : current,
+      );
+      writeClearCheckedSpaceShoppingItems(spaceId);
+      return;
+    }
     writeClearCheckedShoppingItems(items);
-  }, [items]);
+  }, [spaceId, items]);
 
   const checkedCount = items.filter((i) => i.checked).length;
   // Server order is already aisle-then-name, so grouping only has to preserve
@@ -150,8 +240,8 @@ export function ShoppingListScreen() {
     <Screen
       refreshControl={
         <RefreshControl
-          refreshing={task.running}
-          onRefresh={() => void sync.syncShoppingList()}
+          refreshing={spaceId ? loadingSpace : task.running}
+          onRefresh={refresh}
           tintColor={palette.accent}
           colors={[palette.accent]}
           progressBackgroundColor={palette.surface}
@@ -186,7 +276,7 @@ export function ShoppingListScreen() {
           >
             <Glyph name="chevron" size={icon.sm} />
           </Touchable>
-          <AppText variant="display">Shopping</AppText>
+          <AppText variant="display">{spaceId ? 'Shared shopping' : 'Shopping'}</AppText>
         </View>
       </Reveal>
 
@@ -205,7 +295,7 @@ export function ShoppingListScreen() {
             <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.md }}>
               {error?.message}
             </AppText>
-            <Touchable accessibilityRole="button" onPress={() => void sync.syncShoppingList()} haptic="medium">
+            <Touchable accessibilityRole="button" onPress={refresh} haptic="medium">
               <AppText variant="label" tone="accent">
                 Try again
               </AppText>
@@ -221,8 +311,9 @@ export function ShoppingListScreen() {
               Nothing to buy yet
             </AppText>
             <AppText variant="caption" tone="muted">
-              Open a saved recipe and tap “Add to shopping list”. Ingredients from several recipes
-              are combined into one list.
+              {spaceId
+                ? 'Anyone here can add a recipe from this Space to the list. Ingredients from everyone’s recipes are combined into one.'
+                : 'Open a saved recipe and tap “Add to shopping list”. Ingredients from several recipes are combined into one list.'}
             </AppText>
           </Card>
         </Reveal>

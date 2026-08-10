@@ -93,11 +93,24 @@ public class CollectionService {
      * The only thing the merge needs from a save — {@code GroupService
      * .SaveFacts} plus {@code createdAt}, which the "most common surface
      * form, ties to the earliest save" rule needs and groups never did.
+     *
+     * @param ownerId who saved it. {@code null} on every personal read, where
+     *                the answer is always "the caller" and attributing it would
+     *                put the same name on every row; set only by S1's
+     *                Space-scoped load, which is the one place several people's
+     *                saves are merged together. See
+     *                {@code docs/knowledge-spaces.md}.
      */
-    public record SaveFacts(UUID id, String knowledgeType, Map<String, Object> structuredData, Instant createdAt) {}
+    public record SaveFacts(UUID id, String knowledgeType, Map<String, Object> structuredData, Instant createdAt,
+                            UUID ownerId) {
+
+        public SaveFacts(UUID id, String knowledgeType, Map<String, Object> structuredData, Instant createdAt) {
+            this(id, knowledgeType, structuredData, createdAt, null);
+        }
+    }
 
     /** One item's appearance in one save, before merging collapses same-key occurrences together. */
-    private record Occurrence(UUID saveId, Instant savedAt, String rawName, Map<String, Object> item) {}
+    private record Occurrence(UUID saveId, Instant savedAt, String rawName, Map<String, Object> item, UUID ownerId) {}
 
     /**
      * One type's items, bucketed by entity key, plus — per entity — the
@@ -157,10 +170,8 @@ public class CollectionService {
      */
     @Transactional(readOnly = true)
     public List<CollectionEntity> entities(UUID userId, String nodeId, String facet) {
-        String resolved = facet == null || facet.isBlank()
-                ? nodeId
-                : nodeId + ID_SEPARATOR + slug(facet);
-        List<CollectionEntity> merged = mergeNode(loadReady(userId), resolved, overrides.loadFor(userId));
+        List<CollectionEntity> merged =
+                mergeNode(loadReady(userId), resolveNodeId(nodeId, facet), overrides.loadFor(userId));
         if (merged.isEmpty()) {
             return merged;
         }
@@ -168,10 +179,47 @@ public class CollectionService {
                 entityStates.statesFor(userId, merged.stream().map(CollectionEntity::entityKey).toList());
         return merged.stream()
                 .map(entity -> states.containsKey(entity.entityKey())
-                        ? new CollectionEntity(entity.entityKey(), entity.name(), entity.kind(), entity.fields(),
-                                entity.sources(), entity.sourceCount(), states.get(entity.entityKey()))
+                        ? withState(entity, states.get(entity.entityKey()))
                         : entity)
                 .toList();
+    }
+
+    /** {@link CollectionEntity} is a record, so "with one field replaced" is a rebuild. */
+    public static CollectionEntity withState(CollectionEntity entity, Map<String, Object> state) {
+        return new CollectionEntity(entity.entityKey(), entity.name(), entity.kind(), entity.fields(),
+                entity.sources(), entity.sourceCount(), state);
+    }
+
+    // ------------------------------------------------- S1: an arbitrary scope
+    //
+    // The Space-scoped endpoints (docs/knowledge-spaces.md, S1) are the same
+    // derived merge over a different save set, which is why they are two
+    // entry points here rather than a second implementation somewhere else.
+    // Membership is checked by the caller — `SpaceKnowledgeService`, which owns
+    // every other Space guard — before it ever loads a save set to pass in, so
+    // by the time a list reaches these methods every save in it is already
+    // visible to the reader and the merge introduces no new access question.
+    //
+    // Neither applies `CollectionOverrides`, deliberately: overrides are one
+    // *user's* curation (`collection_overrides.user_id`), and reshaping a
+    // shared view by one member's private renames and merges would show the
+    // group something only that member had asked for. A per-Space override
+    // table is the thing to build if this is ever wanted, not a silent reuse
+    // of the personal one.
+
+    /** S1: the collection tree over any save set — no user, no state, no overrides. */
+    public static List<CollectionNode> treeOf(List<SaveFacts> ready) {
+        return buildTree(ready, null, CollectionOverrides.EMPTY);
+    }
+
+    /** S1: the merged entities under one node of {@link #treeOf}'s tree. */
+    public static List<CollectionEntity> entitiesOf(List<SaveFacts> ready, String nodeId, String facet) {
+        return mergeNode(ready, resolveNodeId(nodeId, facet), CollectionOverrides.EMPTY);
+    }
+
+    /** K1's {@code ?facet=} narrowing is the depth-1 node under a type — one translation, two callers. */
+    private static String resolveNodeId(String nodeId, String facet) {
+        return facet == null || facet.isBlank() ? nodeId : nodeId + ID_SEPARATOR + slug(facet);
     }
 
     /** Which of the given entity keys the caller has marked {@code done: true}. */
@@ -493,7 +541,7 @@ public class CollectionService {
                 String entityKey = overrides.resolve(Entities.key(kindForKey, rawName, canonicalId));
 
                 byEntity.computeIfAbsent(entityKey, key -> new ArrayList<>())
-                        .add(new Occurrence(save.id(), save.createdAt(), rawName.trim(), item));
+                        .add(new Occurrence(save.id(), save.createdAt(), rawName.trim(), item, save.ownerId()));
 
                 // The same entity reached by two saves accumulates both saves'
                 // values, so a place named by a Japan itinerary and a Tokyo one
@@ -545,7 +593,7 @@ public class CollectionService {
             item.remove(def.nameField());
 
             byEntity.computeIfAbsent(entityKey, key -> new ArrayList<>())
-                    .add(new Occurrence(save.id(), save.createdAt(), rawName.trim(), item));
+                    .add(new Occurrence(save.id(), save.createdAt(), rawName.trim(), item, save.ownerId()));
         }
         return byEntity;
     }
@@ -654,7 +702,8 @@ public class CollectionService {
         Map<UUID, CollectionEntity.Source> bySave = new LinkedHashMap<>();
         for (Occurrence occurrence : occurrences) {
             bySave.putIfAbsent(occurrence.saveId(),
-                    new CollectionEntity.Source(occurrence.saveId(), occurrence.savedAt(), occurrence.item()));
+                    new CollectionEntity.Source(occurrence.saveId(), occurrence.savedAt(), occurrence.item(),
+                            occurrence.ownerId()));
         }
         return List.copyOf(bySave.values());
     }

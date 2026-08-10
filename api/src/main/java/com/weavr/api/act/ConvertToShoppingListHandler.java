@@ -60,7 +60,7 @@ class ConvertToShoppingListHandler implements JobHandler {
         return JobType.CONVERT_TO_SHOPPING_LIST;
     }
 
-    private record RecipeRow(UUID userId, String knowledgeType, String structuredData) {
+    private record RecipeRow(UUID userId, UUID spaceId, String knowledgeType, String structuredData) {
     }
 
     @Override
@@ -68,18 +68,26 @@ class ConvertToShoppingListHandler implements JobHandler {
         UUID saveId = job.uuidParam("saveId");
 
         RecipeRow recipe = jdbc.sql("""
-                        select user_id, knowledge_type, structured_data::text as structured_data
+                        select user_id, space_id, knowledge_type,
+                               structured_data::text as structured_data
                         from saves
                         where id = ? and status = 'ready'
                         """)
                 .param(saveId)
                 .query((rs, row) -> new RecipeRow(
                         rs.getObject("user_id", UUID.class),
+                        rs.getObject("space_id", UUID.class),
                         rs.getString("knowledge_type"),
                         rs.getString("structured_data")))
                 .optional()
                 .orElseThrow(() -> new PermanentJobException(
                         "save_not_ready", "That save is not ready to convert yet."));
+
+        // Who tapped, which is not always whose save it is: a Recipe Space's
+        // members convert each other's recipes, and the weekly Act cap is the
+        // caller's. Absent on any job enqueued before S4, where the two were
+        // necessarily the same person.
+        UUID actorId = actorOf(job, recipe.userId());
 
         if (!"recipe".equals(recipe.knowledgeType())) {
             throw new PermanentJobException("not_a_recipe",
@@ -96,7 +104,7 @@ class ConvertToShoppingListHandler implements JobHandler {
         // over-cap request: the controller check is for the user's benefit (an
         // immediate 402 instead of a job that quietly does nothing), this one is
         // for correctness. Two taps racing each other both pass the controller.
-        UsageService.Allowance allowance = usage.checkActs(recipe.userId());
+        UsageService.Allowance allowance = usage.checkActs(actorId);
         if (!allowance.allowed()) {
             throw new PermanentJobException("quota_exceeded",
                     "You've used your free shopping list this week. Upgrade for unlimited.");
@@ -114,14 +122,34 @@ class ConvertToShoppingListHandler implements JobHandler {
                     "Weavr couldn't turn that recipe into a shopping list.");
         }
 
-        lists.addFromSave(recipe.userId(), saveId, drafts);
+        // S4: a recipe that lives in a Space feeds the Space's list, not the
+        // converter's private one. The target follows the *save*, not the
+        // caller, so the same recipe always lands in the same place however
+        // many members convert it — which is what makes the re-conversion
+        // idempotency (per list, per save) hold across people as well as across
+        // retries.
+        lists.addFromSave(actorId, recipe.spaceId(), saveId, drafts);
 
         // Counting moved to UsageService when the cap became enforceable —
         // metering and enforcement reading the same period boundary from the
         // same place is the only way they can agree.
-        usage.countAct(recipe.userId());
+        usage.countAct(actorId);
 
-        log.info("Save {} converted to {} shopping list item(s)", saveId, drafts.size());
+        log.info("Save {} converted to {} shopping list item(s){}", saveId, drafts.size(),
+                recipe.spaceId() == null ? "" : " in space " + recipe.spaceId());
+    }
+
+    /** The caller, when the job carries one; the save's owner for anything enqueued before S4. */
+    static UUID actorOf(JobRecord job, UUID fallback) {
+        Object raw = job.payload().get("actorId");
+        if (raw == null) {
+            return fallback;
+        }
+        try {
+            return UUID.fromString(raw.toString());
+        } catch (IllegalArgumentException e) {
+            return fallback;
+        }
     }
 
     private List<String> ingredientsOf(String structuredDataJson) {

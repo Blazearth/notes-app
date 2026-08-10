@@ -779,8 +779,15 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
     await repo.setShoppingItemChecked(entry.payload.itemId, entry.payload.checked);
   },
 
-  async clearCheckedShoppingItems() {
-    await repo.clearCheckedShoppingItems();
+  async clearCheckedShoppingItems(entry) {
+    // Scoped, deliberately: one button that cleared the Space's list *and* the
+    // caller's own would be unrecoverable, so the two are different requests
+    // rather than one request with a wider reach.
+    if (entry.payload.spaceId) {
+      await repo.clearCheckedSpaceShoppingItems(entry.payload.spaceId);
+    } else {
+      await repo.clearCheckedShoppingItems();
+    }
   },
 
   async convertToShoppingList(entry) {
@@ -805,6 +812,36 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
 
   async setVote(entry) {
     await repo.setVote(entry.payload.saveId, entry.payload.value);
+  },
+
+  async addEntityComment(entry) {
+    // The second queued op that *creates* a row, so it carries the entry's own
+    // key for the same reason `addComment` does — a lost response followed by a
+    // retry is otherwise the difference between one remark and two identical
+    // ones.
+    await repo.addEntityComment(
+      entry.payload.spaceId,
+      entry.payload.entityKey,
+      entry.payload.body,
+      entry.idempotencyKey,
+    );
+  },
+
+  async deleteEntityComment(entry) {
+    await repo.deleteEntityComment(entry.payload.spaceId, entry.payload.commentId);
+  },
+
+  async pinInSpace(entry) {
+    await repo.pinInSpace(
+      entry.payload.spaceId,
+      entry.payload.kind,
+      entry.payload.subject,
+      entry.payload.payload,
+    );
+  },
+
+  async unpinInSpace(entry) {
+    await repo.unpinInSpace(entry.payload.spaceId, entry.payload.pinId);
   },
 };
 

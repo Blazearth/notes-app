@@ -21,6 +21,7 @@ import type {
   CreateSaveRequest,
   DigestResponse,
   DuplicateSuggestion,
+  EntityComment,
   InvitePreview,
   LifecycleStatus,
   MeResponse,
@@ -29,8 +30,11 @@ import type {
   SearchHit,
   ShoppingListResponse,
   Space,
+  SpaceEntityResponse,
   SpaceInvite,
+  SpaceKnowledgeOverview,
   SpaceMember,
+  SpacePin,
   SpaceRole,
   SyncResponse,
 } from '@/api/types';
@@ -105,6 +109,46 @@ export interface Repository {
   deleteSpace(id: string): Promise<void>;
   listSpaceSaves(id: string, page?: number, size?: number): Promise<SaveResponse[]>;
   listSpaceMembers(id: string): Promise<SpaceMember[]>;
+  /**
+   * S2: the Overview's shared half — other members' progress, the discussion
+   * block, and group-scoped done counts. Everything else on that tab is
+   * derived on-device from saves already in the store, so a failure here
+   * degrades the Overview rather than emptying it.
+   */
+  getSpaceKnowledge(id: string, comments?: number): Promise<SpaceKnowledgeOverview>;
+  /**
+   * S1: one collection node's merged entities, scoped to the Space's saves —
+   * with `addedBy` on each source and every member's state, the two things the
+   * client's own merge cannot produce.
+   */
+  listSpaceCollectionEntities(id: string, nodeId: string): Promise<SpaceEntityResponse[]>;
+  /**
+   * S3: one merged entity's discussion thread, Space-scoped.
+   *
+   * Space-scoped where `setEntityState` is global, deliberately — a status is a
+   * fact about a person, a remark was said in a room.
+   */
+  listEntityComments(id: string, entityKey: string): Promise<EntityComment[]>;
+  /** @param idempotencyKey the outbox entry's own key — this write creates a row. */
+  addEntityComment(
+    id: string,
+    entityKey: string,
+    body: string,
+    idempotencyKey?: string,
+  ): Promise<EntityComment>;
+  deleteEntityComment(id: string, commentId: string): Promise<void>;
+  /** S4: what someone chose to put at the top of this Space. Editor to write, member to read. */
+  listSpacePins(id: string): Promise<SpacePin[]>;
+  pinInSpace(
+    id: string,
+    kind: string,
+    subject: string,
+    payload?: Record<string, unknown>,
+  ): Promise<SpacePin>;
+  unpinInSpace(id: string, pinId: string): Promise<void>;
+  /** S4: the Space's shared shopping list. Item mutations are the personal ones — an item id is global. */
+  getSpaceShoppingList(id: string): Promise<ShoppingListResponse>;
+  clearCheckedSpaceShoppingItems(id: string): Promise<{ removed: number }>;
   setMemberRole(id: string, memberId: string, role: SpaceRole): Promise<void>;
   removeMember(id: string, memberId: string): Promise<void>;
   createInvite(

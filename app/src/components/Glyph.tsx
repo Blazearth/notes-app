@@ -58,6 +58,9 @@ export type GlyphName =
   | 'bookmark'
   // Multi-level collections — a folder inside a collection (Japan, Romance, Push).
   | 'folder'
+  // Knowledge-first Spaces S3/S4 — an entity's discussion, and a pinned thing.
+  | 'messageCircle'
+  | 'pin'
   // Decorative primitives — not drawn as icons in the mockup
   | 'circle'
   | 'ring'
@@ -481,6 +484,27 @@ export function Glyph({ name, size = 18, color, weight = 2, style }: GlyphProps)
         return (
           <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
             <Path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+          </StrokeIcon>
+        );
+
+      // S3: an entity's own discussion. A speech bubble rather than the
+      // 'members' icon the Space tab uses — this is what was *said*, not who
+      // is here.
+      case 'messageCircle':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M21 11.5a8.38 8.38 0 0 1-9 8.5 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.2A8.38 8.38 0 0 1 4 11.5a8.5 8.5 0 0 1 17 0Z" />
+          </StrokeIcon>
+        );
+
+      // S4: a pin — a person's choice about what leads this Space. Distinct
+      // from 'bookmark', which is one user's private curation of their own
+      // collection; this one is shared and says so by looking different.
+      case 'pin':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M15 3H9l1 4-3 3v2h10v-2l-3-3 1-4Z" />
+            <Line x1="12" y1="12" x2="12" y2="21" />
           </StrokeIcon>
         );
     }

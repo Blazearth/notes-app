@@ -106,10 +106,37 @@ than failing: it reads as a bug in the feature. Scope every read — navigate
 straight to a screen that owns its own route (`/space/{id}` gives a clean
 document), and query list items by their `aria-label` rather than by body text.
 
+**A probe against mock mode has to be one page load.** `mockRepository` is
+module-scope state that resets on reload — its own doc says so, and that is the
+right lifetime for it — so a `Page.navigate` between a write and the read that
+checks it discards exactly the thing under test. Every earlier probe here could
+reload freely because what it checked was the local *store*, which persists to
+`localStorage` on purpose. The S3/S4 run could not: entity comments, pins and the
+shared shopping list all live in the repository. So it moves the way a user does
+(tap a card, tap a tab, tap back), and where a screen's own `load()` has to run
+again it **backs out to the Spaces list and re-enters**, which remounts it. That
+is not a workaround so much as a stronger test: it exercises the affordances *and*
+proves the write reached the repository rather than only rendering where it was
+typed.
+
+**The mounted-pane trap has a second form, and it fails misleadingly.** The
+paragraph above is about *reading* the wrong pane; this is about *clicking* it.
+The shell keeps Home, Library and Spaces mounted **and** a pushed route stacks on
+top, so several elements can carry the same `aria-label` while all but one are
+invisible. A helper that takes the first match clicks a hidden pane, and because
+the element was found the failure reads as "the tap did not work" — which sends
+you debugging the handler. Filter to elements with a non-empty
+`getClientRects()` and take the **last**: the topmost screen renders later in
+document order.
+
 **React Native Web does not emit `aria-selected`.** `accessibilityState={{
 selected }}` on a `Pressable` — what `Segmented` uses for its tabs — produces
 `role="tab"` with no `aria-selected` attribute at all, so every tab reads
-`null` and a "which tab is open" assertion silently checks nothing. Assert on
+`null` and a "which tab is open" assertion silently checks nothing. **The same
+holds for `aria-checked`** (confirmed on the shopping list's
+`accessibilityRole="checkbox"` rows during the S4 run), so treat it as a
+property of `accessibilityState` generally rather than a quirk of one attribute:
+assert from rendered content, never from the attribute. Assert on
 the rendered *content* of the open tab instead; it is what the user sees, and
 it also catches a tab that is selected but renders the wrong body.
 `Segmented` now also sets an explicit `accessibilityLabel` per tab — without
@@ -164,6 +191,19 @@ list — which passed the *mock* server's crude
 assertion against code that was correct. Sampling at 180ms, before the debounce
 elapses, made the check about the local index again. Whenever two producers write
 to one surface, the timing of the read is part of the assertion.
+
+**The probe's own writes survive it, so a second run starts somewhere else.**
+`memoryStore` persists to `localStorage` on purpose (it is what makes "paints
+from cache on a second load" testable at all), and mock mode seeds it once. So a
+probe that clicks a status pill leaves that status behind: an assertion pinned to
+the exact label `"Call of the Night: Want to watch. Tap to change."` passes on a
+clean `--user-data-dir` and fails on every run after it, which reads as a
+regression in the feature. Find such a control **by prefix** and click whatever
+label it currently carries, then assert that the rendered text *changed* rather
+than that it reached a particular value. Reserve exact-label matching for
+controls the probe does not itself mutate. (Deleting the Chrome profile between
+runs also works and is worse — it throws away the only state that makes a
+second-load assertion mean anything.)
 
 **To exercise a failure path, patch the fixture and diff it back.** There is no
 way to make `mockRepository` reject from inside the page, so the technique is:
@@ -474,6 +514,21 @@ Four things worth asserting beyond "it parsed":
   table exists would have passed against a migration that forgot the primary key
   — the mechanism has to be exercised, not inventoried. Same trip, `rollback()`
   discards both inserts.
+
+A fifth, learned from V18: **a migration that *replaces* an index cannot be
+checked by name.** V18 drops V5's `shopping_lists_one_open_per_user` and creates
+a narrowed one with the identical name, so "does an index by that name exist"
+passed against both the old shape and the new one — a check that could never
+fail. Assert on `pg_indexes.indexdef` instead (`ilike`, because Postgres
+normalises the predicate to upper case). The general form: when a migration
+changes a thing rather than adding one, the assertion has to name what changed.
+
+Two more practicalities that cost time on that run. **Pass the credentials
+explicitly** — `WEAVR_FLYWAY_URL` carries no user or password (Spring supplies
+them separately), and Supavisor answers a credential-less connection with a
+confusing `no tenant identifier provided`. And **wrap a deliberate constraint
+violation in a savepoint**, or the first "assert this is rejected" check aborts
+the transaction and every check after it fails for an unrelated reason.
 
 **This does not work for `create index concurrently`** — that cannot run in a
 transaction, which is a reason to prefer the plain form in a migration unless the

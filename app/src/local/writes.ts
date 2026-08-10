@@ -173,6 +173,56 @@ export function writeClearCheckedShoppingItems(items: readonly ShoppingListItem[
   void sync.enqueue('clearCheckedShoppingItems', {}, null);
 }
 
+// ------------------------------------------------- S4: a Space's shared list
+
+/**
+ * The Space's list is **queued but not cached**, exactly like comments and
+ * votes below.
+ *
+ * The local store holds one shopping list, and adding a second scope to it
+ * would mean a `SCHEMA_VERSION` bump — which L5 established must never happen
+ * for something the local data can simply re-fetch, because a bump drops the
+ * `outbox` and with it writes the server has never seen. So the Space's list is
+ * an on-demand read the screen holds itself (the same call `SpaceDetailScreen`
+ * already makes for activity and duplicates), and what these two get from the
+ * queue is delivery: a tick made in a shop reaches the server whenever there is
+ * a network, whether or not the screen still exists.
+ *
+ * The *item* op is the personal one unchanged. An item id addresses exactly one
+ * row on exactly one list, and the server proves access per statement — so
+ * there is no Space variant to write, here or on the server.
+ */
+export function writeSpaceShoppingItemChecked(itemId: string, checked: boolean): void {
+  void sync.enqueue('setShoppingItemChecked', { itemId, checked }, itemId);
+}
+
+export function writeClearCheckedSpaceShoppingItems(spaceId: string): void {
+  void sync.enqueue('clearCheckedShoppingItems', { spaceId }, null);
+}
+
+// ------------------------------------------------------------------- S4: pins
+
+/**
+ * Pins what somebody chose to put at the top of a Space — a save as the
+ * "current program", a collection above the others.
+ *
+ * An absolute set on `(space, kind, subject)` like every other op here, which
+ * is what makes the retry harmless: the server's write is an upsert, so a
+ * replayed pin is the same one pin.
+ */
+export function writePin(
+  spaceId: string,
+  kind: string,
+  subject: string,
+  payload: Record<string, unknown> = {},
+): void {
+  void sync.enqueue('pinInSpace', { spaceId, kind, subject, payload }, `${spaceId}|${kind}|${subject}`);
+}
+
+export function writeUnpin(spaceId: string, pinId: string): void {
+  void sync.enqueue('unpinInSpace', { spaceId, pinId }, pinId);
+}
+
 // ------------------------------------------------------------- discussion
 
 /**
@@ -196,4 +246,27 @@ export function writeDeleteComment(saveId: string, commentId: string): void {
 
 export function writeVote(saveId: string, value: 1 | -1 | 0): void {
   void sync.enqueue('setVote', { saveId, value }, saveId);
+}
+
+/**
+ * S3: a remark about a merged entity rather than about whichever save mentioned
+ * it.
+ *
+ * Queued but not cached, for the same reason as the two above — `entity_comments`
+ * is not in the delta (scoping "comments I can see" is a join across Spaces for
+ * a detail-screen read), so the screen keeps its own optimistic copy. The queue
+ * is what makes a remark typed on a train arrive rather than being lost with the
+ * draft.
+ *
+ * `entityId` is the entity, not the Space: two remarks about Blue Box have to
+ * land in the order they were written, while a remark about Blue Box and one
+ * about Frieren have nothing to do with each other and must not queue behind
+ * one another's backoff.
+ */
+export function writeEntityComment(spaceId: string, entityKey: string, body: string): void {
+  void sync.enqueue('addEntityComment', { spaceId, entityKey, body }, entityKey);
+}
+
+export function writeDeleteEntityComment(spaceId: string, commentId: string): void {
+  void sync.enqueue('deleteEntityComment', { spaceId, commentId }, commentId);
 }

@@ -310,6 +310,13 @@ export interface CollectionSource {
   saveId: string;
   savedAt: string;
   item: Record<string, unknown>;
+  /**
+   * Who saved it (S1). Absent on every personal read, where the answer is
+   * always the caller — only a Space-scoped merge attributes sources, and it
+   * is the one thing on this shape the client cannot derive, because a save's
+   * owner is not on `SaveResponse`.
+   */
+  addedBy?: string;
 }
 
 /**
@@ -329,6 +336,144 @@ export interface CollectionEntityResponse {
   sourceCount: number;
   /** The caller's own K2 entity state (`done`, `rating`, …) — absent when never touched. */
   state?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge-first Spaces (S1, S2)
+// ---------------------------------------------------------------------------
+
+/**
+ * `SpaceKnowledgeService.MemberState` — one member's state for one entity.
+ *
+ * The whole `state` object, not a flag: K7's `status`
+ * (`want`/`watching`/`watched`) and a `rating` both ride here, and `done`
+ * stayed canonical so a reader that only knows the boolean is still right.
+ *
+ * **These are global states, deliberately.** `entity_states` is keyed
+ * `(user_id, entity_key)` with no Space dimension — completing Your Name is a
+ * fact about Rahul, not about any one Space — so a member's status shows in
+ * every Space whose knowledge contains that entity. The People tab says so.
+ */
+export interface SpaceMemberState {
+  userId: string;
+  displayName?: string;
+  state: Record<string, unknown>;
+}
+
+/** `SpaceKnowledgeService.MemberProgress` — "Maya: 5 watched, 2 in progress". */
+export interface SpaceMemberProgress {
+  userId: string;
+  displayName?: string;
+  doneCount: number;
+  /** Entities they have a state for that isn't done — K7's "Watching". */
+  inProgressCount: number;
+}
+
+/**
+ * `SpaceKnowledgeService.SpaceComment` — one remark in the Space, from either
+ * place discussion can attach.
+ *
+ * Exactly one of `saveId` and `entityKey` is present. S2 had only the first (a
+ * comment on one of the Space's saves); S3 added the second, a comment on a
+ * merged entity, which is where "Blue Box starts slow" actually belongs. They
+ * share one block because "what's being talked about in here" is one question,
+ * and splitting it by which table a remark landed in would ask the reader to
+ * care about a storage detail.
+ */
+export interface SpaceCommentEntry {
+  id: string;
+  saveId?: string;
+  saveTitle?: string;
+  /** S3. Set instead of `saveId` when the remark is about a merged entity. */
+  entityKey?: string;
+  /** The entity's display name, resolved server-side — an entity key is casefolded and not readable. */
+  entityName?: string;
+  userId: string;
+  displayName: string;
+  body: string;
+  createdAt: string;
+}
+
+/**
+ * `EntityCommentService.EntityComment` — S3, one message in an entity's thread.
+ *
+ * **Space-scoped, unlike `entity_states`.** A status is a fact about a person
+ * and shows in every Space containing that entity (see `SpaceMemberState`); a
+ * remark was said in a room and stays in it. Same-looking key, deliberately
+ * different storage.
+ */
+export interface EntityComment {
+  id: string;
+  entityKey: string;
+  userId: string;
+  displayName: string;
+  body: string;
+  createdAt: string;
+  /** Whether the caller wrote it — what decides if a delete affordance shows. */
+  mine: boolean;
+}
+
+/**
+ * `SpacePinService.Pin` — S4, what a person in this Space chose to put at the
+ * top.
+ *
+ * The honest version of the vision's "Current Program": a member pointed at one
+ * save, rather than the model assembling a routine out of several (which is the
+ * synthesis `docs/knowledge-collections.md` rules out, and whose failure mode is
+ * a program in a gym that no human wrote).
+ */
+export interface SpacePin {
+  id: string;
+  /** `save` or `collection`. Free text server-side, so a new kind is never a migration. */
+  kind: string;
+  /** A save id, or a collection node id (`recommendation_list~anime`). */
+  subject: string;
+  /** Resolved on read from the save's own data, never stored — a copied label goes stale on the first rename. */
+  label?: string;
+  /** The kind's own detail. A save pin's `{ date }` is how "Saturday: Lasagna" exists with no calendar feature. */
+  payload: Record<string, unknown>;
+  createdBy: string;
+  createdByName: string;
+  /** False once the pinned save has left the Space or been deleted — shown so an editor can clear it. */
+  available: boolean;
+  createdAt: string;
+}
+
+/**
+ * `GET /v1/spaces/{id}/knowledge` — what the Overview cannot derive locally.
+ *
+ * `collections` rides along so a cold visit is one request, but the client
+ * already derives the identical tree from the Space's saves (S0), which is why
+ * this response failing leaves the Overview standing rather than empty.
+ * `doneCount` here means "entities **anyone** in the Space finished" — a group
+ * fact, unlike the same field on a personal collection node.
+ */
+export interface SpaceKnowledgeOverview {
+  collections: CollectionNodeResponse[];
+  entityCount: number;
+  doneCount: number;
+  members: SpaceMemberProgress[];
+  recentComments: SpaceCommentEntry[];
+  /** S4. Rides along so the Overview stays one request, same as `collections`. */
+  pins: SpacePin[];
+}
+
+/**
+ * `SpaceKnowledgeService.SpaceEntity` — a merged entity as a Space sees it:
+ * `CollectionEntityResponse`'s fields plus everyone else's state.
+ *
+ * `state` is the viewer's own (so a control reads where it writes);
+ * `memberStates` is every member's, the viewer included — filtering them out
+ * would make "2 people watched this" quietly mean "2 *other* people".
+ */
+export interface SpaceEntityResponse extends CollectionEntityResponse {
+  memberStates: SpaceMemberState[];
+  /**
+   * S3's thread length, batched into this response rather than fetched per row
+   * — a list needs a count ("2 comments"), and the thread itself is one tap and
+   * one request away.
+   */
+  commentCount: number;
 }
 
 // ---------------------------------------------------------------------------

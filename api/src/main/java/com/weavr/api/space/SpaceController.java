@@ -43,13 +43,20 @@ class SpaceController {
     private final SaveService saves;
     private final DuplicateDetector duplicates;
     private final IdempotencyService idempotency;
+    private final SpaceKnowledgeService knowledge;
+    private final EntityCommentService entityComments;
+    private final SpacePinService pins;
 
     SpaceController(SpaceService spaces, SaveService saves, DuplicateDetector duplicates,
-                    IdempotencyService idempotency) {
+                    IdempotencyService idempotency, SpaceKnowledgeService knowledge,
+                    EntityCommentService entityComments, SpacePinService pins) {
         this.spaces = spaces;
         this.saves = saves;
         this.duplicates = duplicates;
         this.idempotency = idempotency;
+        this.knowledge = knowledge;
+        this.entityComments = entityComments;
+        this.pins = pins;
     }
 
     record CreateSpaceRequest(
@@ -78,6 +85,37 @@ class SpaceController {
     }
 
     record SetRoleRequest(SpaceRole role) {
+    }
+
+    /**
+     * S3. {@code entityKey} is in the body rather than the path for the same
+     * reason it is a query parameter on the read — see
+     * {@link #entityComments}.
+     */
+    record EntityCommentRequest(
+            @NotBlank(message = "entityKey is required")
+            String entityKey,
+            @NotBlank(message = "body is required")
+            @Size(max = 2000, message = "a comment must be 2000 characters or fewer")
+            String body) {
+    }
+
+    /**
+     * S4.
+     *
+     * @param kind    {@code save} or {@code collection} — free text against a
+     *                vocabulary in {@link SpacePinService}, so a new kind is
+     *                never a migration
+     * @param subject a save id, or a collection node id
+     * @param payload the kind's own detail, replaced wholesale on a repeat pin.
+     *                A {@code save} pin's {@code {"date": …}} is how the doc's
+     *                cooking schedule exists without a calendar feature.
+     */
+    record PinRequest(
+            String kind,
+            @NotBlank(message = "subject is required")
+            String subject,
+            Map<String, Object> payload) {
     }
 
     /**
@@ -127,6 +165,139 @@ class SpaceController {
                              @RequestParam(defaultValue = "25") int size) {
         spaces.requireMember(userId, id);
         return saves.listForSpace(id, page, size).stream().map(SaveResponse::from).toList();
+    }
+
+    // ----------------------------------------------------------- knowledge
+
+    /**
+     * S1: the Space's collection tree — the same derived merge the personal
+     * {@code GET /v1/collections} runs, over the Space's saves instead of the
+     * caller's. Node ids follow the identical scheme, so a client can hand one
+     * straight to {@link #spaceCollectionEntities} below.
+     *
+     * <p>{@code doneCount} on these nodes means "entities <em>anyone</em> in
+     * the Space has finished", not the caller's own — see
+     * {@link SpaceKnowledgeService}'s javadoc.
+     */
+    @GetMapping("/{id}/collections")
+    List<com.weavr.api.collection.CollectionNode> spaceCollections(@CurrentUser UUID userId,
+                                                                    @PathVariable UUID id) {
+        return knowledge.collections(userId, id);
+    }
+
+    /**
+     * S1 + S2: one node's merged entities, each source attributed
+     * ({@code addedBy}) and each entity carrying every member's state.
+     *
+     * <p>An unknown node returns an empty list rather than 404, matching
+     * {@code CollectionController}: the node id is derived, not stored, so
+     * "doesn't exist" and "produced nothing today" are the same answer.
+     * Membership, by contrast, is a real 404 — from {@code requireMember}.
+     */
+    @GetMapping("/{id}/collections/{nodeId}")
+    List<SpaceKnowledgeService.SpaceEntity> spaceCollectionEntities(
+            @CurrentUser UUID userId, @PathVariable UUID id, @PathVariable String nodeId,
+            @RequestParam(required = false) String facet) {
+        return knowledge.entities(userId, id, nodeId, facet);
+    }
+
+    /**
+     * S2: everything the Overview tab needs that the client cannot derive from
+     * saves it already holds — other members' progress, the discussion block,
+     * and the group-scoped done counts.
+     *
+     * <p>The collection tree rides along so a first-time visitor gets one
+     * request rather than two; a client that has the Space's saves cached
+     * derives the same tree locally and offline, and uses this only to overlay
+     * what is genuinely other people's.
+     */
+    @GetMapping("/{id}/knowledge")
+    SpaceKnowledgeService.SpaceKnowledgeOverview spaceKnowledge(
+            @CurrentUser UUID userId, @PathVariable UUID id,
+            @RequestParam(defaultValue = "8") int comments) {
+        return knowledge.overview(userId, id, comments);
+    }
+
+    // ------------------------------------------------------ entity comments
+
+    /**
+     * S3: one merged entity's thread.
+     *
+     * <p><b>The entity key rides in the query string, never in the path</b>, and
+     * that is the same call {@code PATCH /v1/entity-state} and
+     * {@code PATCH /v1/saves/{id}/item-state} both made: a key is
+     * {@code "screen:blue box"} — a colon and a space — and threading that
+     * through a path segment means encoding it correctly in every client
+     * forever. A query parameter carries it as-is.
+     */
+    @GetMapping("/{id}/entity-comments")
+    List<EntityCommentService.EntityComment> entityComments(
+            @CurrentUser UUID userId, @PathVariable UUID id,
+            @RequestParam String entityKey) {
+        return entityComments.list(userId, id, entityKey);
+    }
+
+    /**
+     * {@code Idempotency-Key} for the same reason
+     * {@code POST /v1/saves/{id}/comments} takes one: this is a queued write
+     * that <em>creates</em> a row rather than setting a value, so a retry after
+     * a lost response is the difference between one comment and two identical
+     * ones.
+     */
+    @PostMapping("/{id}/entity-comments")
+    EntityCommentService.EntityComment addEntityComment(
+            @CurrentUser UUID userId, @PathVariable UUID id,
+            @Valid @RequestBody EntityCommentRequest request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        return idempotency.execute(
+                userId, idempotencyKey, "POST /v1/spaces/{id}/entity-comments",
+                EntityCommentService.EntityComment.class,
+                () -> entityComments.add(userId, id, request.entityKey(), request.body()));
+    }
+
+    @DeleteMapping("/{id}/entity-comments/{commentId}")
+    ResponseEntity<Void> deleteEntityComment(@CurrentUser UUID userId, @PathVariable UUID id,
+                                             @PathVariable UUID commentId) {
+        entityComments.delete(userId, id, commentId);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ---------------------------------------------------------------- pins
+
+    /**
+     * S4: what someone in this Space chose to put at the top — a save as the
+     * "current program", a collection above the others.
+     *
+     * <p>Also rides along on {@code /knowledge} so the Overview stays one
+     * request; this route exists for the surfaces that want pins without the
+     * rest of it.
+     */
+    @GetMapping("/{id}/pins")
+    List<SpacePinService.Pin> pins(@CurrentUser UUID userId, @PathVariable UUID id) {
+        return pins.list(userId, id);
+    }
+
+    /**
+     * Pins something, or replaces the payload of a pin that already exists —
+     * {@code editor}, because this changes what everyone sees.
+     *
+     * <p>An upsert rather than a create, so a double tap is one pin. That is
+     * also why there is no {@code Idempotency-Key} here: the write is already
+     * idempotent on {@code (space, kind, subject)} by construction, which is a
+     * stronger guarantee than a replayed response.
+     */
+    @PostMapping("/{id}/pins")
+    SpacePinService.Pin pin(@CurrentUser UUID userId, @PathVariable UUID id,
+                            @Valid @RequestBody PinRequest request) {
+        return pins.pin(userId, id, request.kind(), request.subject(),
+                request.payload() == null ? Map.of() : request.payload());
+    }
+
+    @DeleteMapping("/{id}/pins/{pinId}")
+    ResponseEntity<Void> unpin(@CurrentUser UUID userId, @PathVariable UUID id,
+                               @PathVariable UUID pinId) {
+        pins.unpin(userId, id, pinId);
+        return ResponseEntity.noContent().build();
     }
 
     // ------------------------------------------------------------- members

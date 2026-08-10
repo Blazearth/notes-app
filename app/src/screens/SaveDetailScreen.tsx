@@ -632,11 +632,22 @@ function UnfinishedSave({ save }: { save: SaveResponse }) {
  * going shopping is the common case, and this is the screen you would do it
  * from.
  */
-function AddToShoppingList({ saveId }: { saveId: string }) {
+function AddToShoppingList({ saveId, spaceId }: { saveId: string; spaceId?: string }) {
   const { palette, radius, spacing, icon } = useTheme();
   const router = useRouter();
   const [state, setState] = useState<'idle' | 'adding' | 'added' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
+
+  /**
+   * S4: the target follows the *save*, not the caller — a recipe in a Space
+   * feeds that Space's shared list. The copy has to say so, because the
+   * difference is not visible anywhere else on this screen and "your shopping
+   * list" would be a lie about where the ingredients just went.
+   */
+  const shared = !!spaceId;
+  const listRoute = spaceId
+    ? ({ pathname: '/space/[id]/shopping-list', params: { id: spaceId } } as const)
+    : ('/shopping-list' as const);
 
   // Queued rather than awaited: the conversion is a *server* job that spends a
   // Gemini request, so nothing about waiting here told the user anything the
@@ -662,11 +673,11 @@ function AddToShoppingList({ saveId }: { saveId: string }) {
           }}
         >
           <AppText tone="onAccentContainer" style={{ flex: 1 }}>
-            Adding to your shopping list…
+            {shared ? 'Adding to the Space’s shopping list…' : 'Adding to your shopping list…'}
           </AppText>
           <Touchable
             accessibilityRole="button"
-            onPress={() => router.push('/shopping-list')}
+            onPress={() => router.push(listRoute)}
             haptic="medium"
           >
             <AppText variant="label" tone="onAccentContainer">
@@ -687,7 +698,11 @@ function AddToShoppingList({ saveId }: { saveId: string }) {
     <View style={{ marginBottom: spacing.xl }}>
       <Touchable
         accessibilityRole="button"
-        accessibilityLabel="Add this recipe to your shopping list"
+        accessibilityLabel={
+          shared
+            ? 'Add this recipe to the Space’s shopping list'
+            : 'Add this recipe to your shopping list'
+        }
         onPress={() => void add()}
         disabled={state === 'adding'}
         haptic="medium"
@@ -709,7 +724,11 @@ function AddToShoppingList({ saveId }: { saveId: string }) {
           <Glyph name="plus" size={icon.sm} weight={2} color={palette.onAccent} />
         )}
         <AppText variant="label" style={{ color: palette.onAccent }}>
-          {state === 'adding' ? 'Adding…' : 'Add to shopping list'}
+          {state === 'adding'
+            ? 'Adding…'
+            : shared
+              ? 'Add to the shared shopping list'
+              : 'Add to shopping list'}
         </AppText>
       </Touchable>
       {state === 'error' && message ? (
@@ -1003,7 +1022,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
               the fields because it is the reason to open a recipe at all. */}
           {model && save.knowledgeType === 'recipe' ? (
             <Reveal index={2}>
-              <AddToShoppingList saveId={save.id} />
+              <AddToShoppingList saveId={save.id} spaceId={save.spaceId} />
             </Reveal>
           ) : null}
 

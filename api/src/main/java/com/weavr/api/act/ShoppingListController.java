@@ -10,6 +10,7 @@ import com.weavr.api.common.NotFoundException;
 import com.weavr.api.common.QuotaExceededException;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobType;
+import com.weavr.api.space.SpaceService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,13 +37,15 @@ class ShoppingListController {
     private final JobQueue jobQueue;
     private final JdbcClient jdbc;
     private final UsageService usage;
+    private final SpaceService spaces;
 
     ShoppingListController(ShoppingListService lists, JobQueue jobQueue, JdbcClient jdbc,
-                           UsageService usage) {
+                           UsageService usage, SpaceService spaces) {
         this.lists = lists;
         this.jobQueue = jobQueue;
         this.jdbc = jdbc;
         this.usage = usage;
+        this.spaces = spaces;
     }
 
     record ItemResponse(UUID id, String name, String quantity, String unit,
@@ -68,12 +71,25 @@ class ShoppingListController {
     @PostMapping("/v1/saves/{id}/acts/shopping-list")
     @Transactional
     ResponseEntity<Map<String, String>> convert(@CurrentUser UUID userId, @PathVariable UUID id) {
-        // Ownership and readiness checked here rather than in the handler, so a
+        // Visibility and readiness checked here rather than in the handler, so a
         // bad request fails now with a status the caller can act on instead of
         // becoming a job that fails later where nobody is watching.
+        //
+        // "Visibility", not "ownership", since S4: a Recipe Space's members
+        // convert each other's recipes into the Space's shared list, so the rule
+        // is the save's own — yours, or in a Space you are in — exactly what
+        // `SaveSocialService.requireVisible` allows for commenting on it.
         String knowledgeType = jdbc
-                .sql("select knowledge_type from saves where id = ? and user_id = ? and status = 'ready'")
+                .sql("""
+                        select s.knowledge_type
+                        from saves s
+                        where s.id = ? and s.status = 'ready'
+                          and (s.user_id = ?
+                               or exists (select 1 from space_members m
+                                          where m.space_id = s.space_id and m.user_id = ?))
+                        """)
                 .param(id)
+                .param(userId)
                 .param(userId)
                 .query(String.class)
                 .optional()
@@ -95,10 +111,12 @@ class ShoppingListController {
 
         // Keyed by save, so a double tap enqueues one conversion. The handler is
         // separately idempotent per (list, save), which covers a retry that
-        // lands after the first job already finished.
+        // lands after the first job already finished. `actorId` rides in the
+        // payload because the weekly cap is the caller's, and since S4 the
+        // caller need not be the save's owner.
         jobQueue.enqueueForUser(
                 JobType.CONVERT_TO_SHOPPING_LIST,
-                Map.of("saveId", id.toString()),
+                Map.of("saveId", id.toString(), "actorId", userId.toString()),
                 JobType.CONVERT_TO_SHOPPING_LIST + ":" + id,
                 userId);
 
@@ -107,7 +125,25 @@ class ShoppingListController {
 
     @GetMapping("/v1/shopping-list")
     ShoppingListResponse get(@CurrentUser UUID userId) {
-        ShoppingListService.ShoppingList list = lists.get(userId);
+        return respond(lists.get(userId, null));
+    }
+
+    /**
+     * S4: the Space's own list, which any member reads and any member ticks off.
+     *
+     * <p>Hung off the Space rather than taking a {@code ?spaceId=} on the
+     * personal route, because these are two lists and not two views of one — the
+     * mutations below are shared (an item id addresses exactly one row on
+     * exactly one list, and the service proves access per statement), but
+     * <em>which list</em> is a property of the resource, not a filter on it.
+     */
+    @GetMapping("/v1/spaces/{spaceId}/shopping-list")
+    ShoppingListResponse getForSpace(@CurrentUser UUID userId, @PathVariable UUID spaceId) {
+        spaces.requireMember(userId, spaceId);
+        return respond(lists.get(userId, spaceId));
+    }
+
+    private ShoppingListResponse respond(ShoppingListService.ShoppingList list) {
         return new ShoppingListResponse(
                 list.id(),
                 list.items().stream()
@@ -133,6 +169,17 @@ class ShoppingListController {
     /** "I've been shopping" — drops everything ticked off, keeps the rest. */
     @DeleteMapping("/v1/shopping-list/checked")
     Map<String, Integer> clearChecked(@CurrentUser UUID userId) {
-        return Map.of("removed", lists.clearChecked(userId));
+        return Map.of("removed", lists.clearChecked(userId, null));
+    }
+
+    /**
+     * The same, on a Space's list. A separate route rather than a parameter for
+     * the same reason as the read — and because scoping matters most here: one
+     * button that cleared both lists would be unrecoverable.
+     */
+    @DeleteMapping("/v1/spaces/{spaceId}/shopping-list/checked")
+    Map<String, Integer> clearCheckedForSpace(@CurrentUser UUID userId, @PathVariable UUID spaceId) {
+        spaces.requireMember(userId, spaceId);
+        return Map.of("removed", lists.clearChecked(userId, spaceId));
     }
 }

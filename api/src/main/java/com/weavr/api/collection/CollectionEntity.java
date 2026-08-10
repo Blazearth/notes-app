@@ -27,7 +27,10 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *                     so a new item field needs no change here.
  * @param sources      every source's own, un-merged copy of the item —
  *                     {@code reason} attributed to Reel A is never blended
- *                     with {@code reason} from Reel B
+ *                     with {@code reason} from Reel B. In a Space-scoped merge
+ *                     each source also carries {@code addedBy} (S1) — "saved by
+ *                     Maya" — which the personal endpoints omit, because there
+ *                     it would name the caller on every row.
  * @param sourceCount  distinct saves this entity appears in — "recommended in
  *                     3 saves", literally, not a synthetic confidence score
  * @param state        the caller's own K2 entity state ({@code done},
@@ -47,5 +50,21 @@ public record CollectionEntity(
         int sourceCount,
         Map<String, Object> state) {
 
-    public record Source(UUID saveId, Instant savedAt, Map<String, Object> item) {}
+    /**
+     * One save's own copy of the item.
+     *
+     * @param addedBy who saved it — {@code null}, and so absent on the wire, on
+     *                every personal read. It is only ever non-null for a
+     *                Space-scoped merge ({@code docs/knowledge-spaces.md}, S1),
+     *                where "who put this here" is the whole point and comes
+     *                free from the saves already carrying {@code user_id}.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Source(UUID saveId, Instant savedAt, Map<String, Object> item, UUID addedBy) {
+
+        /** Personal reads: attribution would name the caller on every row. */
+        public Source(UUID saveId, Instant savedAt, Map<String, Object> item) {
+            this(saveId, savedAt, item, null);
+        }
+    }
 }

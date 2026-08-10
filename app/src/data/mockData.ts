@@ -212,6 +212,8 @@ export const MOCK_SAVES: SaveResponse[] = [
     id: 'sv-03',
     sourceType: 'url',
     sourceUrl: 'https://www.instagram.com/reel/miso-ramen',
+    // S4: in the Recipe Space, so its ingredients feed the shared list.
+    spaceId: 'sp-cook',
     status: 'ready',
     favorite: true,
     archived: false,
@@ -248,6 +250,7 @@ export const MOCK_SAVES: SaveResponse[] = [
     id: 'sv-04',
     sourceType: 'url',
     sourceUrl: 'https://www.tiktok.com/@sourdough/video/starter-guide',
+    spaceId: 'sp-cook',
     status: 'ready',
     favorite: false,
     archived: false,
@@ -940,6 +943,23 @@ export const MOCK_SPACES: Space[] = [
     createdAt: daysAgo(40),
     lastActivityAt: daysAgo(9),
   },
+  /**
+   * S4's fixture: the "Recipe Space" the doc's shared-shopping-list section is
+   * about. Two members' recipes, one of each ingredient shape, so converting
+   * both exercises the merge across *people* — which is the only thing S4 added
+   * to a fold that already merged across recipes.
+   */
+  {
+    id: 'sp-cook',
+    name: 'Sunday Cooking',
+    type: 'general',
+    ownerId: MOCK_USER_ID,
+    myRole: 'owner',
+    memberCount: 2,
+    saveCount: 2,
+    createdAt: daysAgo(11),
+    lastActivityAt: daysAgo(1),
+  },
 ];
 
 export const MOCK_MEMBERS: Record<string, SpaceMember[]> = {
@@ -957,6 +977,10 @@ export const MOCK_MEMBERS: Record<string, SpaceMember[]> = {
   'sp-book': [
     { userId: 'mock-user-sam', displayName: 'Sam', role: 'owner', joinedAt: daysAgo(40) },
     { userId: MOCK_USER_ID, displayName: 'Maya', role: 'editor', joinedAt: daysAgo(38) },
+  ],
+  'sp-cook': [
+    { userId: MOCK_USER_ID, displayName: 'Maya', role: 'owner', joinedAt: daysAgo(11) },
+    { userId: 'mock-user-sam', displayName: 'Sam', role: 'editor', joinedAt: daysAgo(11) },
   ],
 };
 
@@ -984,6 +1008,57 @@ export const MOCK_COMMENTS: Record<string, SaveComment[]> = {
   'sv-03': [
     { id: 'cm-3', userId: 'mock-user-ana', displayName: 'Ana', body: 'Doubled the garlic, no regrets.', createdAt: daysAgo(1), mine: false },
   ],
+  // S2's discussion block reads comments across a Space's saves, so a Space
+  // whose knowledge merges needs one to have anything to show.
+  'sv-11': [
+    { id: 'cm-4', userId: 'mock-user-sam', displayName: 'Sam', body: 'Blue Box gets good around ep 4 — push through the first three.', createdAt: hoursAgo(5), mine: false },
+  ],
+};
+
+/**
+ * Who saved what (S1's `addedBy`).
+ *
+ * Not a field on `SaveResponse` — the server reads `saves.user_id`, which the
+ * payload deliberately does not carry, which is exactly why the client cannot
+ * derive Space-scoped attribution and S1 exists. Kept as a side table *here*
+ * only, because the mock has no `saves.user_id` to read either; anything not
+ * listed is the signed-in user's own.
+ */
+export const MOCK_SAVE_OWNERS: Record<string, string> = {
+  'sv-11': 'mock-user-sam',
+  'sv-12': MOCK_USER_ID,
+  'sv-02': 'mock-user-sam',
+  'sv-06': 'mock-user-ana',
+  'sv-10': MOCK_USER_ID,
+  // S4: the sourdough recipe is Sam's, so the Recipe Space's shared list is fed
+  // by two different people rather than by one person twice.
+  'sv-03': MOCK_USER_ID,
+  'sv-04': 'mock-user-sam',
+};
+
+/**
+ * Other members' entity states (S2), keyed by entity key then user id.
+ *
+ * The signed-in user's own states live in `mockRepository`'s mutable
+ * `entityStates` — these are the ones a tap can never change, which is the
+ * point: without them the shared watchlist looks exactly like the personal
+ * one and "Watching by Sam" is untestable.
+ *
+ * Keys are `Entities.key(kind, name)` output — `anime` namespaces to `screen`,
+ * and the name is casefolded with a leading article stripped, which is why
+ * "The Fragrant Flower…" keys without its "the".
+ */
+export const MOCK_MEMBER_ENTITY_STATES: Record<string, Record<string, Record<string, unknown>>> = {
+  'screen:blue box': {
+    'mock-user-sam': { status: 'watched', done: true, rating: 5 },
+    'mock-user-ana': { status: 'watching', done: false },
+  },
+  'screen:call of the night': {
+    'mock-user-sam': { status: 'watching', done: false },
+  },
+  'screen:fragrant flower blooms with dignity': {
+    'mock-user-ana': { status: 'watched', done: true },
+  },
 };
 
 export const MOCK_SHOPPING_LIST: ShoppingListResponse = {

@@ -7,12 +7,18 @@ import { ApiError } from '@/api/client';
 import { repo } from '@/data';
 import { useLive, useLiveValue } from '@/local';
 import { sync } from '@/local/sync';
+import { writePin, writeUnpin } from '@/local/writes';
 import type {
   ActivityEntry,
   DuplicateSuggestion,
   SaveResponse,
+  ShoppingListResponse,
   Space,
+  SpaceCommentEntry,
+  SpaceKnowledgeOverview,
   SpaceMember,
+  SpaceMemberProgress,
+  SpacePin,
 } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Avatar } from '@/components/Avatar';
@@ -25,7 +31,7 @@ import { SectionLabel } from '@/components/SectionLabel';
 import { Segmented } from '@/components/Segmented';
 import { Touchable } from '@/components/Touchable';
 import { collectionTypeMeta } from '@/collections/collectionMeta';
-import { relativeTime } from '@/saves/format';
+import { relativeTime, saveTitle } from '@/saves/format';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { spaceIdentity } from '@/spaces/spaceMeta';
 import { buildSpaceOverview, spaceDefaultTab, type SpaceOverview } from '@/spaces/spaceOverview';
@@ -159,25 +165,51 @@ function StatTile({ value, label }: { value: number; label: string }) {
 /**
  * A derived collection, as a summary row.
  *
- * **Not tappable, on purpose.** The merged entity list behind this row is S2,
- * and the existing `/collection/[type]` screen renders the *viewer's whole
- * library*, not this Space — sending a Space's row there would show a
- * different set of entities under the Space's heading. A row that goes nowhere
- * is better than one that goes somewhere wrong; it becomes tappable when the
- * Space-scoped list exists to receive it.
+ * **Tappable as of S1**, and it was deliberately inert before that. The row
+ * used to have nowhere honest to go: `/collection/[type]` renders the viewer's
+ * *whole library*, so a Space's row would have shown a different set of
+ * entities under the Space's heading, and an affordance that goes somewhere
+ * wrong is worse than none. `/space/[id]/collection/[nodeId]` is the
+ * Space-scoped list it was waiting for.
+ *
+ * `doneCount` here counts entities *anyone* in the Space has finished — the
+ * group fact S0 refused to show because only the viewer's own was available.
  */
-function CollectionSummaryRow({ summary }: { summary: SpaceOverview['collections'][number] }) {
-  const { radius, spacing } = useTheme();
+function CollectionSummaryRow({
+  summary,
+  doneCount,
+  pinned,
+  canEdit,
+  onPress,
+  onTogglePin,
+}: {
+  summary: SpaceOverview['collections'][number];
+  doneCount: number;
+  pinned: boolean;
+  canEdit: boolean;
+  onPress: () => void;
+  onTogglePin: () => void;
+}) {
+  const { palette, radius, spacing, icon } = useTheme();
   const typeMeta = saveTypeMeta(summary.type);
   const collMeta = collectionTypeMeta(summary.type);
   const counts = [
     `${summary.entityCount} ${collMeta.entityNoun(summary.entityCount)}`,
     `${summary.sourceCount} ${summary.sourceCount === 1 ? 'source' : 'sources'}`,
-  ].join(' · ');
+    doneCount > 0 ? `${doneCount} ${collMeta.doneNoun}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
-    <Card radius={radius.md}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
+    <Card padding={0} radius={radius.md}>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel={`${summary.name}, ${counts}`}
+        onPress={onPress}
+        haptic="selection"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd, padding: spacing.md }}
+      >
         <View
           style={{
             width: 36,
@@ -197,6 +229,191 @@ function CollectionSummaryRow({ summary }: { summary: SpaceOverview['collections
           <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
             {counts}
           </AppText>
+        </View>
+        <View style={{ transform: [{ scaleX: -1 }] }}>
+          <Glyph name="chevron" size={icon.sm} color={palette.textFaint} />
+        </View>
+      </Touchable>
+      {/* S4: a pin on a collection is a Space that has several saying which one
+          leads. A viewer sees the ordering it produces but no control — pinning
+          changes what everybody sees, so it takes editor, the same bar as
+          adding content. */}
+      {canEdit ? (
+        <Touchable
+          accessibilityRole="button"
+          accessibilityState={{ selected: pinned }}
+          accessibilityLabel={pinned ? `Unpin ${summary.name}` : `Pin ${summary.name} to the top`}
+          onPress={onTogglePin}
+          haptic="selection"
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            padding: spacing.sm,
+          }}
+        >
+          <Glyph name="pin" size={13} weight={2} color={pinned ? palette.accent : palette.textFaint} />
+        </Touchable>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * One member's line in the shared-progress block — S2.
+ *
+ * Only members who have actually touched something appear. A roster with a
+ * zero beside everyone who has not started reads as a scoreboard nobody asked
+ * to be on; a list of who is participating reads as the group moving.
+ */
+function MemberProgressRow({ progress }: { progress: SpaceMemberProgress }) {
+  const { spacing } = useTheme();
+  const parts = [
+    progress.doneCount > 0 ? `${progress.doneCount} done` : null,
+    progress.inProgressCount > 0 ? `${progress.inProgressCount} in progress` : null,
+  ].filter(Boolean);
+
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.smd,
+        paddingVertical: spacing.xs,
+      }}
+    >
+      <Avatar id={progress.userId} name={progress.displayName} size={26} />
+      <AppText variant="bodySmall" style={{ flex: 1 }} numberOfLines={1}>
+        {progress.displayName ?? 'A Weavr user'}
+      </AppText>
+      <AppText variant="caption" tone="muted">
+        {parts.join(' · ')}
+      </AppText>
+    </View>
+  );
+}
+
+/**
+ * The discussion block — the latest comments across the Space's saves.
+ *
+ * S0 left this out rather than approximating it from the activity feed's
+ * `commented` rows, because surfacing real discussion would have cost one
+ * request per save; S2's single indexed query is what makes it affordable.
+ * Save-scoped, not entity-scoped: a remark attached to Blue Box rather than to
+ * whichever Reel mentioned it is S3, and only if usage pulls for it.
+ */
+/**
+ * @param onPress absent for an entity comment, and deliberately: the row would
+ *                have nowhere honest to go. An entity key does not name a
+ *                collection node, so routing to one would be a guess, and
+ *                "an affordance that goes somewhere wrong is worse than none"
+ *                is the rule this screen already followed when the collection
+ *                row was inert through S0.
+ */
+function CommentRow({ comment, onPress }: { comment: SpaceCommentEntry; onPress?: () => void }) {
+  const { spacing } = useTheme();
+  // S3 put a second kind of remark in this block: one about a merged entity
+  // rather than about a save. They share the block because "what's being
+  // talked about in here" is one question — splitting it would ask the reader
+  // to care about which table a remark landed in.
+  const subject = comment.entityName ?? comment.saveTitle;
+  const body = (
+    <>
+      <Avatar id={comment.userId} name={comment.displayName} size={26} />
+      <View style={{ flex: 1 }}>
+        <AppText variant="bodySmall" numberOfLines={2}>
+          {comment.body}
+        </AppText>
+        <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
+          {comment.displayName}
+          {subject ? ` on ${subject}` : ''} · {relativeTime(comment.createdAt)}
+        </AppText>
+      </View>
+    </>
+  );
+  const style = { paddingVertical: spacing.sm, flexDirection: 'row' as const, gap: spacing.smd };
+
+  if (!onPress) {
+    return <View style={style}>{body}</View>;
+  }
+  return (
+    <Touchable
+      accessibilityRole="button"
+      accessibilityLabel={`${comment.displayName} on ${subject ?? 'a source'}: ${comment.body}`}
+      onPress={onPress}
+      haptic="selection"
+      style={style}
+    >
+      {body}
+    </Touchable>
+  );
+}
+
+/**
+ * S4 — what somebody chose to put at the top of this Space.
+ *
+ * The honest version of the vision's "Current Program". A merged program
+ * assembled by the model from several push-day saves is synthesis
+ * (`docs/knowledge-collections.md`'s shape 3, ruled out), and its failure mode
+ * is a routine in a gym that no human wrote. This says who chose it, because
+ * that is the whole difference.
+ */
+function PinCard({
+  pin,
+  canEdit,
+  onOpen,
+  onUnpin,
+}: {
+  pin: SpacePin;
+  canEdit: boolean;
+  onOpen: () => void;
+  onUnpin: () => void;
+}) {
+  const { palette, radius, spacing } = useTheme();
+  const scheduled = typeof pin.payload?.date === 'string' ? (pin.payload.date as string) : null;
+
+  return (
+    <Card padding={0} radius={radius.md}>
+      <View style={{ padding: spacing.md, gap: spacing.sm }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}>
+          <Glyph name="pin" size={15} weight={2} color={palette.accent} />
+          <View style={{ flex: 1 }}>
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${pin.label ?? 'the pinned item'}`}
+              onPress={onOpen}
+              haptic="selection"
+              disabled={!pin.available}
+            >
+              <AppText variant="cardTitle" numberOfLines={1}>
+                {pin.label ?? pin.subject}
+              </AppText>
+            </Touchable>
+            <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
+              {[
+                `Pinned by ${pin.createdByName}`,
+                scheduled ? `for ${scheduled}` : null,
+                // Shown rather than hidden: a pin whose save has left the Space
+                // is a thing an editor needs to see in order to clear it, and
+                // filtering it out would leave a row nobody can reach.
+                pin.available ? null : 'no longer in this Space',
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </AppText>
+          </View>
+          {canEdit ? (
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={`Unpin ${pin.label ?? pin.subject}`}
+              onPress={onUnpin}
+              haptic="medium"
+            >
+              <AppText variant="caption" tone="muted">
+                Unpin
+              </AppText>
+            </Touchable>
+          ) : null}
         </View>
       </View>
     </Card>
@@ -237,6 +454,25 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   const [picked, setPicked] = useState<TabValue | null>(null);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [duplicates, setDuplicates] = useState<DuplicateSuggestion[]>([]);
+  /**
+   * S2's shared half. `null` until it lands, and it may never land — the
+   * Overview's stats and collection rows are derived from saves already in
+   * the store, so a failure here removes two sections rather than the tab.
+   */
+  const [knowledge, setKnowledge] = useState<SpaceKnowledgeOverview | null>(null);
+  /**
+   * S4's pins, held separately from `knowledge` so a pin or unpin shows
+   * immediately rather than waiting for a refetch that offline never arrives.
+   * Seeded from the same response — `getSpaceKnowledge` carries them so the
+   * Overview stays one request.
+   */
+  const [pins, setPins] = useState<SpacePin[]>([]);
+  /**
+   * S4's shared list, as a count only. The list itself lives on its own route;
+   * what the Overview owes is the fact that there *is* one and how much is
+   * outstanding, which is the thing that makes anyone open it.
+   */
+  const [sharedList, setSharedList] = useState<ShoppingListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [invite, setInvite] = useState<string | null>(null);
@@ -272,13 +508,20 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   const load = useCallback(async () => {
     // `pullSpace` writes the Space, its saves and its members into the store;
     // the three `useLiveValue`s above pick that up on their own.
-    const [detail, a, d] = await Promise.allSettled([
+    const [detail, a, d, k, s] = await Promise.allSettled([
       sync.pullSpace(spaceId),
       repo.getSpaceActivity(spaceId),
       repo.listDuplicates(spaceId),
+      repo.getSpaceKnowledge(spaceId),
+      repo.getSpaceShoppingList(spaceId),
     ] as const);
     if (a.status === 'fulfilled') setActivity(a.value);
     if (d.status === 'fulfilled') setDuplicates(d.value);
+    if (k.status === 'fulfilled') {
+      setKnowledge(k.value);
+      setPins(k.value.pins ?? []);
+    }
+    if (s.status === 'fulfilled') setSharedList(s.value);
     // Only fatal when there is nothing cached to show instead.
     if (detail.status === 'rejected') {
       setError(detail.reason instanceof ApiError ? detail.reason.message : 'Could not load this Space.');
@@ -306,6 +549,42 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
     [saves, space?.memberCount],
   );
   const tab: TabValue = picked ?? spaceDefaultTab(overview);
+
+  /**
+   * Group done counts, per collection, from the server's own Space-scoped
+   * tree — looked up by node id rather than by position, so a collection the
+   * local derivation has and the server does not (a save that has synced here
+   * but not there, or the reverse) simply shows no count instead of borrowing
+   * a neighbour's.
+   */
+  const doneByCollection = useMemo(() => {
+    const counts = new Map<string, number>();
+    (knowledge?.collections ?? []).forEach((node) => counts.set(node.id, node.doneCount));
+    return counts;
+  }, [knowledge]);
+  /**
+   * S4's two pin kinds, split by what they do to the screen: a save pin leads
+   * the tab with a card, a collection pin only reorders the list it is already
+   * in (K6's rule that nothing is listed twice on one screen).
+   */
+  const pinnedSaves = useMemo(() => pins.filter((pin) => pin.kind === 'save'), [pins]);
+  const pinnedCollections = useMemo(
+    () => new Set(pins.filter((pin) => pin.kind === 'collection').map((pin) => pin.subject)),
+    [pins],
+  );
+  const sortedCollections = useMemo(
+    () =>
+      [...overview.collections].sort(
+        (a, b) => Number(pinnedCollections.has(b.type)) - Number(pinnedCollections.has(a.type)),
+      ),
+    [overview.collections, pinnedCollections],
+  );
+  const pinnedSaveIds = useMemo(
+    () => new Set(pinnedSaves.map((pin) => pin.subject)),
+    [pinnedSaves],
+  );
+  const outstandingCount = (sharedList?.items ?? []).filter((item) => !item.checked).length;
+
   /** "Titles" reads better than "Items" when there is exactly one collection to name. */
   const entityLabel =
     overview.collections.length === 1
@@ -326,6 +605,42 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       setError(e instanceof ApiError ? e.message : 'Could not create an invite.');
     }
   }, [spaceId]);
+
+  /**
+   * S4: pinning and unpinning, optimistic and queued.
+   *
+   * The local id for a pin the server has not confirmed is `pending:` prefixed
+   * — the same convention `Discussion` uses — and the next successful load
+   * replaces it with the real row. There is no rollback, per `@/local/writes`:
+   * a write the server rejects is surfaced on Settings rather than silently
+   * undone.
+   */
+  const togglePin = useCallback(
+    (kind: string, subject: string, label?: string) => {
+      const existing = pins.find((p) => p.kind === kind && p.subject === subject);
+      if (existing) {
+        setPins((current) => current.filter((p) => p.id !== existing.id));
+        if (!existing.id.startsWith('pending:')) writeUnpin(spaceId, existing.id);
+        return;
+      }
+      setPins((current) => [
+        ...current,
+        {
+          id: `pending:${Date.now()}`,
+          kind,
+          subject,
+          label,
+          payload: {},
+          createdBy: 'me',
+          createdByName: 'You',
+          available: true,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      writePin(spaceId, kind, subject);
+    },
+    [spaceId, pins],
+  );
 
   const onCopy = useCallback(async () => {
     if (!invite) return;
@@ -482,14 +797,137 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
                 ) : null}
               </View>
 
+              {/* S4: pinned saves lead the tab, because that is what a pin
+                  means. A pinned *collection* does not get a card of its own —
+                  it sorts to the top of the list below instead, since it
+                  already has a row there and two rows for one thing is the
+                  no-listing-twice rule K6 established. */}
+              {pinnedSaves.length > 0 ? (
+                <View style={{ marginTop: spacing.xl }}>
+                  <SectionLabel>Pinned</SectionLabel>
+                  <View style={{ gap: spacing.sm }}>
+                    {pinnedSaves.map((pin) => (
+                      <PinCard
+                        key={pin.id}
+                        pin={pin}
+                        canEdit={!!canEdit}
+                        onOpen={() =>
+                          router.push({ pathname: '/save/[id]', params: { id: pin.subject } })
+                        }
+                        onUnpin={() => togglePin(pin.kind, pin.subject)}
+                      />
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+
               {overview.collections.length > 0 ? (
                 <View style={{ marginTop: spacing.xl }}>
                   <SectionLabel>What the group is collecting</SectionLabel>
                   <View style={{ gap: spacing.sm }}>
-                    {overview.collections.map((summary) => (
-                      <CollectionSummaryRow key={summary.type} summary={summary} />
+                    {sortedCollections.map((summary) => (
+                      <CollectionSummaryRow
+                        key={summary.type}
+                        summary={summary}
+                        doneCount={doneByCollection.get(summary.type) ?? 0}
+                        pinned={pinnedCollections.has(summary.type)}
+                        canEdit={!!canEdit}
+                        onTogglePin={() => togglePin('collection', summary.type, summary.name)}
+                        onPress={() =>
+                          router.push({
+                            pathname: '/space/[id]/collection/[nodeId]',
+                            params: { id: spaceId, nodeId: summary.type },
+                          })
+                        }
+                      />
                     ))}
                   </View>
+                </View>
+              ) : null}
+
+              {/* S4: the shared shopping list. Shown only once it has something
+                  on it — a Space with no recipes in it does not need to be told
+                  it could have a shopping list, and an empty row promising a
+                  feature is the kind of scaffolding the sample-content sweep
+                  removed everywhere else. */}
+              {sharedList && sharedList.items.length > 0 ? (
+                <View style={{ marginTop: spacing.xl }}>
+                  <SectionLabel>Shared shopping list</SectionLabel>
+                  <Card padding={0} radius={radius.md}>
+                    <Touchable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Shared shopping list, ${outstandingCount} of ${sharedList.items.length} still to buy`}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/space/[id]/shopping-list',
+                          params: { id: spaceId },
+                        })
+                      }
+                      haptic="selection"
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: spacing.smd,
+                        padding: spacing.md,
+                      }}
+                    >
+                      <Glyph name="utensils" size={16} weight={2} color={palette.accent} />
+                      <View style={{ flex: 1 }}>
+                        <AppText variant="cardTitle">
+                          {outstandingCount} still to buy
+                        </AppText>
+                        <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
+                          {sharedList.items.length}{' '}
+                          {sharedList.items.length === 1 ? 'line' : 'lines'}, from everyone&rsquo;s
+                          recipes in here
+                        </AppText>
+                      </View>
+                      <View style={{ transform: [{ scaleX: -1 }] }}>
+                        <Glyph name="chevron" size={14} color={palette.textFaint} />
+                      </View>
+                    </Touchable>
+                  </Card>
+                </View>
+              ) : null}
+
+              {/* S2: where everyone has got to. Absent, not zeroed, when the
+                  request has not landed or nobody has marked anything — an
+                  empty progress block is a claim that nothing is happening,
+                  which is different from not knowing. */}
+              {knowledge && knowledge.members.length > 0 ? (
+                <View style={{ marginTop: spacing.xl }}>
+                  <SectionLabel>Where everyone is</SectionLabel>
+                  <Card>
+                    {knowledge.members.map((member) => (
+                      <MemberProgressRow key={member.userId} progress={member} />
+                    ))}
+                    <AppText variant="caption" tone="muted" style={{ marginTop: spacing.sm }}>
+                      Progress is shared with everyone in this Space.
+                    </AppText>
+                  </Card>
+                </View>
+              ) : null}
+
+              {knowledge && knowledge.recentComments.length > 0 ? (
+                <View style={{ marginTop: spacing.xl }}>
+                  <SectionLabel>Recent discussion</SectionLabel>
+                  <Card>
+                    {knowledge.recentComments.map((comment) => (
+                      <CommentRow
+                        key={comment.id}
+                        comment={comment}
+                        onPress={
+                          comment.saveId
+                            ? () =>
+                                router.push({
+                                  pathname: '/save/[id]',
+                                  params: { id: comment.saveId as string },
+                                })
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </Card>
                 </View>
               ) : null}
 
@@ -536,11 +974,53 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
                   processing or without a bespoke layout, so the Space feed
                   needs no branch of its own. */}
               {saves.map((save) => (
-                <SaveCard
-                  key={save.id}
-                  save={save}
-                  onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
-                />
+                <View key={save.id}>
+                  <SaveCard
+                    save={save}
+                    onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
+                  />
+                  {/* S4: where a "current program" is actually chosen. Under the
+                      card rather than inside it, because `SaveCard` is shared
+                      with Home, Library and search, and a Space-only action
+                      does not belong in the component all four render. */}
+                  {canEdit ? (
+                    <Touchable
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: pinnedSaveIds.has(save.id) }}
+                      accessibilityLabel={
+                        pinnedSaveIds.has(save.id)
+                          ? `Unpin ${saveTitle(save)}`
+                          : `Pin ${saveTitle(save)} to the top of this Space`
+                      }
+                      onPress={() =>
+                        togglePin('save', save.id, saveTitle(save))
+                      }
+                      haptic="selection"
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        alignSelf: 'flex-start',
+                        gap: spacing.xs,
+                        paddingVertical: spacing.xs,
+                        paddingHorizontal: spacing.xs,
+                      }}
+                    >
+                      <Glyph
+                        name="pin"
+                        size={12}
+                        weight={2}
+                        color={pinnedSaveIds.has(save.id) ? palette.accent : palette.textFaint}
+                      />
+                      <AppText
+                        variant="caption"
+                        tone={pinnedSaveIds.has(save.id) ? 'accent' : 'muted'}
+                        style={{ fontSize: 11 }}
+                      >
+                        {pinnedSaveIds.has(save.id) ? 'Pinned' : 'Pin'}
+                      </AppText>
+                    </Touchable>
+                  ) : null}
+                </View>
               ))}
             </View>
           )}
@@ -628,6 +1108,23 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
               </Card>
             ))}
           </View>
+
+          {/*
+            The S2 disclosure decision, stated rather than discovered.
+
+            `entity_states` is per `(user_id, entity_key)` and global — there is
+            no Space dimension, because completing Your Name is a fact about the
+            person, not about a room they happen to be in. The consequence is
+            real and worth naming: something marked watched from a private
+            library shows as watched in any Space whose knowledge contains it.
+            Sharing progress is what a shared watchlist is *for*, and the
+            alternative — forking state per Space — fragments the single fact
+            the entity layer exists to keep whole. So it is shown, and said.
+          */}
+          <AppText variant="caption" tone="muted" style={{ marginTop: spacing.lg }}>
+            Everyone here can see what you&rsquo;ve marked watched, visited or done on this
+            Space&rsquo;s shared lists — including things you marked from your own library.
+          </AppText>
         </Reveal>
       ) : null}
 

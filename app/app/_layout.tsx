@@ -62,7 +62,27 @@ function Routes() {
           }}
         />
         <Stack.Screen name="save/[id]" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="space/[id]" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="space/[id]/index" options={{ animation: 'slide_from_right' }} />
+        {/* S1/S2: the Space's own view of one collection node. Nested under the
+            Space rather than reusing `collection/[type]`, because the same node
+            id means two different sets there (the viewer's whole library) and
+            here (only what the Space holds) — and nesting is what makes back go
+            to the Space. Pushes onto itself for a child folder, like
+            `group/[id]`.
+
+            Registering it here is not ceremony: K7 shipped a `session/[nodeId]`
+            file that typechecked, bundled and rendered on a direct visit while
+            the in-app button navigated nowhere, because it was never listed. */}
+        <Stack.Screen
+          name="space/[id]/collection/[nodeId]"
+          options={{ animation: 'slide_from_right' }}
+        />
+        {/* S4: the Space's shared shopping list. Registered for the same reason
+            as the route above — a file that exists is not a route that works. */}
+        <Stack.Screen
+          name="space/[id]/shopping-list"
+          options={{ animation: 'slide_from_right' }}
+        />
         {/* Create/Join Spaces — same `transparentModal` + `animation: 'none'`
             shape as `capture`, and for the same reason: `Sheet` drives its own
             entrance from one shared value, so a stack animation on top would

@@ -16,13 +16,31 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * The user's shopping list: one open list, items merged into it from any number
+ * A shopping list: one open list per scope, items merged into it from any number
  * of recipes.
  *
  * <p>Written with {@code JdbcClient} rather than JPA entities. The interesting
  * operation here is an upsert-with-merge whose merge rule lives in Java
  * ({@link Quantities}), and expressing that through a persistence context buys
  * nothing but a lazy-loading question.
+ *
+ * <h2>Two scopes since V18, and the merge rule did not change</h2>
+ * <p>A list belongs either to a user ({@code space_id is null}, as it always
+ * has) or to a Space — S4 of {@code docs/knowledge-spaces.md}, because four
+ * people planning Saturday need one list, not four. Every method below takes a
+ * nullable {@code spaceId} that says which, and <b>{@link #fold} is untouched
+ * by the whole feature</b>: a line already stores each contributing recipe's own
+ * quantity and recomputes the total, so two <em>people's</em> recipes merge by
+ * exactly the rule two of one person's always did. That design was forced by a
+ * re-delivered job silently inflating garlic from 7 cloves to 10; it pays for
+ * sharing for free.
+ *
+ * <p><b>Membership is the caller's job, not this class's.</b> Reads and the Act
+ * go through {@code SpaceService.requireMember} / {@code requireRole} before
+ * they get here. The <em>item</em> mutations are the exception: they take an
+ * item id with no scope attached, so each one proves access in its own
+ * {@code where} clause rather than loading a row and then judging it — the same
+ * rule the personal path already followed, widened by one {@code exists}.
  */
 @Service
 public class ShoppingListService {
@@ -47,42 +65,64 @@ public class ShoppingListService {
     }
 
     /**
-     * The user's open list, created on first use.
+     * The open list for a scope, created on first use.
      *
      * <p>The insert races with itself when two Act conversions land together —
      * hence {@code on conflict do nothing} against the partial unique index,
      * then a re-read. Same shape as the save idempotency race, and resolved the
-     * same way: let the database arbitrate rather than checking first.
+     * same way: let the database arbitrate rather than checking first. V18
+     * replaced V5's single index with one per scope, so the same statement now
+     * arbitrates two different uniqueness rules and neither is expressed here.
+     *
+     * @param spaceId null for the caller's personal list; a Space for the shared
+     *                one, in which case {@code userId} records only who opened
+     *                it
      */
     @Transactional
-    public UUID openListId(UUID userId) {
-        Optional<UUID> existing = findOpenList(userId);
+    public UUID openListId(UUID userId, UUID spaceId) {
+        Optional<UUID> existing = findOpenList(userId, spaceId);
         if (existing.isPresent()) {
             return existing.get();
         }
 
         jdbc.sql("""
-                        insert into shopping_lists (user_id, status)
-                        values (?, 'open')
+                        insert into shopping_lists (user_id, space_id, status)
+                        values (?, ?, 'open')
                         on conflict do nothing
                         """)
                 .param(userId)
+                .param(spaceId)
                 .update();
 
-        return findOpenList(userId).orElseThrow(() ->
+        return findOpenList(userId, spaceId).orElseThrow(() ->
                 new IllegalStateException("could not open a shopping list for " + userId));
     }
 
-    private Optional<UUID> findOpenList(UUID userId) {
-        return jdbc.sql("select id from shopping_lists where user_id = ? and status = 'open'")
-                .param(userId)
-                .query(UUID.class)
-                .optional();
+    /** The personal list — V5's signature, kept so every existing caller reads unchanged. */
+    @Transactional
+    public UUID openListId(UUID userId) {
+        return openListId(userId, null);
+    }
+
+    /**
+     * A Space's list is found by the Space alone: whoever created it is not who
+     * owns it, and looking it up by {@code (user_id, space_id)} would give the
+     * second member their own empty list beside the shared one.
+     */
+    private Optional<UUID> findOpenList(UUID userId, UUID spaceId) {
+        return spaceId == null
+                ? jdbc.sql("""
+                            select id from shopping_lists
+                            where user_id = ? and space_id is null and status = 'open'
+                            """)
+                        .param(userId).query(UUID.class).optional()
+                : jdbc.sql("select id from shopping_lists where space_id = ? and status = 'open'")
+                        .param(spaceId).query(UUID.class).optional();
     }
 
     @Transactional(readOnly = true)
-    public ShoppingList get(UUID userId) {
-        Optional<UUID> listId = findOpenList(userId);
+    public ShoppingList get(UUID userId, UUID spaceId) {
+        Optional<UUID> listId = findOpenList(userId, spaceId);
         if (listId.isEmpty()) {
             // An empty list is a legitimate state, not a 404 — a user who has
             // never run the Act still has a shopping list, it just has nothing
@@ -90,6 +130,11 @@ public class ShoppingListService {
             return new ShoppingList(null, List.of());
         }
         return new ShoppingList(listId.get(), itemsOf(listId.get()));
+    }
+
+    @Transactional(readOnly = true)
+    public ShoppingList get(UUID userId) {
+        return get(userId, null);
     }
 
     private List<Item> itemsOf(UUID listId) {
@@ -137,15 +182,23 @@ public class ShoppingListService {
      * contribution, which makes the result depend only on the set of recipes on
      * the list — not on how many times each was converted.
      *
+     * <p>A Space's list merges two <em>people's</em> recipes by that same rule,
+     * with no change here at all: the contribution is keyed by save, and whose
+     * save it is has never entered the arithmetic.
+     *
+     * @param spaceId null for the caller's own list; the Space when the recipe
+     *                being converted lives in one, so four people planning
+     *                Saturday shop from one list
      * @return how many distinct items the list gained
      */
     @Transactional
-    public int addFromSave(UUID userId, UUID saveId, List<ShoppingListConverter.ItemDraft> drafts) {
-        UUID listId = openListId(userId);
+    public int addFromSave(UUID userId, UUID spaceId, UUID saveId,
+                           List<ShoppingListConverter.ItemDraft> drafts) {
+        UUID listId = openListId(userId, spaceId);
 
         // Lines this recipe used to contribute to but no longer does — e.g. the
         // prompt changed, or the recipe was re-classified.
-        dropContributionsOf(userId, listId, saveId);
+        dropContributionsOf(audienceFor(userId, spaceId), listId, saveId);
 
         int added = 0;
         for (ShoppingListConverter.ItemDraft draft : drafts) {
@@ -160,8 +213,12 @@ public class ShoppingListService {
     /**
      * Removes this save's contribution from every line, deleting lines nothing
      * else contributes to and recomputing the rest.
+     *
+     * @param audience everyone whose cached copy of the list has to learn about
+     *                 a deletion — one person for a personal list, every member
+     *                 for a Space's
      */
-    private void dropContributionsOf(UUID userId, UUID listId, UUID saveId) {
+    private void dropContributionsOf(List<UUID> audience, UUID listId, UUID saveId) {
         for (ItemRow row : rowsContributedToBy(listId, saveId)) {
             List<Contribution> remaining = row.contributions().stream()
                     .filter(c -> !c.saveId().equals(saveId))
@@ -170,11 +227,25 @@ public class ShoppingListService {
                 jdbc.sql("delete from shopping_list_items where id = ?")
                         .param(row.id())
                         .update();
-                tombstones.record(userId, TombstoneService.SHOPPING_ITEM, row.id().toString());
+                tombstones.recordFor(audience, TombstoneService.SHOPPING_ITEM, row.id().toString());
             } else {
                 writeContributions(row.id(), remaining);
             }
         }
+    }
+
+    /**
+     * Who has to hear about a deletion from this list.
+     *
+     * <p>The whole point of a tombstone is the audience: a shared item ticked
+     * off and cleared by one person has to disappear from four phones, and a
+     * record written only for the person who tapped is a record three of them
+     * never see. Read from {@code space_members} at the moment of the delete —
+     * a member who joins afterwards gets the list's current contents on their
+     * first pull and needs no deletion history.
+     */
+    private List<UUID> audienceFor(UUID userId, UUID spaceId) {
+        return spaceId == null ? List.of(userId) : tombstones.membersOf(spaceId);
     }
 
     private record ItemRow(UUID id, String quantity, String unit, List<Contribution> contributions) {
@@ -337,22 +408,37 @@ public class ShoppingListService {
         }
     }
 
+    /**
+     * The access rule for an item, as a {@code where} fragment.
+     *
+     * <p>An item id arrives with no scope attached, so every mutation proves the
+     * caller may touch it in the statement itself rather than loading the row
+     * and then judging it — the service layer is the access-control boundary, so
+     * it must never read a row it is not allowed to see. Two parameters, both
+     * the caller's id: their own list, or a list belonging to a Space they are
+     * in. {@code l.space_id} is null on a personal list, so the {@code exists}
+     * can never accidentally admit anyone.
+     */
+    private static final String ITEM_VISIBLE = """
+            (l.user_id = ?
+             or exists (select 1 from space_members m
+                        where m.space_id = l.space_id and m.user_id = ?))
+            """;
+
     @Transactional
     public void setChecked(UUID userId, UUID itemId, boolean checked) {
         int updated = jdbc.sql("""
                         update shopping_list_items i
                         set checked = ?
                         from shopping_lists l
-                        where i.id = ? and i.list_id = l.id and l.user_id = ?
-                        """)
+                        where i.id = ? and i.list_id = l.id and
+                        """ + ITEM_VISIBLE)
                 .param(checked)
                 .param(itemId)
                 .param(userId)
+                .param(userId)
                 .update();
 
-        // Ownership is enforced by the join, not by loading and then checking —
-        // the service layer is the access-control boundary, so it must never
-        // touch a row it is not allowed to see.
         if (updated == 0) {
             throw new NotFoundException("That item is not on your list.");
         }
@@ -360,18 +446,26 @@ public class ShoppingListService {
 
     @Transactional
     public void deleteItem(UUID userId, UUID itemId) {
-        int deleted = jdbc.sql("""
+        // `returning` the list's space, because the audience for the tombstone
+        // is not knowable before the delete resolves which list this item was
+        // on — and on a shared list it is four people, not one.
+        List<UUID> spaceIds = jdbc.sql("""
                         delete from shopping_list_items i
                         using shopping_lists l
-                        where i.id = ? and i.list_id = l.id and l.user_id = ?
+                        where i.id = ? and i.list_id = l.id and
+                        """ + ITEM_VISIBLE + """
+                        returning l.space_id
                         """)
                 .param(itemId)
                 .param(userId)
-                .update();
-        if (deleted == 0) {
+                .param(userId)
+                .query((rs, row) -> rs.getObject("space_id", UUID.class))
+                .list();
+        if (spaceIds.isEmpty()) {
             throw new NotFoundException("That item is not on your list.");
         }
-        tombstones.record(userId, TombstoneService.SHOPPING_ITEM, itemId.toString());
+        tombstones.recordFor(audienceFor(userId, spaceIds.getFirst()),
+                TombstoneService.SHOPPING_ITEM, itemId.toString());
     }
 
     /**
@@ -383,20 +477,32 @@ public class ShoppingListService {
      * — or the same one after a reinstall — learns about them only from here.
      */
     @Transactional
-    public int clearChecked(UUID userId) {
+    public int clearChecked(UUID userId, UUID spaceId) {
+        // Scoped to one list rather than to "everything this caller can reach":
+        // clearing the Space's list must not also empty the caller's personal
+        // one, and one button doing both would be unrecoverable.
+        Optional<UUID> listId = findOpenList(userId, spaceId);
+        if (listId.isEmpty()) {
+            return 0;
+        }
         List<UUID> removed = jdbc.sql("""
-                        delete from shopping_list_items i
-                        using shopping_lists l
-                        where i.list_id = l.id and l.user_id = ? and i.checked
-                        returning i.id
+                        delete from shopping_list_items
+                        where list_id = ? and checked
+                        returning id
                         """)
-                .param(userId)
+                .param(listId.get())
                 .query(UUID.class)
                 .list();
+        List<UUID> audience = audienceFor(userId, spaceId);
         for (UUID id : removed) {
-            tombstones.record(userId, TombstoneService.SHOPPING_ITEM, id.toString());
+            tombstones.recordFor(audience, TombstoneService.SHOPPING_ITEM, id.toString());
         }
         return removed.size();
+    }
+
+    @Transactional
+    public int clearChecked(UUID userId) {
+        return clearChecked(userId, null);
     }
 
     /** Matches how a shopper reads a name: case and spacing are not differences. */

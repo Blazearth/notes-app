@@ -182,6 +182,65 @@ export async function readCollectionSources(
   return store.readSavesByIds([...saveIds]);
 }
 
+// ------------------------------------------------- Space collections (S1)
+
+/**
+ * The same derived merge, over one Space's saves instead of the whole library
+ * — `docs/knowledge-spaces.md`'s S1, client side.
+ *
+ * The server grew the identical capability at S1, and both exist for a reason:
+ * the server's is what supplies `addedBy` and every member's state, which no
+ * client can derive (a save's owner is not on `SaveResponse`); this one is
+ * what paints the screen instantly and offline from saves already in the
+ * store. The screen renders this first and overlays the server's richer answer
+ * when it lands, which is the same stale-while-revalidate shape every other
+ * read here has.
+ *
+ * **No overrides, matching the server**, and for the same reason: overrides are
+ * one *user's* curation, and reshaping a shared view by one member's private
+ * renames would show the group something only that member asked for. Passing
+ * `readOverrides(store)` here would have been the one-line change that made
+ * the two sides disagree.
+ */
+async function spaceSaveFacts(store: LocalStore, spaceId: string): Promise<CollectionSaveFacts[]> {
+  const inSpace = await store.readFeed({ spaceId });
+  return inSpace.filter((save) => save.status === 'ready').map(toCollectionFacts);
+}
+
+export async function readSpaceCollections(
+  store: LocalStore,
+  spaceId: string,
+): Promise<CollectionNodeResponse[]> {
+  return buildCollectionTree(await spaceSaveFacts(store, spaceId));
+}
+
+export async function readSpaceCollectionNode(
+  store: LocalStore,
+  spaceId: string,
+  nodeId: string,
+): Promise<CollectionNodeResponse | null> {
+  return findCollectionNode(await readSpaceCollections(store, spaceId), nodeId);
+}
+
+/**
+ * One node's merged entities, Space-scoped, with the *viewer's own* state
+ * joined in — the same join `readCollectionEntities` does. Everyone else's
+ * state comes from the server and is merged in by the screen; there is no
+ * local copy of another member's state and there deliberately never will be,
+ * since `GET /v1/sync` only ever carries the caller's own.
+ */
+export async function readSpaceCollectionEntities(
+  store: LocalStore,
+  spaceId: string,
+  nodeId: string,
+): Promise<CollectionEntityResponse[]> {
+  const merged = mergeNode(await spaceSaveFacts(store, spaceId), nodeId);
+  const states = await store.readEntityStates();
+  return merged.map((entity) =>
+    states[entity.entityKey] ? { ...entity, state: states[entity.entityKey] } : entity,
+  );
+}
+
 // ---------------------------------------------------------- continue rail
 
 /**

@@ -704,4 +704,103 @@ class CollectionServiceTest {
         assertThat(entities.getFirst().fields()).containsEntry("area", "Fushimi");
         assertThat(entities.getFirst().sources()).hasSize(1); // same save mentioning it twice still counts once
     }
+
+    // ------------------------------------------------------------------ S1: an arbitrary scope
+    //
+    // docs/knowledge-spaces.md's S1: the merge takes the save set to merge
+    // over instead of assuming "the caller's ready saves", and attributes each
+    // source to whoever saved it.
+
+    /** A save owned by someone in particular — the only thing the Space-scoped load adds. */
+    private static SaveFacts savedBy(UUID ownerId, String knowledgeType, Map<String, Object> structured) {
+        return new SaveFacts(UUID.randomUUID(), knowledgeType, structured, Instant.EPOCH.plusSeconds(seq++), ownerId);
+    }
+
+    private static SaveFacts recommendationSavedBy(UUID ownerId, String medium, Map<String, Object> item) {
+        return savedBy(ownerId, "recommendation_list",
+                Map.of("title", "A list", "medium", medium, "items", List.of(item)));
+    }
+
+    /**
+     * The doc's own pinned regression, verbatim: "two members saving Reels that
+     * share an entity produce one entity with two sources and distinct
+     * {@code addedBy}". This is the whole of what S1 adds to the merge — the
+     * "saved by Maya" attribution the client cannot derive, because a save's
+     * owner is not on {@code SaveResponse}.
+     */
+    @Test
+    void twoMembersSharingAnEntityProduceOneEntityWithTwoDistinctlyAttributedSources() {
+        UUID aryan = UUID.randomUUID();
+        UUID maya = UUID.randomUUID();
+        List<SaveFacts> spaceSaves = List.of(
+                recommendationSavedBy(aryan, "anime",
+                        recommendationItem("Blue Box", Map.of("kind", "anime", "reason", "best arc"))),
+                recommendationSavedBy(maya, "anime",
+                        recommendationItem("Blue Box", Map.of("kind", "anime", "reason", "underrated"))));
+
+        List<CollectionEntity> entities =
+                CollectionService.entitiesOf(spaceSaves, "recommendation_list", null);
+
+        assertThat(entities).hasSize(1);
+        CollectionEntity blueBox = entities.getFirst();
+        assertThat(blueBox.sourceCount()).isEqualTo(2);
+        assertThat(blueBox.sources()).extracting(CollectionEntity.Source::addedBy)
+                .containsExactlyInAnyOrder(aryan, maya);
+        // Each member's own reason stays theirs — K1's "never blend, always
+        // attribute" rule is exactly what makes the Space view worth having.
+        assertThat(blueBox.sources()).extracting(source -> source.item().get("reason"))
+                .containsExactlyInAnyOrder("best arc", "underrated");
+    }
+
+    /** A personal read names nobody: {@code addedBy} would be the caller on every row. */
+    @Test
+    void aPersonalMergeLeavesAddedByNull() {
+        List<SaveFacts> ready = List.of(
+                recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))));
+
+        CollectionEntity entity = CollectionService.mergeType(ready, "recommendation_list", null).getFirst();
+
+        assertThat(entity.sources()).allSatisfy(source -> assertThat(source.addedBy()).isNull());
+    }
+
+    /**
+     * {@code treeOf} is the same tree the personal path builds — the scope
+     * changed, the shape did not. Asserted against the type-level counts,
+     * because a Space's Overview reads exactly those.
+     */
+    @Test
+    void treeOfBuildsTheSameShapeOverASpacesSaves() {
+        UUID aryan = UUID.randomUUID();
+        UUID maya = UUID.randomUUID();
+        List<SaveFacts> spaceSaves = List.of(
+                recommendationSavedBy(aryan, "anime", recommendationItem("Blue Box", Map.of("kind", "anime"))),
+                recommendationSavedBy(maya, "anime", recommendationItem("Blue Box", Map.of("kind", "anime"))),
+                recommendationSavedBy(maya, "anime", recommendationItem("Frieren", Map.of("kind", "anime"))));
+
+        List<CollectionNode> nodes = CollectionService.treeOf(spaceSaves);
+
+        assertThat(nodes).hasSize(1);
+        // Two distinct titles over three saves — the merge-not-sum rule, which
+        // is the number the Space Overview shows as "2 titles · 3 sources".
+        assertThat(nodes.getFirst().entityCount()).isEqualTo(2);
+        assertThat(nodes.getFirst().sourceCount()).isEqualTo(3);
+    }
+
+    /**
+     * A Space-scoped merge applies no {@link CollectionOverrides}. They are one
+     * <em>user's</em> curation, and reshaping a shared view by one member's
+     * private renames would show the group something only that member asked
+     * for. Pinned because the tempting "just pass the caller's" is a one-line
+     * change that nothing else would catch.
+     */
+    @Test
+    void aSpaceScopedMergeIgnoresAnyOneMembersOverrides() {
+        UUID aryan = UUID.randomUUID();
+        List<SaveFacts> spaceSaves = List.of(
+                recommendationSavedBy(aryan, "anime", recommendationItem("Blue Box", Map.of("kind", "anime"))));
+
+        assertThat(CollectionService.entitiesOf(spaceSaves, "recommendation_list", null).getFirst().name())
+                .isEqualTo("Blue Box");
+        assertThat(CollectionService.treeOf(spaceSaves).getFirst().name()).isEqualTo("Recommendations");
+    }
 }

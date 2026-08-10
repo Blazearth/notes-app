@@ -32,7 +32,10 @@ three that are Spaces-specific:
    line written into CLAUDE.md's request-budget section first. Meanwhile the
    Overview is designed to be ~90% *derived*, which the examples below show
    is most of its value anyway: the watchlist, states, stats and discussion
-   cost zero AI.
+   cost zero AI. **Held again on 2026-08-10**, when S3 and S4 shipped the last
+   of the derived surfaces: pins, entity discussion and the shared shopping
+   list all landed with no model call, and the tab reads as a workspace
+   without a sentence of generated prose on it.
 2. **Merging never mutates saves, in Spaces exactly as anywhere else** — and
    V7's own rule stands: `save_duplicates` writes a *suggestion*, never a
    merge, because silently merging someone else's save is unrecoverable. The
@@ -84,11 +87,11 @@ Activity   — unchanged
 |---|---|---|
 | Watchlist with per-member status ("Watching by Aryan") | Space-scoped derived merge (K1) + members' entity states (K2) | zero AI |
 | Statistics (7 anime · 3 completed · 2 watching) | count over the same two inputs | zero AI |
-| Recent discussion | latest `save_comments` on the Space's saves (table exists, V7) | zero AI |
+| Recent discussion | latest `save_comments` on the Space's saves (table exists, V7), plus S3's `entity_comments` interleaved into the same block | zero AI ✅ |
 | Travel "Budget ₹95,000" | best-effort local parse-and-sum of itinerary `cost` strings, labelled "(est.)" | zero AI |
 | Travel "Missing: JR Pass, Visa" | unticked items of the Space's `checklist` saves | zero AI |
-| Recipes + shared shopping list | Space-scoped collection + a per-Space list (S4, real schema work) | zero AI |
-| Workout "Current program" | a *pinned* save (S4) — never an AI-merged program (synthesis, banned per the collections doc's shape 3) | zero AI |
+| Recipes + shared shopping list | Space-scoped collection + a per-Space list (S4, real schema work) | zero AI ✅ |
+| Workout "Current program" | a *pinned* save (S4) — never an AI-merged program (synthesis, banned per the collections doc's shape 3) | zero AI ✅ |
 | "From your library: 3 anime not on this watchlist" | per-viewer diff against the viewer's own entities (S5) | zero AI |
 | AI summary sentence | S6, digest pattern, budgeted or absent | 1 gen call, cached |
 | "AI suggests: Horimiya…" (novel items) | S6-or-never — novel recommendations are generative | gen call, budgeted |
@@ -146,6 +149,15 @@ read: states of *all members* for *the entities the Space's saves produce*.
   per-member flag on `space_members`, filtering the read.** What we do not
   do is fork state per Space — "watched here but not there" fragments the
   single fact the entity layer exists to keep whole.
+
+  **✅ Decided 2026-08-10, as recommended.** Global states are shown, and the
+  app states it in two places rather than one: the People tab carries the full
+  sentence ("including things you marked from your own library" — the
+  consequence, not just the fact), and every surface that actually *renders*
+  someone else's status repeats the short form, because a disclosure one tab
+  away from the disclosure-worthy thing is one nobody reads. The escape hatch
+  stays exactly one column and one `where` clause away — `SpaceKnowledgeService
+  .memberStates` is the single read to filter — and no consumer would change.
 - Rollups ("Maya: 5/12 watched") are computed in the same pass. Workout
   per-member progress reads `save_item_states` (workout state stays
   save-keyed, per the collections doc) for the pinned program's save —
@@ -167,7 +179,22 @@ read: states of *all members* for *the entities the Space's saves produce*.
   and real usage shows save-comments-in-overview isn't enough — the V14
   overrides rule, applied to comments.
 
+  **✅ Built 2026-08-10 as `V17__entity_comments.sql`** — ahead of the usage
+  signal that gate asked for, and the gate is worth restating rather than
+  quietly dropping: nothing has yet shown that save-comments-in-overview is
+  insufficient, because nothing has used it. What made building it now
+  defensible is that the *reason* for it is structural rather than
+  preferential — a save comment about Blue Box dies when the Reel that carried
+  it leaves the Space, which is a correctness problem, not a taste one. The
+  usage question that remains open is whether people use it, not whether it is
+  in the right place.
+
 ### Pins and per-Space structures (S4)
+
+> **✅ Landed 2026-08-10 as `V18__space_pins_and_shared_lists.sql`.** Both halves
+> shipped as sketched, and the section below is the original plan — what
+> actually got built, and the four decisions that only surfaced while building
+> it, are in the S3/S4 phase entry further down.
 
 - `V16__space_pins.sql` (or fold into an existing table if it stays this
   small): `(space_id, kind, subject, payload)` — pin a save as "current
@@ -199,6 +226,16 @@ vetted, and it is private until acted on.
 
 ### AI summary and novel suggestions (S6 — budgeted or absent)
 
+> **⏸ On hold as of 2026-08-10, explicitly, and the prerequisite below stands
+> unchanged.** S3 and S4 shipped without it and the Overview is not poorer for
+> it — which is the cost table above being right: the watchlist, the member
+> progress, the discussion, the pins and the shared list are the whole of what
+> makes that tab feel alive, and every one of them cost zero AI. Nothing here
+> has been softened to make picking it up later easier. The budget line comes
+> first, or S6 does not exist. See also [the request budget](../CLAUDE.md#the-request-budget-500-rpd-is-the-whole-apps-daily-ai-capacity):
+> the Flash pool is **20 RPD**, not 250, so a per-Space summary has to be
+> budgeted against the primary 500 and nothing else.
+
 Digest pattern, verbatim: generated only when someone opens Overview, cached
 per `(space_id, content_hash of the source save-id set + state counts)`,
 regenerated only when the hash moves, plain-text out (`summarizeDigest`'s
@@ -218,14 +255,21 @@ Overview loses two lines of garnish.
 
 ```
 S0  rename + tab scaffold            ✅ landed 2026-08-09 (app only, no server change)
-S1  space-scoped collections         (depends: collections K1)
+S1  space-scoped collections         ✅ landed 2026-08-10
 S2  Overview v1: merged list + states + stats + discussion-from-comments
-                                     (depends: S1, collections K2)
-S3  entity comments                  (only if S2 usage pulls for it)
-S4  pins · shared shopping list      (independent of S3)
+                                     ✅ landed 2026-08-10
+S3  entity comments                  ✅ landed 2026-08-10 (V17)
+S4  pins · shared shopping list      ✅ landed 2026-08-10 (V18)
 S5  from-your-library suggestions    (depends: K1 personal + S1)
 S6  AI summary + novel suggestions   (budget line first, or not at all)
 ```
+
+> **Migration numbering in S3/S4 above was stale and is now resolved.** They
+> named `V15__entity_comments.sql` and `V16__space_pins.sql`; V15 (`sync`) and
+> V16 (`idempotency`) both landed in the meantime, so they shipped as
+> `V17__entity_comments.sql` and `V18__space_pins_and_shared_lists.sql`. S1 and
+> S2 needed no migration at all — both are read paths over tables that already
+> exist, which is most of why they were cheap.
 
 - **S0 — rename and scaffold. ✅ Landed 2026-08-09.** Sources tab label + copy
   sweep, Overview tab added rendering only what needs no new server work:
@@ -301,21 +345,246 @@ S6  AI summary + novel suggestions   (budget line first, or not at all)
   failed for reasons that had nothing to do with the screen under test. Scope
   every read: navigate straight to `/space/{id}` (its own route, clean
   document), and query list cards by their `aria-label`.
-- **S1 — server merge.** The `CollectionService` scope parameter, two
-  endpoints, `addedBy` attribution. Tests mirror `GroupServiceTest` plus one
-  pinned regression: two members saving Reels that share an entity produce
-  one entity with two sources and distinct `addedBy`. Verify live with curl
-  against a real Space holding overlapping saves from two test users
-  (insert the second user directly in `auth.users` per the standing
-  never-sign-up rule).
-- **S2 — Overview v1.** The batched member-states read, rollups, stats,
-  discussion block. The disclosure decision above gets made and written
-  down here. App model logic (`spaceOverviewModel.ts` or similar) follows
-  the `detailModel` convention: imports only types, executed standalone
-  under node with fixtures covering an entity three members hold in three
-  different states, a memberless state (member left; render "by a former
-  member", don't crash), and a Space with zero mergeable saves.
-- **S3–S5** as described; each independent, each shippable alone.
+- **S1 — server merge. ✅ Landed 2026-08-10.** `CollectionService.treeOf` /
+  `entitiesOf` take the save set to merge over; `SpaceKnowledgeService` (new,
+  in the `space` package) owns the membership guard and the Space-shaped reads;
+  `GET /v1/spaces/{id}/collections` and `.../collections/{nodeId}` are the two
+  endpoints. `SaveFacts` gained a nullable `ownerId` and
+  `CollectionEntity.Source` a nullable `addedBy`, both null on every personal
+  read.
+- **S2 — Overview v1. ✅ Landed 2026-08-10.** `GET /v1/spaces/{id}/knowledge`
+  carries the group-scoped tree, the batched all-member states rolled up per
+  member, and the discussion block. The disclosure decision is made above.
+
+  **What shipped, and the six calls made while building it:**
+
+  - **The doc said "a scope parameter"; what it actually needed was two static
+    entry points and a new service.** `CollectionService` is an
+    `@Transactional` bean that loads the *caller's* saves and joins the
+    *caller's* state — a Space scope is not a parameter to that, it is a
+    different question. So the merge core got two pure, static, database-free
+    entry points (`treeOf`, `entitiesOf`) and everything Space-shaped lives in
+    `SpaceKnowledgeService`, beside the guards it has to run first. The `space`
+    package now depends on `collection`, never the reverse.
+  - **A Space-scoped merge applies no `CollectionOverrides`, and that is a
+    decision, not an omission.** Overrides are one *user's* curation
+    (`collection_overrides.user_id`); reshaping a shared view by one member's
+    private renames and merges would show the group something only that member
+    asked for. Passing the caller's through is a one-line change nothing else
+    would have caught, so it is pinned by a named test. A per-Space override
+    table is the thing to build if this is ever wanted.
+  - **`doneCount` means something different on a Space node, deliberately.**
+    Everywhere else it is the caller's; here it counts entities *anyone* in the
+    Space has finished — "3 of the 7 have been watched" is the group fact an
+    Overview is asking for, and a viewer-scoped count under a group heading
+    reads as a claim about the group. That is exactly why S0 refused to show a
+    count at all, and this is what makes it showable.
+  - **`done` staying canonical through K7 is what made S2 two functions long.**
+    Every status writes `status` *and* `done`, so "has this member finished it"
+    never has to know the watchlist vocabulary, and a row written before
+    statuses existed still counts. The rollup and the group done set are the
+    only two rules, both static, both mirrored client-side in
+    `@/spaces/spaceProgress`.
+  - **The app fetches only what it cannot derive.** The Overview's stats and
+    collection rows still come from `@/local/derived` over saves already in the
+    store (instant, offline, no request); `getSpaceKnowledge` supplies member
+    progress, discussion and the group done counts, and a failure removes those
+    two sections rather than the tab. Same for the entity list: derived locally
+    first, replaced by the server's answer when it lands — and the viewer's own
+    `state` is always taken from the store even after the swap, or a status flip
+    bounces back to its old value for as long as an in-flight fetch takes.
+  - **The collection row became tappable, which is the whole of what S0 was
+    waiting for.** It routes to `/space/[id]/collection/[nodeId]` — nested under
+    the Space, not the Library's `/collection/[nodeId]`, because the same node
+    id means two different sets in the two places. The route pushes onto itself
+    for a child folder, so the stack is the breadcrumb trail, and a node with
+    folders lists its folders *instead of* its titles (K6's no-listing-twice
+    rule, which the first pass of this screen broke and a screenshot caught).
+
+  **Verified:** backend suite green (**441/441**, 6 opt-in skipped — 11 new
+  tests: 5 in `CollectionServiceTest` for the scoped merge, `addedBy`
+  attribution including the doc's own pinned two-member regression, and the
+  no-overrides rule; a new `SpaceKnowledgeServiceTest` covering the rollup
+  rules against the doc's own fixtures — an entity three members hold in three
+  states, a pre-K7 bare `done`, a Space with no states, a missing display
+  name). App typechecks including under `--noUnusedLocals` (no new findings —
+  the two that remain are pre-existing), `expo export` clean for web and
+  android with the web bundle still free of `openDatabaseAsync`/`expo-sqlite`/
+  `enableChangeListener`, **29 node-standalone assertions** over the real
+  shipped `spaceProgress.ts`/`spaceOverview.ts`/`merge.ts`, and **28 CDP
+  checks** driving the real app on `expo start --web` with `USE_MOCK_DATA`
+  flipped on locally (restored to `false` afterwards): both new Overview
+  blocks, the disclosure in both places, the row tapping through, the drill-down
+  Recommendations → Anime → Romance, "Sam: Best enemies-to-lovers arc" beside
+  "You: Underrated gem" unblended, "Watched · Sam" and "Watching · Ana" on the
+  same title, and a status cycled by a real synthetic click. **Not run on a
+  device**, and **`GET /v1/spaces/{id}/knowledge` has never been called over
+  HTTP** — the two SQL queries behind it are reasoned about and reviewed
+  against the existing indexes (`saves_space_created_idx`,
+  `save_comments_save_idx`, `space_members`' PK), not executed.
+- **S3 — entity comments. ✅ Landed 2026-08-10.** `V17__entity_comments.sql` +
+  `EntityCommentService` (in the `space` package, beside the guards it has to
+  run first), three endpoints on `SpaceController`, and an inline thread on
+  each row of the Space-scoped collection screen.
+- **S4 — pins and the shared shopping list. ✅ Landed 2026-08-10.**
+  `V18__space_pins_and_shared_lists.sql` + `SpacePinService`, plus
+  `shopping_lists.space_id` and a `ShoppingListService` that takes a scope.
+
+  **What shipped, and the seven calls made while building them:**
+
+  - **Space-scoped comments beside global states, deliberately, and the two
+    tables answering the same-looking question differently is the design.**
+    `entity_states` (V13) is per `(user_id, entity_key)` with no Space
+    dimension, and S2's disclosure decision leans on exactly that: completing
+    Your Name is a fact about the person, so it shows wherever that entity
+    appears. A *remark* is not like that — it was said in a room, to the people
+    in it, and carrying it into another Space that happens to hold the same
+    entity would disclose a conversation rather than a status. So `space_id` is
+    part of V17's key and is absent from V13's.
+  - **`entity_key` gets no foreign key, and cannot have one.** An entity is
+    derived — `Entities.key` over whatever the Space's saves merge to today — so
+    there is no row to reference and nothing to validate against on write.
+    Validating against the derived set would make commenting cost a full merge
+    *and* still be a race. The bounded consequence is stated rather than
+    hidden: a comment outlives its entity (every save mentioning it leaves the
+    Space) and simply stops being reachable, exactly as a
+    `collection_overrides` row does.
+  - **One discussion block, not two.** The Overview interleaves save comments
+    and entity comments by time and caps them together, because "what is being
+    talked about in here" is one question — splitting the block by which table a
+    remark landed in would ask the reader to care about a storage detail.
+    `SpaceComment` grew a nullable `entityKey`/`entityName` beside its nullable
+    `saveId`; exactly one is set. **An entity comment's row is deliberately not
+    tappable**: an entity key does not name a collection node, so routing
+    somewhere would be a guess, and the rule S0 followed for the inert
+    collection row applies unchanged.
+  - **The comment count is batched into the entity list, never fetched per
+    row.** Same reasoning as `memberStates` beside it and
+    `statesForSaves` before that: N is the size of a merged collection, which
+    grows with the Space and is bounded by nothing. The thread itself is one tap
+    and one request away, and is not fetched until it is opened.
+  - **A pin is the honest version of the vision's "Current Program", and that
+    is the whole argument for the table.** The tempting implementation merges
+    several push-day saves into one routine — the synthesis
+    [knowledge-collections.md](knowledge-collections.md) rules out as shape 3,
+    whose failure mode is somebody in a gym following a program no human wrote.
+    A pin is a member pointing at one save and saying "this one". Identical row
+    on the screen; only one of the two can be wrong in a way that matters. It is
+    also the one thing on the Overview that genuinely *cannot* be derived —
+    everything else falls out of saves and states that already exist.
+  - **The pin's label is resolved on read, never stored.** A label copied in at
+    pin time goes stale the first time a note is renamed, and a pin that lies
+    about what it points at is worse than no pin. Same read resolves
+    `available`, and an unavailable pin is **shown** rather than filtered:
+    hiding it would leave a row nobody can reach while the unique index still
+    holds its subject.
+  - **The shared shopping list needed no change to `fold` at all.** A line has
+    stored each contributing recipe's own quantity, and recomputed the total,
+    ever since a re-delivered job silently took garlic from 7 cloves to 10. That
+    property was built for retries and pays for sharing for free: two
+    *people's* recipes merge by exactly the rule two of one person's always
+    did. What did have to change is scope — V5's "at most one open list per
+    user" index would have forbidden a user holding a personal list and a
+    Space's at once, so it is now two partial indexes, one per scope.
+  - **`on delete cascade` on `shopping_lists.space_id`, and the alternative is
+    worse than it looks.** `set null` would turn a deleted Space's shared list
+    into a *second* personal open list for whoever created it — which the
+    partial unique index rejects, so deleting a Space would fail on a
+    constraint violation from a table nobody deleting a Space is thinking about.
+  - **The Act's target follows the save, not the caller.** A recipe in a Space
+    feeds that Space's list however many members convert it, which is what keeps
+    the per-(list, save) idempotency holding across people as well as across
+    retries. The *cap* still follows the caller, so `actorId` now rides in the
+    job payload — with a fallback to the save's owner, because a queue is not
+    drained the instant it is written to and a deploy must not lose the
+    conversions already in flight.
+
+  **App-side, three things generalise beyond this feature:**
+
+  - **The Space's shared list is an on-demand read the screen holds itself, not
+    a second scope in the local store.** Adding one would have meant a
+    `SCHEMA_VERSION` bump, and L5 established that a bump is only for a change
+    the local data cannot survive — never for one it can re-fetch — because a
+    bump drops the `outbox` and with it writes the server has never seen. The
+    *ticks* still go through the queue, so the offline guarantee that matters
+    (a tap made in a shop is delivered) holds either way; what a shared list
+    gives up is painting before the network answers.
+  - **The item mutation is the personal one, unchanged, on both sides.** An item
+    id addresses exactly one row on exactly one list, and the server proves
+    access per statement — one `exists` widening the existing `where`, never a
+    row loaded and then judged. So there is no Space variant of
+    `PATCH /v1/shopping-list/items/{id}` anywhere. `DELETE .../checked` *is*
+    scoped, and that asymmetry is deliberate: one button that cleared both lists
+    would be unrecoverable.
+  - **A Recipe Space still defaults to Sources, not Overview.** `spaceDefaultTab`
+    opens on Overview only when the saves *merge* into a collection, and recipes
+    are shape 2 — they never produce one. Deliberately not widened to "or it has
+    a shared list": that fact arrives over the network, and a default tab that
+    changes a frame later moves the tab strip under the user's thumb, which is
+    the reason S0 computed it from local data in the first place.
+
+  **Verified:** backend suite green (**455/455**, 6 opt-in skipped — 14 new
+  tests: `EntityCommentServiceTest` and `SpacePinServiceTest` mirror
+  `SaveItemStateServiceTest`'s mocked-`JdbcClient` style for the same
+  no-local-Postgres reason, covering the membership guard reaching the database
+  never, the owner-vs-author delete branch, the tombstone audience being the
+  Space's members rather than the deleter, the editor bar on both pin writes,
+  and the save-pin check that a collection pin must *not* run;
+  `ConvertToShoppingListHandlerTest` gained the actor-resolution pair). App
+  typechecks, `expo export` clean for web and android with the web bundle still
+  free of `openDatabaseAsync`/`expo-sqlite`/`enableChangeListener`.
+
+  **Both migrations were executed against the live schema inside a transaction
+  and rolled back — 30 checks, all passing** ([docs/testing.md](testing.md#verifying-a-migration--run-it-against-the-real-schema-and-roll-it-back)).
+  Not just "it parsed": every object, index, trigger and policy asserted from
+  the catalog; every query the two new services and the widened Act guard
+  actually issue, run against the new shape; `explain` confirming the thread
+  read uses `entity_comments_space_entity_idx`; and the three constraints the
+  migration *is* exercised rather than inventoried — a personal and a Space list
+  open at once, a second of either rejected, and the pin upsert returning the
+  same row twice. **One probe finding worth carrying:** the "old index is gone"
+  check was written as a name lookup and passed for the wrong reason, because
+  V18 *reuses* the name for the narrowed index. Asserting on `indexdef` is what
+  makes it a real check — and Postgres normalises the predicate to upper case,
+  so it has to be `ilike`.
+
+  **57 CDP checks driving the real app**, with `USE_MOCK_DATA` flipped on
+  locally (restored to `false` afterwards): a thread opened on Blue Box from
+  three folder levels down, a remark typed and sent, the collapsed row's count
+  following it with no refetch, and the same remark appearing in the Overview's
+  discussion block attributed to the *entity*; a source pinned from Sources,
+  leading the Overview as "Pinned by You", surviving a round trip; a collection
+  pinned; and the full shared-list flow — two members' recipes converted from
+  their own detail screens, the section appearing only once it had something on
+  it, the Space-scoped route, both recipes on one list, an item ticked, and none
+  of it touching the personal list.
+
+  **Two probe findings, both new:**
+
+  - **The run has to be one page load.** `mockRepository` is module-scope state
+    that resets on reload (its own doc says so, and that is the right lifetime),
+    so a `Page.navigate` between a write and the read that checks it discards
+    exactly the thing under test. Every earlier probe in this repo could reload
+    freely because it checked the local *store*, which persists. So this one
+    moves the way a user does — tap a card, tap a tab, tap back — and re-enters
+    a Space from the Spaces list whenever a screen's own `load()` needs to run
+    again. That makes each navigation an assertion too.
+  - **The mounted-pane trap has a second form, and it is worse.** The shell
+    keeps Home/Library/Spaces mounted *and* a pushed route stacks on top, so
+    several elements share a label and all but one are invisible — a probe that
+    takes the **first** match clicks a hidden pane and fails as "the tap did not
+    work", which sends you debugging the handler. Filter to elements with a
+    non-empty `getClientRects()` and take the **last**. Also confirmed on a
+    second attribute: React Native Web emits no `aria-checked` for
+    `accessibilityState={{ checked }}`, any more than it emits `aria-selected` —
+    so a tick has to be asserted from rendered content.
+
+  **Not run on a device**, same standing caveat as the rest of the app's UI
+  work. **`GET /v1/spaces/{id}/entity-comments`, `.../pins` and
+  `.../shopping-list` have never been called over HTTP** — their SQL was
+  executed by the probe above, but the controllers themselves are reviewed, not
+  exercised.
+- **S5** as described; independent, shippable alone.
 - **S6** last, and only over the budget-line threshold.
 
 ## Explicitly out, and why
@@ -339,12 +608,30 @@ S6  AI summary + novel suggestions   (budget line first, or not at all)
 
 ## Open questions (answer during S1/S2)
 
-1. The state-disclosure question (S2, above) — recommendation recorded there;
-   needs a real decision when the first shared watchlist renders.
+1. ~~The state-disclosure question (S2, above)~~ — **answered 2026-08-10**, as
+   recommended: global states are shown and said, in the People tab and again
+   on every surface that renders someone else's status. Detail in the S2
+   section above.
 2. Does Overview need per-collection tabs *within* a Space sooner than
    expected? Watch the Travel template — itinerary + checklist + places is
-   the likeliest multi-collection Space.
+   the likeliest multi-collection Space. **S4's collection pin is the cheap
+   half of an answer**: a Space with several collections can now say which one
+   leads, which may be enough that the tab split never has to happen.
 3. `save_duplicates`' merge-prompt flow: once entities absorb duplicate
    *presentation*, is the suggested-merge UI still worth its screen space, or
    does it retire into the entity's sources list? Decide on real usage, not
    now.
+4. **Does an entity comment need a way back to the thing it is about?**
+   (Opened by S3.) The Overview's discussion block renders an entity comment
+   un-tappable, because an entity key does not name a collection node and
+   routing anywhere would be a guess. Resolving it means either storing the
+   node id alongside the comment — which goes stale when the axis chain
+   changes — or deriving "which node holds this key" on read, which is a whole
+   merge for one row. Neither is worth building before anyone has missed it.
+5. **Does a Recipe Space want its shared list on the Sources tab too?**
+   (Opened by S4.) It lives on Overview, which a Recipe Space does not open on,
+   because recipes are shape 2 and produce no collection to make Overview the
+   default. Widening `spaceDefaultTab` to "or it has a shared list" was
+   rejected — that fact arrives over the network and would move the tab strip
+   after first paint — but a second entry point from Sources would not have
+   that problem.
