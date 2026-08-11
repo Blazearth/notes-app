@@ -597,9 +597,17 @@ function UnfinishedSave({ save }: { save: SaveResponse }) {
       title: "Couldn't process this",
       body: save.errorMessage ?? 'Something went wrong and Weavr could not extract anything useful.',
     },
+    // Pipeline ran fine — the content just had nothing extractable
+    // (login wall, video-only Short, empty transcript, etc.).
+    unusable: {
+      title: 'Nothing to extract here',
+      body: "Weavr read this content but couldn't pull out any useful information — it may be behind a login wall, have no transcript, or contain only media.",
+    },
   };
 
-  const { title, body } = copy[save.status] ?? copy.processing;
+  // For unusable saves (now status=ready), key off knowledgeType.
+  const key = save.knowledgeType === 'unusable' ? 'unusable' : save.status;
+  const { title, body } = copy[key] ?? copy.processing;
 
   return (
     <Card>

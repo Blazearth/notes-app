@@ -271,10 +271,12 @@ class ClassifySaveHandler implements JobHandler {
             structuredJson = "{}";
         }
 
-        // "unusable" content stays PROCESSING-free — mark it failed with a gentle message.
-        String newStatus = "unusable".equals(knowledgeType) ? "failed" : "ready";
-        String errorMessage = "unusable".equals(knowledgeType)
-                ? "We couldn't extract useful information from this content." : null;
+        // "unusable" means the pipeline ran successfully but the content had nothing
+        // extractable (login wall, video-only short, empty transcript, etc.).
+        // Mark it `ready` — the job is done; there just isn't useful knowledge.
+        // Marking it `failed` was misleading: nothing went wrong server-side.
+        String newStatus = "ready";
+        String errorMessage = null;
 
         jdbc.sql("""
                         update saves
