@@ -9,7 +9,9 @@ import { DERIVED_TABLES, readContinueSaves, readGroups } from '@/local/derived';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
-import { HatchThumb } from '@/components/HatchThumb';
+
+import { SaveThumb } from '@/components/SaveThumb';
+import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { Reveal } from '@/components/Reveal';
 import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
@@ -110,11 +112,19 @@ function progressForSave(save: SaveResponse): { fraction: number; label: string 
 function ContinueCard({ save, onPress }: { save: SaveResponse; onPress: () => void }) {
   const { palette, radius, spacing } = useTheme();
   const progress = progressForSave(save);
+  const meta = save.knowledgeType ? saveTypeMeta(save.knowledgeType) : undefined;
 
   return (
     <Card padding={0} radius={radius.lg} style={{ width: 156, overflow: 'hidden' }}>
       <Touchable accessibilityRole="button" onPress={onPress} haptic="selection">
-        <HatchThumb label={save.knowledgeType ?? 'save'} height={90} radius={0} />
+        <SaveThumb
+          thumbnailUrl={save.thumbnailUrl}
+          width={156}
+          height={90}
+          radius={0}
+          tint={meta?.color}
+          glyph={meta?.glyph}
+        />
         <View style={{ padding: spacing.smd }}>
           <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }} numberOfLines={1}>
             {saveTitle(save)}
