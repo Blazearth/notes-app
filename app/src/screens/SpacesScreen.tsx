@@ -317,6 +317,11 @@ export function SpacesScreen() {
               members={membersById[space.id]}
               recentSaves={recentById[space.id]}
               onPress={() => router.push({ pathname: '/space/[id]', params: { id: space.id } })}
+              onAddPress={
+                space.myRole === 'owner' || space.myRole === 'editor'
+                  ? () => router.push({ pathname: '/capture', params: { spaceId: space.id } })
+                  : undefined
+              }
             />
           </Reveal>
         ))}

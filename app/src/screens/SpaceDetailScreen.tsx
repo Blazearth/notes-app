@@ -735,6 +735,31 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
               {space.memberCount === 1 ? 'member' : 'members'} · you are {space.myRole}
             </AppText>
           </View>
+          {/* The frictionless-add path: opening Capture from here pre-targets
+              this Space (`CaptureSheet` reads `spaceId`), so a save made while
+              looking at a Space lands in it directly instead of needing a
+              second trip through `AddToSpaceSheet` afterwards. */}
+          {canEdit ? (
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={`Add to ${space.name}`}
+              onPress={() => router.push({ pathname: '/capture', params: { spaceId } })}
+              haptic="selection"
+              weight="tile"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: radius.sm,
+                backgroundColor: palette.surface,
+                borderWidth: 1,
+                borderColor: palette.border,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Glyph name="plus" size={16} weight={2} color={palette.accent} />
+            </Touchable>
+          ) : null}
         </View>
       </Reveal>
 
@@ -772,11 +797,34 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
               <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
                 Nothing to build on yet
               </AppText>
-              <AppText variant="caption" tone="muted">
+              <AppText variant="caption" tone="muted" style={{ marginBottom: canEdit ? spacing.md : 0 }}>
                 {canEdit
                   ? 'Everything anyone saves in here gets pulled together on this tab.'
                   : 'Once an editor adds something, what the group is collecting shows up here.'}
               </AppText>
+              {canEdit ? (
+                <Touchable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add something to ${space.name}`}
+                  onPress={() => router.push({ pathname: '/capture', params: { spaceId } })}
+                  haptic="selection"
+                  style={{
+                    alignSelf: 'flex-start',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: spacing.sm,
+                    paddingVertical: spacing.smd,
+                    paddingHorizontal: spacing.md,
+                    borderRadius: radius.sm,
+                    borderWidth: 1,
+                    borderColor: palette.border,
+                    backgroundColor: palette.surface,
+                  }}
+                >
+                  <Glyph name="plus" size={14} />
+                  <AppText variant="bodySmall">Add something</AppText>
+                </Touchable>
+              ) : null}
             </Card>
           ) : (
             <>
@@ -962,11 +1010,34 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
               <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
                 Nothing here yet
               </AppText>
-              <AppText variant="caption" tone="muted">
+              <AppText variant="caption" tone="muted" style={{ marginBottom: canEdit ? spacing.md : 0 }}>
                 {canEdit
                   ? 'Save something into this Space from the Capture sheet.'
                   : 'You can read and comment here. An editor can add sources.'}
               </AppText>
+              {canEdit ? (
+                <Touchable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add a source to ${space.name}`}
+                  onPress={() => router.push({ pathname: '/capture', params: { spaceId } })}
+                  haptic="selection"
+                  style={{
+                    alignSelf: 'flex-start',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: spacing.sm,
+                    paddingVertical: spacing.smd,
+                    paddingHorizontal: spacing.md,
+                    borderRadius: radius.sm,
+                    borderWidth: 1,
+                    borderColor: palette.border,
+                    backgroundColor: palette.surface,
+                  }}
+                >
+                  <Glyph name="plus" size={14} />
+                  <AppText variant="bodySmall">Add a source</AppText>
+                </Touchable>
+              ) : null}
             </Card>
           ) : (
             <View style={{ gap: spacing.sm }}>

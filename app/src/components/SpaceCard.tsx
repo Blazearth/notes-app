@@ -39,6 +39,14 @@ export interface SpaceCardProps {
   /** Most recent sources, newest first — omitted while still loading. */
   recentSaves?: SaveResponse[];
   onPress: () => void;
+  /**
+   * Opens Capture pre-targeted at this Space — omitted for a viewer, who
+   * cannot add anything here regardless. Only rendered once the Space is
+   * confirmed empty (`space.saveCount === 0`), not merely while `recentSaves`
+   * is still loading, so the CTA never flashes over a Space that already has
+   * content.
+   */
+  onAddPress?: () => void;
 }
 
 /**
@@ -48,7 +56,7 @@ export interface SpaceCardProps {
  * (avatar stack), how alive it is (last activity), and what's actually inside
  * (the two most recent sources).
  */
-export function SpaceCard({ space, members, recentSaves, onPress }: SpaceCardProps) {
+export function SpaceCard({ space, members, recentSaves, onPress, onAddPress }: SpaceCardProps) {
   const { palette, radius, spacing, layout } = useTheme();
   const identity = spaceIdentity(space);
 
@@ -60,14 +68,25 @@ export function SpaceCard({ space, members, recentSaves, onPress }: SpaceCardPro
     `${space.memberCount} ${space.memberCount === 1 ? 'member' : 'members'}`,
   ].join(' · ');
 
+  const empty = space.saveCount === 0;
+
   return (
     <Card radius={radius.lg} padding={0}>
+      {/*
+        A sibling `Touchable` below, not a nested one — the row-plus-pin
+        pattern `CollectionSummaryRow` already uses. Nested `Pressable`s do
+        resolve correctly in RN (the innermost claims the responder), but this
+        card wants the *whole* body tappable to open the Space, and "Add
+        something" is a second, independent target rather than something
+        layered inside the first — keeping them as siblings is what makes
+        that literally true instead of relying on responder negotiation.
+      */}
       <Touchable
         accessibilityRole="button"
         accessibilityLabel={`${space.name}, ${counts}`}
         onPress={onPress}
         haptic="selection"
-        style={{ padding: layout.cardPadding }}
+        style={{ padding: layout.cardPadding, paddingBottom: empty && onAddPress ? spacing.sm : layout.cardPadding }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
           <View
@@ -122,41 +141,81 @@ export function SpaceCard({ space, members, recentSaves, onPress }: SpaceCardPro
           </View>
         </View>
 
-        {recentSaves && recentSaves.length > 0 ? (
+        {/* Gated on `space.saveCount`, not on `recentSaves.length` — the latter
+            is undefined for a beat while it loads even for a Space that has
+            content, and rendering "Nothing here yet" in that window would be
+            a false empty state rather than a true one. */}
+        {empty ? (
           <View
             style={{
-              flexDirection: 'row',
-              flexWrap: 'wrap',
-              gap: spacing.xs,
               marginTop: spacing.smd,
               paddingTop: spacing.smd,
               borderTopWidth: 1,
               borderTopColor: palette.border,
             }}
           >
-            {recentSaves.slice(0, 3).map((save) => (
-              <View
-                key={save.id}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: spacing.xxs + 2,
-                  maxWidth: '100%',
-                  paddingVertical: 3,
-                  paddingHorizontal: spacing.sm,
-                  borderRadius: radius.pill,
-                  backgroundColor: palette.surfaceVariant,
-                }}
-              >
-                <Glyph name="link" size={10} color={palette.textFaint} />
-                <AppText variant="caption" tone="muted" numberOfLines={1} style={{ fontSize: 11, maxWidth: 140 }}>
-                  {saveTitle(save)}
-                </AppText>
-              </View>
-            ))}
+            <AppText variant="caption" tone="muted">
+              Nothing here yet. Save something to share it with everyone in this Space.
+            </AppText>
+          </View>
+        ) : recentSaves && recentSaves.length > 0 ? (
+          <View
+            style={{
+              marginTop: spacing.smd,
+              paddingTop: spacing.smd,
+              borderTopWidth: 1,
+              borderTopColor: palette.border,
+            }}
+          >
+            <AppText variant="sectionLabel" tone="muted" style={{ fontSize: 10.5, marginBottom: spacing.xs }}>
+              Recently added
+            </AppText>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+              {recentSaves.slice(0, 3).map((save) => (
+                <View
+                  key={save.id}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: spacing.xxs + 2,
+                    maxWidth: '100%',
+                    paddingVertical: 3,
+                    paddingHorizontal: spacing.sm,
+                    borderRadius: radius.pill,
+                    backgroundColor: palette.surfaceVariant,
+                  }}
+                >
+                  <Glyph name="link" size={10} color={palette.textFaint} />
+                  <AppText variant="caption" tone="muted" numberOfLines={1} style={{ fontSize: 11, maxWidth: 140 }}>
+                    {saveTitle(save)}
+                  </AppText>
+                </View>
+              ))}
+            </View>
           </View>
         ) : null}
       </Touchable>
+
+      {empty && onAddPress ? (
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel={`Add something to ${space.name}`}
+          onPress={onAddPress}
+          haptic="selection"
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: spacing.xs,
+            paddingHorizontal: layout.cardPadding,
+            paddingBottom: layout.cardPadding,
+          }}
+        >
+          <Glyph name="plus" size={12} weight={2.5} color={identity.color} />
+          <AppText variant="label" style={{ color: identity.color }}>
+            Add something
+          </AppText>
+        </Touchable>
+      ) : null}
     </Card>
   );
 }

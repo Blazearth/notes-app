@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { BlurView } from 'expo-blur';
 import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
 import Animated, {
@@ -21,8 +21,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // `API_BASE_URL` rather than `repo`: the screenshot upload is multipart and
 // cannot go through either the repository or the outbox — see `handleOpenScreenshot`.
+import type { Space } from '@/api/types';
 import { API_BASE_URL } from '@/api/config';
-import { getStore } from '@/local';
+import { getStore, useLiveValue } from '@/local';
 import { writeCreateSave } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { Glyph } from '@/components/Glyph';
@@ -206,6 +207,23 @@ export function CaptureSheet() {
   const router = useRouter();
   const haptic = useHaptic();
 
+  /**
+   * Set when Capture is opened from inside a Space (`SpaceCard`'s "Add
+   * something", or a Space's own header action) — every save this sheet
+   * creates then pre-attaches to it instead of landing in the private feed,
+   * closing the save-then-move-it gap the AddToSpaceSheet otherwise requires.
+   * Looked up from the store rather than trusting a `spaceName` param: the
+   * store is the single source of truth for what the Space is actually
+   * called, and a stale param would show a name that's since been renamed.
+   */
+  const { spaceId } = useLocalSearchParams<{ spaceId?: string }>();
+  const targetSpace = useLiveValue<Space | null>(
+    ['spaces'],
+    (store) => (spaceId ? store.readSpace(spaceId) : Promise.resolve(null)),
+    null,
+    [spaceId],
+  );
+
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** 'tiles' — the grid; 'note' — the inline text editor. */
@@ -368,8 +386,8 @@ export function CaptureSheet() {
     // simply never appeared. Nothing is lost now — a queued write survives a
     // dead connection and even an app restart, and the only thing that can stop
     // it is the server rejecting it outright, which `useOutbox` reports.
-    writeCreateSave({ sourceType: 'url', sourceUrl: clipboard });
-  }, [dismiss, haptic]);
+    writeCreateSave({ sourceType: 'url', sourceUrl: clipboard, spaceId });
+  }, [dismiss, haptic, spaceId]);
 
   // `pasteLink` has to be stable too, or this changes every render and the
   // `React.memo` on the tiles is decorative.
@@ -435,6 +453,7 @@ export function CaptureSheet() {
           fieldName: 'image',
           mimeType: 'image/jpeg',
           headers: { Authorization: `Bearer ${token}` },
+          parameters: spaceId ? { spaceId } : undefined,
         },
       );
 
@@ -457,7 +476,7 @@ export function CaptureSheet() {
     } finally {
       setBusyId(null);
     }
-  }, [dismiss, haptic]);
+  }, [dismiss, haptic, spaceId]);
 
   const handleOpenScreenshotPress = useCallback(
     () => void handleOpenScreenshot(),
@@ -488,8 +507,8 @@ export function CaptureSheet() {
     // A fire-and-forget POST that failed used to lose it outright — the sheet
     // was already dismissed, so the `catch` had nowhere to report to. Queued, it
     // survives a dead connection and an app restart.
-    writeCreateSave({ sourceType: 'text', text: body, title });
-  }, [noteTitle, noteText, dismiss, haptic]);
+    writeCreateSave({ sourceType: 'text', text: body, title, spaceId });
+  }, [noteTitle, noteText, dismiss, haptic, spaceId]);
 
   const handleSaveNotePress = useCallback(() => void handleSaveNote(), [handleSaveNote]);
 
@@ -566,6 +585,31 @@ export function CaptureSheet() {
             marginBottom: spacing.lg + 2,
           }}
         />
+
+        {/* Only rendered once the store has actually resolved the id to a
+            Space — a bare "Saving to a Space" would be true but useless, and
+            silently falling back to the private feed if the id turns out to
+            be stale is the wrong failure mode for something this visible. */}
+        {targetSpace ? (
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing.xs,
+              alignSelf: 'flex-start',
+              paddingVertical: 4,
+              paddingHorizontal: spacing.smd,
+              borderRadius: radius.pill,
+              backgroundColor: palette.surfaceVariant,
+              marginBottom: spacing.md,
+            }}
+          >
+            <Glyph name="layers" size={11} weight={2} color={palette.accent} />
+            <AppText variant="caption" tone="muted" style={{ fontSize: 11.5 }}>
+              Saving to <AppText variant="caption" style={{ fontSize: 11.5, fontWeight: '700' }}>{targetSpace.name}</AppText>
+            </AppText>
+          </View>
+        ) : null}
 
         {mode === 'note' ? (
           /*

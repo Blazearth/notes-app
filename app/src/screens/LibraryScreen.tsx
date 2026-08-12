@@ -27,6 +27,20 @@ const ARCHIVED = 'Archived';
 
 type SortKey = 'recent' | 'alphabetical';
 
+/**
+ * Which axis the type/filter chip row is narrowed to. Purely a display
+ * filter over the chips already computed below — it never changes what
+ * `filter` itself can be, so switching axes can leave the current filter
+ * chip hidden (handled by resetting to ALL when that happens).
+ */
+type Dimension = 'all' | 'collections' | 'types';
+
+const DIMENSIONS: { key: Dimension; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'collections', label: 'Collections' },
+  { key: 'types', label: 'Types' },
+];
+
 /** Stable identity for the "nothing derived yet" case — see `useLiveValue`. */
 const EMPTY_COLLECTIONS: CollectionNodeResponse[] = [];
 
@@ -128,10 +142,11 @@ function TypeTile({ type, count, onPress }: { type: string; count: number; onPre
  * either screen knowing about the other.
  */
 export function LibraryScreen() {
-  const { palette, layout, spacing } = useTheme();
+  const { palette, layout, radius, spacing } = useTheme();
   const { saves, status, error, refresh, refreshing } = useSaves();
   const router = useRouter();
   const [filter, setFilter] = useState<string>(ALL);
+  const [dimension, setDimension] = useState<Dimension>('all');
   const [sortBy, setSortBy] = useState<SortKey>('recent');
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
@@ -209,16 +224,30 @@ export function LibraryScreen() {
   const favoriteCount = useMemo(() => activeSaves.filter((s) => s.favorite).length, [activeSaves]);
   const archivedCount = useMemo(() => saves.filter((s) => s.archived).length, [saves]);
 
-  const filters = [
-    ALL,
-    ...counts.map(([type]) => type),
-    ...(favoriteCount > 0 ? [FAVORITES] : []),
-    ...(archivedCount > 0 ? [ARCHIVED] : []),
-  ];
+  // The All/Collections/Types split is only worth showing once both axes
+  // actually have something in them — a library with no collections yet has
+  // nothing for "Collections" to narrow to, so the split would be a dead
+  // toggle rather than a useful one.
+  const dimensionAvailable = entityBearingTypes.size > 0 && tileCounts.length > 0;
+
+  // Collections and Favorites/Archived are status filters, not type-organised
+  // ones, so they stay out of the 'collections' and 'types' narrowings and
+  // only appear under 'all'.
+  const filters =
+    dimensionAvailable && dimension === 'collections'
+      ? [ALL, ...counts.filter(([type]) => entityBearingTypes.has(type)).map(([type]) => type)]
+      : dimensionAvailable && dimension === 'types'
+        ? [ALL, ...counts.filter(([type]) => !entityBearingTypes.has(type)).map(([type]) => type)]
+        : [
+            ALL,
+            ...counts.map(([type]) => type),
+            ...(favoriteCount > 0 ? [FAVORITES] : []),
+            ...(archivedCount > 0 ? [ARCHIVED] : []),
+          ];
 
   const filtered: SaveResponse[] = useMemo(() => {
     // In the ALL view, text saves are shown in the Handnotes section above,
-    // not in the 'Everything' list, to avoid duplication.
+    // not in the 'Recent Saves' list, to avoid duplication.
     const base = filter === ALL ? activeSaves.filter((s) => s.sourceType !== 'text') : activeSaves;
     if (filter === ALL) return base;
     if (filter === FAVORITES) return activeSaves.filter((s) => s.favorite);
@@ -378,7 +407,6 @@ export function LibraryScreen() {
               ) : null}
             </View>
             <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-              <HeaderAction glyph="search" label="Search saves" onPress={() => router.push('/search')} />
               <HeaderAction
                 glyph="filter"
                 label="Sort"
@@ -390,9 +418,40 @@ export function LibraryScreen() {
         )}
       </Reveal>
 
+      {/* Mirrors Home's "Ask or find anything…" bar — Library's search is the
+          same hybrid endpoint, and a full-width bar makes that discoverable
+          instead of hiding it behind an icon. */}
+      {!selectionMode ? (
+        <Reveal index={1}>
+          <Touchable
+            accessibilityRole="search"
+            accessibilityLabel="Search your saves"
+            onPress={() => router.push('/search')}
+            haptic="selection"
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing.smd,
+              backgroundColor: palette.surface,
+              borderWidth: 1,
+              borderColor: palette.border,
+              borderRadius: radius.pill,
+              paddingVertical: spacing.md,
+              paddingHorizontal: spacing.lg,
+              marginBottom: spacing.lg,
+            }}
+          >
+            <Glyph name="search" size={16} weight={2} />
+            <AppText tone="muted" style={{ fontSize: 14 }}>
+              Search or ask anything…
+            </AppText>
+          </Touchable>
+        </Reveal>
+      ) : null}
+
       {sortMenuOpen && !selectionMode ? (
         <Reveal
-          index={1}
+          index={2}
           style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg }}
         >
           {SORT_OPTIONS.map((opt) => (
@@ -448,6 +507,25 @@ export function LibraryScreen() {
 
       {status === 'ready' && saves.length > 0 ? (
         <>
+          {dimensionAvailable ? (
+            <Reveal
+              index={2}
+              style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm }}
+            >
+              {DIMENSIONS.map((d) => (
+                <Chip
+                  key={d.key}
+                  label={d.label}
+                  selected={dimension === d.key}
+                  onPress={() => {
+                    setDimension(d.key);
+                    setFilter(ALL);
+                  }}
+                />
+              ))}
+            </Reveal>
+          ) : null}
+
           {filters.length > 1 ? (
             <Reveal index={2}>
               <ScrollView
@@ -478,7 +556,15 @@ export function LibraryScreen() {
 
           {collections.length > 0 && filter === ALL ? (
             <Reveal index={3}>
-              <SectionLabel>Collections</SectionLabel>
+              <SectionLabel
+                trailing={
+                  <AppText variant="caption" tone="muted" style={{ fontSize: 11 }}>
+                    AI-organized
+                  </AppText>
+                }
+              >
+                Collections
+              </SectionLabel>
               <View style={{ gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
                 {collections.map((node) => (
                   <CollectionCard
@@ -538,7 +624,7 @@ export function LibraryScreen() {
           ) : null}
 
           <Reveal index={5}>
-            <SectionLabel>{filter === ALL ? 'Everything' : labelFor(filter)}</SectionLabel>
+            <SectionLabel>{filter === ALL ? 'Recent Saves' : labelFor(filter)}</SectionLabel>
           </Reveal>
           <View style={{ gap: spacing.smd }}>
             {visible.length > 0 ? (
