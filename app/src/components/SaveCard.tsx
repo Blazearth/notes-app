@@ -1,7 +1,9 @@
-import React from 'react';
-import { View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, View } from 'react-native';
 
 import type { SaveResponse } from '@/api/types';
+import { canRetry, isRetrying, resolveRetry, retryTarget, startRetry } from '@/saves/retry';
+import { useSaves } from '@/saves/SavesProvider';
 import { buildCardModel } from '@/saves/cardModel';
 import { saveSubtitle, saveTitle } from '@/saves/format';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
@@ -12,6 +14,133 @@ import { Glyph } from './Glyph';
 import { ListRow } from './ListRow';
 import { SaveThumb } from './SaveThumb';
 import { SwipeableRow } from './SwipeableRow';
+import { Touchable } from './Touchable';
+
+const SOURCE_LABELS: Record<SaveResponse['sourceType'], string> = {
+  url: 'Link',
+  text: 'Note',
+  image: 'Image',
+  pdf: 'PDF',
+  audio: 'Audio',
+};
+
+/**
+ * A failed save's own compact row — deliberately not the rich type-specific
+ * card, and not the plain `ListRow` fallback either. Neither of those makes
+ * "this didn't work, here's what to do" the visual point; this one leads with
+ * it, and never lets a failed capture read as though it succeeded.
+ *
+ * Shared by Home and Library because both render failed saves through this
+ * same `SaveCard`, which is what item 6 of the design pass actually asked
+ * for: one failure component, not two that can drift apart.
+ */
+function FailedSaveRow({
+  save,
+  selectionMark,
+  onPress,
+  onLongPress,
+  retryDisabled,
+}: {
+  save: SaveResponse;
+  selectionMark: React.ReactNode;
+  onPress?: () => void;
+  onLongPress?: () => void;
+  /** True while the Library's multi-select is active — a tap should select, not retry. */
+  retryDisabled?: boolean;
+}) {
+  const { palette, spacing, radius } = useTheme();
+  const { saves } = useSaves();
+  const [retrying, setRetrying] = useState(() => isRetrying(save.id));
+  const target = retrying ? retryTarget(save.id, saves) : undefined;
+
+  // Watches the linked retry attempt to completion. `target` comes from the
+  // same live store every screen reads, so this advances the instant the
+  // pipeline (real or offline-queued) moves the new save to `ready` or
+  // `failed` — no polling of its own.
+  useEffect(() => {
+    if (!retrying || !target) return;
+    if (target.status === 'ready') {
+      resolveRetry(save.id, target, true);
+      setRetrying(false);
+    } else if (target.status === 'failed') {
+      resolveRetry(save.id, target, false);
+      setRetrying(false);
+    }
+  }, [retrying, target, save.id]);
+
+  const handleRetry = () => {
+    if (retrying || retryDisabled) return;
+    if (startRetry(save, saves)) setRetrying(true);
+  };
+
+  const canShowRetry = canRetry(save);
+  const sourceLabel = save.sourceUrl || (save.sourceType === 'text' ? saveTitle(save) : SOURCE_LABELS[save.sourceType]);
+
+  return (
+    <Card padding={0} radius={radius.md} onPress={onPress} onLongPress={onLongPress} style={{ opacity: 0.92 }}>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: spacing.smd,
+          padding: spacing.smd,
+        }}
+      >
+        {selectionMark}
+        <View
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: radius.sm,
+            backgroundColor: `${palette.danger}26`,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Glyph name="close" size={14} weight={2} color={palette.danger} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <AppText variant="label" numberOfLines={1} style={{ color: palette.danger, fontSize: 12 }}>
+            Couldn't process this save
+          </AppText>
+          <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 1 }}>
+            {sourceLabel}
+          </AppText>
+          <AppText variant="caption" tone="muted" numberOfLines={1} style={{ fontSize: 10, marginTop: 1 }}>
+            {SOURCE_LABELS[save.sourceType]}
+            {save.errorMessage ? ` · ${save.errorMessage}` : ' · We couldn’t process this save'}
+          </AppText>
+        </View>
+        {retrying ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+            <ActivityIndicator size="small" color={palette.textMuted} />
+            <AppText variant="caption" tone="muted" style={{ fontSize: 11 }}>
+              Retrying…
+            </AppText>
+          </View>
+        ) : canShowRetry && !retryDisabled ? (
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Retry"
+            onPress={handleRetry}
+            haptic="selection"
+            style={{
+              paddingVertical: spacing.xs,
+              paddingHorizontal: spacing.smd,
+              borderRadius: radius.pill,
+              borderWidth: 1,
+              borderColor: palette.border,
+            }}
+          >
+            <AppText variant="label" tone="accent" style={{ fontSize: 12 }}>
+              Retry
+            </AppText>
+          </Touchable>
+        ) : null}
+      </View>
+    </Card>
+  );
+}
 
 /** The Library's multi-select checkbox — a hollow ring, or a filled tick. */
 function SelectionMark({ selected }: { selected: boolean }) {
@@ -95,7 +224,17 @@ export function SaveCard({
 
   let card: React.ReactNode;
 
-  if (!model) {
+  if (save.status === 'failed') {
+    card = (
+      <FailedSaveRow
+        save={save}
+        selectionMark={selectionMark}
+        onPress={onPress}
+        onLongPress={onLongPress}
+        retryDisabled={selectionMode}
+      />
+    );
+  } else if (!model) {
     const fallbackMeta = save.knowledgeType ? saveTypeMeta(save.knowledgeType) : undefined;
     card = (
       <ListRow

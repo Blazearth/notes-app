@@ -92,31 +92,45 @@ export function SavesProvider({ children }: { children: React.ReactNode }) {
    * `local:` saves are excluded: they exist nowhere but here, so there is
    * nothing to poll. They become pollable the moment the outbox reconciles them
    * onto a real id, which lands in this same store and re-runs this effect.
+   *
+   * The interval is started once, on mount, rather than re-armed off a
+   * `[processing]` dependency — an earlier version did that, and a
+   * `setTimeout` keyed on the *set* of processing ids only ever fires once
+   * per distinct set: if that single poll lands before the job actually
+   * finishes, nothing schedules a second one unless some other save happens
+   * to enter or leave `processing` afterward. A save that takes longer than
+   * one `POLL_INTERVAL` to finish — not a rare case — then sits at
+   * "Processing…" forever with nothing but a manual refresh to unstick it.
+   * Reading `processing` from a ref inside the interval keeps one timer alive
+   * for the provider's whole lifetime and re-checks the current set on every
+   * tick, so it keeps polling for as long as anything actually needs it.
    */
   const startedAt = useRef<Map<string, number>>(new Map());
   const processing = saves
     .filter((save) => save.status === 'processing' && !isLocalId(save.id))
     .map((save) => save.id)
     .join(',');
+  const processingRef = useRef(processing);
+  processingRef.current = processing;
 
   useEffect(() => {
-    if (!processing) return;
-    const ids = processing.split(',');
-    const now = Date.now();
-    for (const id of ids) if (!startedAt.current.has(id)) startedAt.current.set(id, now);
-
-    const timer = setTimeout(() => {
-      for (const id of ids) {
+    const interval = setInterval(() => {
+      const current = processingRef.current;
+      if (!current) return;
+      const now = Date.now();
+      for (const id of current.split(',')) {
+        if (!startedAt.current.has(id)) startedAt.current.set(id, now);
         if (now - (startedAt.current.get(id) ?? now) > POLL_TIMEOUT) continue;
+        void sync.pullSave(id);
         // `pullSave` writes into the store, so the feed updates itself — nothing
         // here has to hold or hand back the result. When the save reaches
-        // `ready` it drops out of `processing` and this effect stops.
+        // `ready` it drops out of `processing` and stops being polled.
         void sync.pullSave(id);
       }
     }, POLL_INTERVAL);
 
-    return () => clearTimeout(timer);
-  }, [processing]);
+    return () => clearInterval(interval);
+  }, []);
 
   const refresh = useCallback(() => sync.refreshAll(), []);
 

@@ -97,7 +97,14 @@ const nextId = (prefix: string) => `${prefix}-${++idCounter}`;
 const now = () => new Date().toISOString();
 
 // Mutable stores, seeded from the fixtures.
-const saves: SaveResponse[] = copy(MOCK_SAVES);
+//
+// `userId` is stamped on here rather than in the fixture data itself:
+// `SavesProvider` filters the personal feed by `ownedByUserId` (added
+// 2026-08-11 to keep a Space-mate's saves out of Home/Library), and every
+// `MOCK_SAVES` entry is Maya's own save — none of the fixtures ever carried
+// the field, which silently emptied both feeds in mock mode until this line
+// existed. One stamp here covers every save rather than 19 fixture edits.
+const saves: SaveResponse[] = copy(MOCK_SAVES).map((save) => ({ ...save, userId: save.userId ?? MOCK_USER_ID }));
 const spaces: Space[] = copy(MOCK_SPACES);
 const members: Record<string, SpaceMember[]> = copy(MOCK_MEMBERS);
 const activity: Record<string, ActivityEntry[]> = copy(MOCK_ACTIVITY);
@@ -347,6 +354,12 @@ export const mockRepository: Repository = {
     }
     const save: SaveResponse = {
       id: nextId('sv'),
+      // Every fixture save gets this stamp at seed time (see the `saves`
+      // initializer above) so `SavesProvider`'s `ownedByUserId` filter can see
+      // it; a save minted here has to carry it too, or a save created during
+      // this session would be invisible in the mock user's own feed the
+      // instant it's made.
+      userId: MOCK_USER_ID,
       sourceType: body.sourceType,
       sourceUrl: body.sourceUrl,
       spaceId: body.spaceId,

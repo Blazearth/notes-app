@@ -49,6 +49,10 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'alphabetical', label: 'A–Z' },
 ];
 
+const AI_ORGANIZED_TITLE = 'Why these are grouped';
+const AI_ORGANIZED_MESSAGE =
+  'Weavr automatically grouped your saves based on their content and relationships.';
+
 function labelFor(filter: string): string {
   if (filter === ALL || filter === FAVORITES || filter === ARCHIVED) return filter;
   return saveTypeMeta(filter).label;
@@ -230,20 +234,25 @@ export function LibraryScreen() {
   // toggle rather than a useful one.
   const dimensionAvailable = entityBearingTypes.size > 0 && tileCounts.length > 0;
 
-  // Collections and Favorites/Archived are status filters, not type-organised
-  // ones, so they stay out of the 'collections' and 'types' narrowings and
-  // only appear under 'all'.
+  // Favorites/Archived are status filters, not type-organised ones — they
+  // live in the sort popover (below) rather than this row, which is purely
+  // "what kind of thing is this" at every dimension. That is also why this
+  // row is never shown at all when the View is 'All' and Collections exist:
+  // there is nothing left for it to narrow that Collections/By type/Recent
+  // Saves don't already offer as their own entry point.
   const filters =
     dimensionAvailable && dimension === 'collections'
       ? [ALL, ...counts.filter(([type]) => entityBearingTypes.has(type)).map(([type]) => type)]
       : dimensionAvailable && dimension === 'types'
         ? [ALL, ...counts.filter(([type]) => !entityBearingTypes.has(type)).map(([type]) => type)]
-        : [
-            ALL,
-            ...counts.map(([type]) => type),
-            ...(favoriteCount > 0 ? [FAVORITES] : []),
-            ...(archivedCount > 0 ? [ARCHIVED] : []),
-          ];
+        : [ALL, ...counts.map(([type]) => type)];
+
+  // The row itself only renders when it has something to say: once
+  // Collections exist, 'All' has its own sections below and showing a second
+  // tab-like row under it was exactly the confusion this redesign removes.
+  // Without any Collections yet, there's no dimension row above to confuse it
+  // with, so the type chips stay as the one navigation row.
+  const showFilterRow = (!dimensionAvailable || dimension !== 'all') && filters.length > 1;
 
   const filtered: SaveResponse[] = useMemo(() => {
     // In the ALL view, text saves are shown in the Handnotes section above,
@@ -408,7 +417,7 @@ export function LibraryScreen() {
             </View>
             <View style={{ flexDirection: 'row', gap: spacing.sm }}>
               <HeaderAction
-                glyph="filter"
+                glyph="sort"
                 label="Sort"
                 active={sortMenuOpen}
                 onPress={() => setSortMenuOpen((v) => !v)}
@@ -418,9 +427,8 @@ export function LibraryScreen() {
         )}
       </Reveal>
 
-      {/* Mirrors Home's "Ask or find anything…" bar — Library's search is the
-          same hybrid endpoint, and a full-width bar makes that discoverable
-          instead of hiding it behind an icon. */}
+      {/* Same copy as Home and Search — one wording for the app's one hybrid
+          retrieval mechanism, not three that drift. */}
       {!selectionMode ? (
         <Reveal index={1}>
           <Touchable
@@ -443,28 +451,51 @@ export function LibraryScreen() {
           >
             <Glyph name="search" size={16} weight={2} />
             <AppText tone="muted" style={{ fontSize: 14 }}>
-              Search or ask anything…
+              Ask or find anything…
             </AppText>
           </Touchable>
         </Reveal>
       ) : null}
 
       {sortMenuOpen && !selectionMode ? (
-        <Reveal
-          index={2}
-          style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg }}
-        >
-          {SORT_OPTIONS.map((opt) => (
-            <Chip
-              key={opt.key}
-              label={opt.label}
-              selected={sortBy === opt.key}
-              onPress={() => {
-                setSortBy(opt.key);
-                setSortMenuOpen(false);
-              }}
-            />
-          ))}
+        <Reveal index={2} style={{ marginBottom: spacing.lg }}>
+          <View style={{ flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' }}>
+            {SORT_OPTIONS.map((opt) => (
+              <Chip
+                key={opt.key}
+                label={opt.label}
+                selected={sortBy === opt.key}
+                onPress={() => {
+                  setSortBy(opt.key);
+                  setSortMenuOpen(false);
+                }}
+              />
+            ))}
+          </View>
+          {favoriteCount > 0 || archivedCount > 0 ? (
+            <View style={{ flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap', marginTop: spacing.sm }}>
+              {favoriteCount > 0 ? (
+                <Chip
+                  label={FAVORITES}
+                  selected={filter === FAVORITES}
+                  onPress={() => {
+                    setFilter((f) => (f === FAVORITES ? ALL : FAVORITES));
+                    setSortMenuOpen(false);
+                  }}
+                />
+              ) : null}
+              {archivedCount > 0 ? (
+                <Chip
+                  label={ARCHIVED}
+                  selected={filter === ARCHIVED}
+                  onPress={() => {
+                    setFilter((f) => (f === ARCHIVED ? ALL : ARCHIVED));
+                    setSortMenuOpen(false);
+                  }}
+                />
+              ) : null}
+            </View>
+          ) : null}
         </Reveal>
       ) : null}
 
@@ -526,7 +557,7 @@ export function LibraryScreen() {
             </Reveal>
           ) : null}
 
-          {filters.length > 1 ? (
+          {showFilterRow ? (
             <Reveal index={2}>
               <ScrollView
                 horizontal
@@ -542,11 +573,7 @@ export function LibraryScreen() {
                     key={option}
                     label={labelFor(option)}
                     selected={option === filter}
-                    tint={
-                      option !== ALL && option !== FAVORITES && option !== ARCHIVED
-                        ? saveTypeMeta(option).color
-                        : undefined
-                    }
+                    tint={option !== ALL ? saveTypeMeta(option).color : undefined}
                     onPress={() => setFilter(option)}
                   />
                 ))}
@@ -558,9 +585,16 @@ export function LibraryScreen() {
             <Reveal index={3}>
               <SectionLabel
                 trailing={
-                  <AppText variant="caption" tone="muted" style={{ fontSize: 11 }}>
-                    AI-organized
-                  </AppText>
+                  <Touchable
+                    accessibilityRole="button"
+                    accessibilityLabel="Why these are grouped"
+                    onPress={() => Alert.alert(AI_ORGANIZED_TITLE, AI_ORGANIZED_MESSAGE)}
+                    haptic="light"
+                  >
+                    <AppText variant="caption" tone="muted" style={{ fontSize: 11, textDecorationLine: 'underline' }}>
+                      AI-organized
+                    </AppText>
+                  </Touchable>
                 }
               >
                 Collections

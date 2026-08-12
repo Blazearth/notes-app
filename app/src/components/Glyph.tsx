@@ -61,6 +61,8 @@ export type GlyphName =
   // Knowledge-first Spaces S3/S4 — an entity's discussion, and a pinned thing.
   | 'messageCircle'
   | 'pin'
+  // Library polish pass — a dedicated sort control, distinct from 'filter'.
+  | 'sort'
   // Decorative primitives — not drawn as icons in the mockup
   | 'circle'
   | 'ring'
@@ -505,6 +507,17 @@ export function Glyph({ name, size = 18, color, weight = 2, style }: GlyphProps)
           <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
             <Path d="M15 3H9l1 4-3 3v2h10v-2l-3-3 1-4Z" />
             <Line x1="12" y1="12" x2="12" y2="21" />
+          </StrokeIcon>
+        );
+
+      // Library header's sort control — up/down arrows, distinct from
+      // 'filter' now that the two do different jobs (dimension chips filter,
+      // this sorts).
+      case 'sort':
+        return (
+          <StrokeIcon size={size} color={stroke} weight={weight} style={style}>
+            <Path d="M7 3v14M3 13l4 4 4-4" />
+            <Path d="M17 21V7M13 11l4-4 4 4" />
           </StrokeIcon>
         );
     }
