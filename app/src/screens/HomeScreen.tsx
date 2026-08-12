@@ -1,19 +1,21 @@
 import { useRouter } from 'expo-router';
-import React, { useRef } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { ActivityIndicator, Alert, RefreshControl, ScrollView, View } from 'react-native';
 
 import { MOCK_CATEGORIES, MOCK_SOURCE_LABELS, type KnowledgeGroup } from '@/data';
-import type { DigestResponse, SaveResponse, Space } from '@/api/types';
+import type { CollectionNodeResponse, DigestResponse, SaveResponse, Space } from '@/api/types';
+import { collectionTypeMeta } from '@/collections/collectionMeta';
 import type { NextAction } from '@/collections/nextAction';
 import { KV, useLiveValue } from '@/local';
-import { DERIVED_TABLES, readContinueSaves, readGroups, readTopNextAction } from '@/local/derived';
+import { DERIVED_TABLES, readCollections, readContinueSaves, readGroups, readTopNextAction } from '@/local/derived';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
+import { CollectionCard } from '@/components/CollectionCard';
 import { Glyph } from '@/components/Glyph';
 import { NextActionCard } from '@/components/NextActionCard';
 
 import { SaveThumb } from '@/components/SaveThumb';
-import { saveTypeMeta } from '@/saves/saveTypeMeta';
+import { groupItemNoun, saveTypeMeta } from '@/saves/saveTypeMeta';
 import { Reveal } from '@/components/Reveal';
 import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
@@ -57,6 +59,7 @@ const RECENT_LIMIT = 5;
 const EMPTY_SAVES: SaveResponse[] = [];
 const EMPTY_SPACES: Space[] = [];
 const EMPTY_GROUPS: KnowledgeGroup[] = [];
+const EMPTY_COLLECTIONS: CollectionNodeResponse[] = [];
 
 function greetingForHour(hour: number): string {
   if (hour < 12) return 'Good morning';
@@ -110,7 +113,35 @@ function progressForSave(save: SaveResponse): { fraction: number; label: string 
       };
     }
   }
-  return LIFECYCLE_PROGRESS[save.lifecycleStatus ?? 'saved'] ?? { fraction: 0, label: 'Saved' };
+  const base = LIFECYCLE_PROGRESS[save.lifecycleStatus ?? 'saved'] ?? { fraction: 0, label: 'Saved' };
+  const items = rawItemCountLabel(save);
+  return items ? { ...base, label: `${base.label} · ${items}` } : base;
+}
+
+/**
+ * Which extracted array a type's own "how many things" is — mirrors the
+ * field names `detailModel.ts`'s bespoke layouts already read (`d.places`,
+ * `d.items`, `d.exercises`). Only entity-bearing types get an entry: these
+ * are the ones whose items have a real domain noun (`collectionTypeMeta`)
+ * rather than a generic one, which is what makes "4 places" worth saying
+ * over "Planned" alone. No completion fraction — that lives in per-entity
+ * `entity_states`, keyed by a merged collection this card doesn't have; this
+ * is only ever a raw count of what the save itself extracted.
+ */
+const RAW_ITEMS_FIELD: Record<string, string> = {
+  itinerary: 'places',
+  recommendation_list: 'items',
+  checklist: 'items',
+  workout: 'exercises',
+};
+
+function rawItemCountLabel(save: SaveResponse): string | null {
+  const type = save.knowledgeType;
+  const field = type ? RAW_ITEMS_FIELD[type] : undefined;
+  if (!field) return null;
+  const raw = save.structuredData?.[field];
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  return `${raw.length} ${collectionTypeMeta(type!).entityNoun(raw.length)}`;
 }
 
 function ContinueCard({ save, onPress }: { save: SaveResponse; onPress: () => void }) {
@@ -196,12 +227,15 @@ const GroupCard = React.memo(function GroupCard({
 }) {
   const { spacing, radius } = useTheme();
   const preview = subgroupPreview(group);
+  // A root group's own id (Home only ever shows roots) is its type — see
+  // `@/groups/tree`'s `buildTypeGroup`.
+  const noun = groupItemNoun(group.id, group.itemCount);
 
   return (
     <Card padding={0} radius={radius.md} style={{ flexBasis: '48%', flexGrow: 1, overflow: 'hidden' }}>
       <Touchable
         accessibilityRole="button"
-        accessibilityLabel={`${group.name}, ${group.itemCount} items`}
+        accessibilityLabel={`${group.name}, ${group.itemCount} ${noun}`}
         onPress={onPress}
         haptic="selection"
         style={{ padding: spacing.md, gap: spacing.xs }}
@@ -223,7 +257,7 @@ const GroupCard = React.memo(function GroupCard({
           </AppText>
         ) : null}
         <AppText variant="caption" tone="faint">
-          {group.itemCount} items
+          {group.itemCount} {noun}
         </AppText>
       </Touchable>
     </Card>
@@ -408,6 +442,19 @@ export function HomeScreen() {
   const continueSaves = useLiveValue<SaveResponse[]>(['saves'], readContinueSaves, EMPTY_SAVES);
   const spaces = useLiveValue<Space[]>(['spaces'], (store) => store.readSpaces(), EMPTY_SPACES);
   const groups = useLiveValue<KnowledgeGroup[]>(DERIVED_TABLES, readGroups, EMPTY_GROUPS);
+  // The same derived tree `LibraryScreen` already uses to split "Collections"
+  // from "By type" — Home used to show every type as a flat `GroupCard`
+  // regardless, which is why tapping "Recommendations" here landed on a plain
+  // list of saves while the *identical* tile in the Library opened the real
+  // topic → collection → items hierarchy. A type only gets a `CollectionCard`
+  // once it has actually produced a node (an empty extraction still falls
+  // back to its ordinary group tile, same rule as the Library).
+  const collections = useLiveValue<CollectionNodeResponse[]>(DERIVED_TABLES, readCollections, EMPTY_COLLECTIONS);
+  const entityBearingTypes = useMemo(() => new Set(collections.map((c) => c.id)), [collections]);
+  const looseGroups = useMemo(
+    () => groups.filter((g) => !entityBearingTypes.has(g.id)),
+    [groups, entityBearingTypes],
+  );
   // The single highest-weighted `@/collections/nextAction` candidate across
   // every collection type's whole tree — Home asks the same engine a leaf
   // collection screen asks of its own node, just over the whole library
@@ -556,13 +603,34 @@ export function HomeScreen() {
         </Reveal>
       ) : null}
 
-      {/* The library, one level up: what the user has, rather than what they
-          most recently added. Hidden when nothing can group — which is the
-          honest rendering under the real backend, where no endpoint serves
-          these yet. */}
-      {groups.length > 0 ? (
+      {/* Entity-bearing types (Recommendations, Itineraries, Workouts,
+          Checklists) get the real topic → collection → items hierarchy here
+          too, not just in the Library — the same `CollectionCard` routing to
+          the same `/collection/[type]` screen, so "Recommendations" opens on
+          its topics (Places, Anime) rather than a flat pile of saves. */}
+      {collections.length > 0 ? (
         <Reveal index={4}>
-          <SectionLabel>AI groups</SectionLabel>
+          <SectionLabel>Collections</SectionLabel>
+          <View style={{ gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
+            {collections.map((node) => (
+              <CollectionCard
+                key={node.id}
+                node={node}
+                type={node.id}
+                onPress={() => router.push({ pathname: '/collection/[type]', params: { type: node.id } })}
+              />
+            ))}
+          </View>
+        </Reveal>
+      ) : null}
+
+      {/* The library, one level up: what the user has, rather than what they
+          most recently added. A type that already has a `CollectionCard`
+          above does not get a second, competing tile here — see
+          `looseGroups`. Hidden entirely when nothing can group. */}
+      {looseGroups.length > 0 ? (
+        <Reveal index={4}>
+          <SectionLabel>By type</SectionLabel>
           <View
             style={{
               flexDirection: 'row',
@@ -571,7 +639,7 @@ export function HomeScreen() {
               marginBottom: spacing.xxl - 2,
             }}
           >
-            {groups.map((group) => (
+            {looseGroups.map((group) => (
               <GroupCard
                 key={group.id}
                 group={group}

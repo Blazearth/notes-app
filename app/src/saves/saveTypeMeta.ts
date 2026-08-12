@@ -53,3 +53,39 @@ export function saveTypeMeta(type: string): SaveTypeMeta {
     }
   );
 }
+
+const plural = (singular: string, pluralForm?: string) => (n: number) =>
+  n === 1 ? singular : (pluralForm ?? `${singular}s`);
+
+/**
+ * What one *save* of a type is called, singular and plural — "1 book",
+ * "3 recipes" — for the flat `GroupService`/`@/groups/tree` screens
+ * (`GroupDetailScreen`, the Home "AI groups" tiles).
+ *
+ * A different vocabulary from `collectionTypeMeta`'s `entityNoun`: that one
+ * names the merged *entities inside* an entity-bearing type's collection
+ * ("14 places" within one itinerary), this names the *saves themselves* when
+ * a type has no collection to merge into (or produced none) and is still
+ * shown as a plain folder of saves.
+ */
+const ITEM_NOUNS: Record<string, (count: number) => string> = {
+  recipe: plural('recipe'),
+  movie: plural('title'),
+  place: plural('place'),
+  restaurant: plural('place'),
+  article: plural('article'),
+  product: plural('product'),
+  book: plural('book'),
+  workout: plural('workout'),
+  recommendation_list: plural('list'),
+  checklist: plural('checklist'),
+  itinerary: plural('itinerary', 'itineraries'),
+  course: plural('course'),
+  github_repo: plural('repo'),
+  other: plural('note'),
+};
+const ITEM_NOUN_FALLBACK = plural('item');
+
+export function groupItemNoun(type: string, count: number): string {
+  return (ITEM_NOUNS[type] ?? ITEM_NOUN_FALLBACK)(count);
+}

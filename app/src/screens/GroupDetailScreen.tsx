@@ -15,6 +15,8 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { type KnowledgeGroup } from '@/data';
+import { displayName } from '@/knowledge/facets';
+import { groupItemNoun } from '@/saves/saveTypeMeta';
 import { STATUS_LABELS } from '@/saves/format';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -45,12 +47,16 @@ const SubgroupRow = React.memo(function SubgroupRow({
 }) {
   const { palette, radius, spacing, icon } = useTheme();
   const childCount = group.subgroups.length;
+  // A subgroup's id is always `${type}~${slug}` — the same type as its parent
+  // (see `@/groups/tree`'s `ID_SEPARATOR`), so the noun for what it holds can
+  // be read off the id itself with no extra prop threaded down.
+  const noun = groupItemNoun(group.id.split('~')[0], group.itemCount);
 
   return (
     <Card padding={0} radius={radius.md}>
       <Touchable
         accessibilityRole="button"
-        accessibilityLabel={`${group.name}, ${group.itemCount} items`}
+        accessibilityLabel={`${group.name}, ${group.itemCount} ${noun}`}
         onPress={onPress}
         haptic="selection"
         style={{
@@ -82,8 +88,8 @@ const SubgroupRow = React.memo(function SubgroupRow({
             {/* A subgroup that has its own subgroups says so, because tapping
                 it goes another level down rather than to a list of saves. */}
             {childCount > 0
-              ? `${childCount} ${childCount === 1 ? 'subgroup' : 'subgroups'} · ${group.itemCount} items`
-              : `${group.itemCount} items`}
+              ? `${childCount} ${childCount === 1 ? 'subgroup' : 'subgroups'} · ${group.itemCount} ${noun}`
+              : `${group.itemCount} ${noun}`}
           </AppText>
         </View>
         {/* The icon set has one chevron and it points left, for back
@@ -191,6 +197,11 @@ export function GroupDetailScreen({ id }: { id: string }) {
 
   const hasSubgroups = group.subgroups.length > 0;
   const readyWorkoutCount = saves.filter((s) => s.status === 'ready').length;
+  // A group's own id (the root, not a subgroup) *is* its type — see
+  // `@/groups/tree`'s `buildTypeGroup`, which names the top-level node after
+  // the type itself. A subgroup one level down still shares it.
+  const type = group.id.split('~')[0];
+  const noun = groupItemNoun(type, group.itemCount);
 
   return (
     <>
@@ -240,8 +251,8 @@ export function GroupDetailScreen({ id }: { id: string }) {
             ? `${compareIds.size} selected — pick 2-${MAX_COMPARE} workouts to compare`
             : (group.description ??
               (hasSubgroups
-                ? `${group.subgroups.length} subgroups · ${group.itemCount} items`
-                : `${group.itemCount} items`))}
+                ? `${group.subgroups.length} subgroups · ${group.itemCount} ${noun}`
+                : `${group.itemCount} ${noun}`))}
         </AppText>
       </Reveal>
 
@@ -265,7 +276,11 @@ export function GroupDetailScreen({ id }: { id: string }) {
       ) : null}
 
       <Reveal index={2}>
-        <SectionLabel>{hasSubgroups ? 'Also in this group' : 'Items'}</SectionLabel>
+        {/* A single-type folder's list is named for what it holds — "Books",
+            not "Items" — the same reasoning `collectionTypeMeta.sectionLabel`
+            already applies one system over. "Also in this group" stays generic
+            because these are specifically the saves no subgroup claimed. */}
+        <SectionLabel>{hasSubgroups ? 'Also in this group' : displayName(type)}</SectionLabel>
         {saves.length > 0 ? (
           <View style={{ gap: spacing.smd }}>
             {saves.map((save) => {
