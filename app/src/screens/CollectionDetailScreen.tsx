@@ -37,9 +37,26 @@ import {
   statusesFor,
 } from '@/collections/entityStatus';
 import { sourceSummaries, type SourceSummary } from '@/collections/sourceSummary';
+import { musclesInSplit } from '@/collections/axes';
+import { estimateSessionLoad } from '@/collections/workoutLoad';
+import { buildCandidate } from '@/collections/nextAction';
+import { NextActionCard } from '@/components/NextActionCard';
 import { displayName } from '@/knowledge/facets';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/**
+ * How this screen names its own "next up" nudge, per type — "Pick one" reads
+ * right over a watchlist, "Keep going" over a checklist that is already
+ * underway. Workout has no entry: its own action button and session-load
+ * card (below) already do this job, and a second nudge card would be the
+ * same suggestion said twice on one screen.
+ */
+const NEXT_ACTION_LABELS: Record<string, string> = {
+  recommendation_list: 'Pick one',
+  itinerary: 'Plan ahead',
+  checklist: 'Keep going',
+};
 
 /** Stable identities for the "nothing derived yet" cases — see `useLiveValue`. */
 const EMPTY_ENTITIES: CollectionEntityResponse[] = [];
@@ -61,6 +78,23 @@ function capitalise(value: string): string {
 }
 
 /**
+ * Every usable raw `muscleGroups` value across a set of source saves — the
+ * session-level facet `workout`'s axis already derives splits from, read back
+ * out for display. Screen-local: nothing outside the workout dashboard needs
+ * a raw union of this field.
+ */
+function rawMuscleGroups(saves: SaveResponse[]): string[] {
+  const out: string[] = [];
+  for (const save of saves) {
+    const raw = save.structuredData?.muscleGroups;
+    if (Array.isArray(raw)) {
+      for (const value of raw) if (typeof value === 'string') out.push(value);
+    }
+  }
+  return out;
+}
+
+/**
  * One folder in this collection — Japan under Itineraries, Romance under
  * Anime.
  *
@@ -72,10 +106,13 @@ function capitalise(value: string): string {
 function SubgroupRow({
   node,
   type,
+  muscles,
   onPress,
 }: {
   node: CollectionNodeResponse;
   type: string;
+  /** Workout only — the raw muscle groups this split's own sources train, e.g. "Back, Rear delts, Biceps" for Pull. */
+  muscles?: string[];
   onPress: () => void;
 }) {
   const { palette, radius, spacing, icon } = useTheme();
@@ -114,6 +151,11 @@ function SubgroupRow({
           <AppText variant="cardTitle" numberOfLines={1}>
             {node.name}
           </AppText>
+          {muscles && muscles.length > 0 ? (
+            <AppText variant="caption" tone="accent" numberOfLines={1} style={{ marginTop: 2 }}>
+              {muscles.join(' · ')}
+            </AppText>
+          ) : null}
           <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
             {parts.join(' · ')}
           </AppText>
@@ -142,6 +184,7 @@ function SubgroupRow({
 function EntityRow({
   entity,
   type,
+  number,
   onPress,
   onCycleStatus,
   onToggleDone,
@@ -149,6 +192,8 @@ function EntityRow({
 }: {
   entity: CollectionEntityResponse;
   type: string;
+  /** Workout only — 1-based position in its section, so a split reads as a routine rather than a pile. */
+  number?: number;
   onPress: () => void;
   onCycleStatus: () => void;
   onToggleDone: () => void;
@@ -177,6 +222,11 @@ function EntityRow({
           haptic="selection"
           style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}
         >
+          {typeof number === 'number' ? (
+            <AppText variant="caption" tone="muted" style={{ width: 20 }}>
+              {String(number).padStart(2, '0')}
+            </AppText>
+          ) : null}
           {posterUrl ? (
             <Image
               source={{ uri: posterUrl }}
@@ -544,6 +594,40 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
     [hasFolders, entities, ownKeys],
   );
 
+  /**
+   * Workout-only, and pure local compute — no request, same cost class as
+   * `detailModel.ts`'s own `workoutLoadField`. `sources` is already scoped to
+   * *this* node by `readCollectionSources` (the whole type for the root, one
+   * split's own sources for a leaf), so both the estimate and the muscle
+   * union are already the right subset with no extra filtering here.
+   */
+  const isWorkout = type === 'workout';
+  const workoutSummary = useMemo(
+    () => (isWorkout && !hasFolders ? estimateSessionLoad(shown.map((e) => e.fields)) : null),
+    [isWorkout, hasFolders, shown],
+  );
+  const splitMuscleNames = useMemo(
+    () => (isWorkout && !hasFolders && node ? musclesInSplit(rawMuscleGroups(sources), node.name) : []),
+    [isWorkout, hasFolders, node, sources],
+  );
+  // For the root "Workouts" screen: `sources` already holds every save behind
+  // every split (root `mergeNode` applies no facet filter), so each split's
+  // own muscle union is a lookup by its own `saveIds` rather than a second
+  // fetch.
+  const sourceById = useMemo(() => new Map(sources.map((s) => [s.id, s])), [sources]);
+
+  /**
+   * This node's own "next up" nudge — pure local compute over data already
+   * on this screen, never a request. `buildCandidate` already returns null
+   * for a node with folders under it and for a type below its own threshold,
+   * so no extra gating is needed here beyond excluding workout (see
+   * `NEXT_ACTION_LABELS`).
+   */
+  const nextAction = useMemo(
+    () => (node && !isWorkout ? buildCandidate(type, node, entities) : null),
+    [node, isWorkout, type, entities],
+  );
+
   // Pinned first within each section — a curation signal, not a re-sort of
   // the whole list.
   const byPinned = (a: CollectionEntityResponse, b: CollectionEntityResponse) =>
@@ -640,11 +724,12 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
         <Reveal key={section.label} index={i + 1}>
           <SectionLabel>{section.label}</SectionLabel>
           <View style={{ gap: spacing.sm, marginBottom: spacing.xxl - 2 }}>
-            {section.entities.map((entity) => (
+            {section.entities.map((entity, entityIndex) => (
               <EntityRow
                 key={entity.entityKey}
                 entity={entity}
                 type={type}
+                number={isWorkout ? entityIndex + 1 : undefined}
                 onPress={() => setSelectedKey(entity.entityKey)}
                 onCycleStatus={() => cycleStatus(entity)}
                 onToggleDone={() => toggleDone(entity)}
@@ -776,6 +861,64 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
           )}
         </Reveal>
 
+        {/* This node's own decide card, above the list it decides over — one
+            grounded pick, never a generated one, and gone entirely when the
+            type's own threshold (`@/collections/nextAction`) is not met. */}
+        {nextAction ? (
+          <Reveal index={1}>
+            <NextActionCard
+              action={nextAction}
+              label={NEXT_ACTION_LABELS[type] ?? 'Next up'}
+              onPrimary={() => {
+                if (nextAction.type === 'recommendation_list' && nextAction.entityKey) {
+                  setSelectedKey(nextAction.entityKey);
+                } else {
+                  setTab('entities');
+                }
+              }}
+            />
+          </Reveal>
+        ) : null}
+
+        {/* Workout only: this split's load at a glance, before the exercise
+            list — data and derived understanding, per the standing hierarchy,
+            never a generated suggestion. */}
+        {isWorkout && !hasFolders && (workoutSummary || splitMuscleNames.length > 0) ? (
+          <Reveal index={1}>
+            <Card style={{ marginBottom: spacing.lg }}>
+              {splitMuscleNames.length > 0 ? (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    flexWrap: 'wrap',
+                    gap: spacing.xs,
+                    marginBottom: workoutSummary ? spacing.sm : 0,
+                  }}
+                >
+                  {splitMuscleNames.map((muscle) => (
+                    <View
+                      key={muscle}
+                      style={{
+                        paddingVertical: 4,
+                        paddingHorizontal: spacing.sm,
+                        borderRadius: 100,
+                        backgroundColor: palette.surfaceVariant,
+                      }}
+                    >
+                      <AppText variant="caption">{muscle}</AppText>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              {workoutSummary ? (
+                <AppText variant="caption" tone="muted">
+                  {`${workoutSummary.totalSets} sets across ${workoutSummary.countedExercises} exercise${workoutSummary.countedExercises === 1 ? '' : 's'} · ~${workoutSummary.estimatedMinutes} min (est.)`}
+                </AppText>
+              ) : null}
+            </Card>
+          </Reveal>
+        ) : null}
+
         {entities.length === 0 ? (
           <Reveal index={1}>
             <Card>
@@ -794,6 +937,18 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
                     key={child.id}
                     node={child}
                     type={type}
+                    muscles={
+                      isWorkout
+                        ? musclesInSplit(
+                            rawMuscleGroups(
+                              child.saveIds
+                                .map((id) => sourceById.get(id))
+                                .filter((s): s is SaveResponse => !!s),
+                            ),
+                            child.name,
+                          )
+                        : undefined
+                    }
                     onPress={() => router.push({ pathname: '/collection/[type]', params: { type: child.id } })}
                   />
                 ))}

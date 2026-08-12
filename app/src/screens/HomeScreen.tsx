@@ -4,11 +4,13 @@ import { ActivityIndicator, Alert, RefreshControl, ScrollView, View } from 'reac
 
 import { MOCK_CATEGORIES, MOCK_SOURCE_LABELS, type KnowledgeGroup } from '@/data';
 import type { DigestResponse, SaveResponse, Space } from '@/api/types';
+import type { NextAction } from '@/collections/nextAction';
 import { KV, useLiveValue } from '@/local';
-import { DERIVED_TABLES, readContinueSaves, readGroups } from '@/local/derived';
+import { DERIVED_TABLES, readContinueSaves, readGroups, readTopNextAction } from '@/local/derived';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
+import { NextActionCard } from '@/components/NextActionCard';
 
 import { SaveThumb } from '@/components/SaveThumb';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
@@ -404,6 +406,13 @@ export function HomeScreen() {
   const continueSaves = useLiveValue<SaveResponse[]>(['saves'], readContinueSaves, EMPTY_SAVES);
   const spaces = useLiveValue<Space[]>(['spaces'], (store) => store.readSpaces(), EMPTY_SPACES);
   const groups = useLiveValue<KnowledgeGroup[]>(DERIVED_TABLES, readGroups, EMPTY_GROUPS);
+  // The single highest-weighted `@/collections/nextAction` candidate across
+  // every collection type's whole tree — Home asks the same engine a leaf
+  // collection screen asks of its own node, just over the whole library
+  // instead of one folder. Null is the honest common case: most libraries
+  // clear no type's threshold most of the time, and "Today" simply doesn't
+  // render rather than inventing something to fill it.
+  const nextAction = useLiveValue<NextAction | null>(DERIVED_TABLES, readTopNextAction, null);
   // `pending` is never stored (see `sync.syncDigest`), so anything here is a
   // finished digest; `null` renders as absent rather than as a loading state
   // nobody would wait around for.
@@ -498,11 +507,33 @@ export function HomeScreen() {
         </Touchable>
       </Reveal>
 
+      {/* The one cross-type nudge for the day, asked of the same engine a
+          leaf collection screen asks of its own node — see
+          `@/collections/nextAction`. Absent far more often than present:
+          most libraries clear no type's threshold most of the time, and an
+          empty "Today" is the honest answer rather than a banner filled with
+          something to say. */}
+      {nextAction ? (
+        <Reveal index={2}>
+          <NextActionCard
+            action={nextAction}
+            label="Today"
+            onPrimary={() => {
+              if (nextAction.type === 'workout') {
+                router.push({ pathname: '/session/[nodeId]', params: { nodeId: nextAction.nodeId } });
+              } else {
+                router.push({ pathname: '/collection/[type]', params: { type: nextAction.nodeId } });
+              }
+            }}
+          />
+        </Reveal>
+      ) : null}
+
       {/* Real now, and absent when there is nothing in flight. The rail used
           to render three invented cards unconditionally; an empty rail is
           honest, three fake ones are not. */}
       {continueSaves.length > 0 ? (
-        <Reveal index={2}>
+        <Reveal index={3}>
           <SectionLabel>Continue</SectionLabel>
           <View style={{ marginBottom: spacing.xxl - 2 }}>
             <Rail>
@@ -523,7 +554,7 @@ export function HomeScreen() {
           honest rendering under the real backend, where no endpoint serves
           these yet. */}
       {groups.length > 0 ? (
-        <Reveal index={3}>
+        <Reveal index={4}>
           <SectionLabel>AI groups</SectionLabel>
           <View
             style={{
@@ -548,7 +579,7 @@ export function HomeScreen() {
           render as absent rather than as a loading or error state, since
           nobody is waiting on this tile the way they wait on the feed. */}
       {digest?.status === 'ready' ? (
-        <Reveal index={4}>
+        <Reveal index={5}>
           <Card variant="accent" padding={spacing.lg} style={{ marginBottom: spacing.xxl - 2 }}>
             {/* On the accent container, not the page — so the label uses the
                 container's computed on-colour rather than the accent itself. */}
@@ -565,7 +596,7 @@ export function HomeScreen() {
           screen. Capped at two: this is a glance, and the Spaces tab is one
           tap away. */}
       {spaces.length > 0 ? (
-        <Reveal index={5}>
+        <Reveal index={6}>
           <SectionLabel>Active spaces</SectionLabel>
           <View style={{ flexDirection: 'row', gap: spacing.smd, marginBottom: spacing.xxl - 2 }}>
             {spaces.slice(0, 2).map((space) => (
@@ -613,7 +644,7 @@ export function HomeScreen() {
         </Reveal>
       ) : null}
 
-      <Reveal index={6}>
+      <Reveal index={7}>
         <SectionLabel>Recently added</SectionLabel>
         <RecentlyCaptured limit={RECENT_LIMIT} />
       </Reveal>

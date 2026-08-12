@@ -160,6 +160,36 @@ export function trainingSplits(muscleGroups: string[]): string[] {
 }
 
 /**
+ * Which of a set of sessions' raw muscle groups actually belong to one named
+ * split — "Back, Rear delts, Biceps" for Pull, out of everything a set of
+ * push-and-pull days together mention.
+ *
+ * Deliberately independent of {@link trainingSplits}'s full-body rule: a
+ * session that itself got filed as `Full body` never reaches a named split's
+ * node in the first place (its entities went to the Full body node instead),
+ * so anything reaching this function already belongs to a real split, and
+ * asking `splitOf` per muscle is enough — no session-level judgement to
+ * repeat here.
+ */
+export function musclesInSplit(muscleGroups: string[], splitName: string): string[] {
+  const target = splitName.trim().toLowerCase();
+  if (!target) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const muscleGroup of muscleGroups) {
+    const split = splitOf(muscleGroup);
+    if (!split || split.toLowerCase() !== target) continue;
+    const trimmed = muscleGroup.trim();
+    const key = trimmed.toLowerCase();
+    if (trimmed && !seen.has(key)) {
+      seen.add(key);
+      out.push(trimmed);
+    }
+  }
+  return out;
+}
+
+/**
  * The axis chain per item-bearing type, outermost first. A type absent here
  * still merges its items into entities — it simply presents them as one flat
  * list, which is K1's behaviour and remains the honest default for a type

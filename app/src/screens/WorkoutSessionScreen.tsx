@@ -1,7 +1,7 @@
 import { useKeepAwake } from 'expo-keep-awake';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, TextInput, View } from 'react-native';
 
 import type { CollectionEntityResponse, CollectionNodeResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
@@ -14,9 +14,22 @@ import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { entityDetailFields, entityMetaLine } from '@/collections/entityFields';
 import { nodeType } from '@/collections/collectionMeta';
+import { parseLeadingInt } from '@/collections/workoutLoad';
 import { useLiveValue } from '@/local';
 import { DERIVED_TABLES, readCollectionEntities, readCollectionNode } from '@/local/derived';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/** One logged set — reps and weight as free text, since a bodyweight set has no weight and a timed one has no reps. */
+interface SetLog {
+  reps: string;
+  weight: string;
+  done: boolean;
+}
+
+function defaultSets(entity: CollectionEntityResponse): SetLog[] {
+  const count = parseLeadingInt(entity.fields.sets) ?? 1;
+  return Array.from({ length: count }, () => ({ reps: '', weight: '', done: false }));
+}
 
 const EMPTY_ENTITIES: CollectionEntityResponse[] = [];
 
@@ -43,6 +56,10 @@ const EMPTY_ENTITIES: CollectionEntityResponse[] = [];
  *   be reconciled and a session abandoned halfway leaves exactly the state
  *   the user actually reached.
  * - The rest timer is not persisted — see `RestTimer`.
+ * - Per-set reps/weight logs are session-local state too, same reasoning:
+ *   what someone lifted today is not a fact about the split, and writing it
+ *   anywhere durable would need a place to put it this layer doesn't have —
+ *   there is no per-set history feature yet, only "did I do the movement."
  *
  * `useKeepAwake` holds the screen on for the lifetime of the component and
  * releases on unmount, which is precisely the session's lifetime — the same
@@ -81,6 +98,42 @@ export function WorkoutSessionScreen({ nodeId }: { nodeId: string }) {
   const [completed, setCompleted] = useState<Set<string>>(new Set());
   const toggle = useCallback((key: string) => {
     setCompleted((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  /**
+   * Set-by-set reps/weight, keyed by entity — undefined until the first log
+   * or expand, at which point it seeds from the prescribed set count
+   * (`entity.fields.sets`, or 1 when the source didn't state one).
+   */
+  const [setLogs, setSetLogs] = useState<Record<string, SetLog[]>>({});
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const logsFor = useCallback(
+    (entity: CollectionEntityResponse): SetLog[] => setLogs[entity.entityKey] ?? defaultSets(entity),
+    [setLogs],
+  );
+  const updateSet = useCallback(
+    (entity: CollectionEntityResponse, index: number, patch: Partial<SetLog>) => {
+      setSetLogs((prev) => {
+        const current = prev[entity.entityKey] ?? defaultSets(entity);
+        return { ...prev, [entity.entityKey]: current.map((s, i) => (i === index ? { ...s, ...patch } : s)) };
+      });
+    },
+    [],
+  );
+  const addSet = useCallback((entity: CollectionEntityResponse) => {
+    setSetLogs((prev) => {
+      const current = prev[entity.entityKey] ?? defaultSets(entity);
+      return { ...prev, [entity.entityKey]: [...current, { reps: '', weight: '', done: false }] };
+    });
+  }, []);
+  const toggleExpanded = useCallback((key: string) => {
+    setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -199,6 +252,93 @@ export function WorkoutSessionScreen({ nodeId }: { nodeId: string }) {
                   </View>
                 </Touchable>
                 {restUsable ? <RestTimer label={rest.trim()} /> : null}
+
+                <Touchable
+                  accessibilityRole="button"
+                  accessibilityLabel={expanded.has(entity.entityKey) ? `Hide sets for ${entity.name}` : `Log sets for ${entity.name}`}
+                  onPress={() => toggleExpanded(entity.entityKey)}
+                  haptic="light"
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: spacing.sm }}
+                >
+                  <Glyph name={expanded.has(entity.entityKey) ? 'minus' : 'plus'} size={12} color={palette.textFaint} />
+                  <AppText variant="caption" tone="muted">
+                    {expanded.has(entity.entityKey) ? 'Hide sets' : 'Log sets'}
+                  </AppText>
+                </Touchable>
+
+                {expanded.has(entity.entityKey) ? (
+                  <View style={{ marginTop: spacing.sm, gap: spacing.xs }}>
+                    {logsFor(entity).map((set, setIndex) => (
+                      <View key={setIndex} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                        <AppText variant="caption" tone="muted" style={{ width: 44 }}>
+                          {`Set ${setIndex + 1}`}
+                        </AppText>
+                        <TextInput
+                          value={set.reps}
+                          onChangeText={(v) => updateSet(entity, setIndex, { reps: v })}
+                          placeholder="reps"
+                          placeholderTextColor={palette.textFaint}
+                          keyboardType="number-pad"
+                          accessibilityLabel={`${entity.name}, set ${setIndex + 1}, reps`}
+                          style={{
+                            flex: 1,
+                            paddingVertical: 6,
+                            paddingHorizontal: spacing.sm,
+                            borderRadius: radius.sm,
+                            borderWidth: 1,
+                            borderColor: palette.border,
+                            backgroundColor: palette.surfaceVariant,
+                            color: palette.text,
+                            fontSize: 13,
+                          }}
+                        />
+                        <TextInput
+                          value={set.weight}
+                          onChangeText={(v) => updateSet(entity, setIndex, { weight: v })}
+                          placeholder="weight"
+                          placeholderTextColor={palette.textFaint}
+                          keyboardType="decimal-pad"
+                          accessibilityLabel={`${entity.name}, set ${setIndex + 1}, weight`}
+                          style={{
+                            flex: 1,
+                            paddingVertical: 6,
+                            paddingHorizontal: spacing.sm,
+                            borderRadius: radius.sm,
+                            borderWidth: 1,
+                            borderColor: palette.border,
+                            backgroundColor: palette.surfaceVariant,
+                            color: palette.text,
+                            fontSize: 13,
+                          }}
+                        />
+                        <Touchable
+                          accessibilityRole="checkbox"
+                          accessibilityState={{ checked: set.done }}
+                          accessibilityLabel={`Set ${setIndex + 1} of ${entity.name}: ${set.done ? 'done' : 'not done'}`}
+                          onPress={() => updateSet(entity, setIndex, { done: !set.done })}
+                          haptic="light"
+                        >
+                          <Glyph
+                            name={set.done ? 'checkSquare' : 'square'}
+                            size={18}
+                            color={set.done ? palette.accent : palette.textMuted}
+                          />
+                        </Touchable>
+                      </View>
+                    ))}
+                    <Touchable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Add a set to ${entity.name}`}
+                      onPress={() => addSet(entity)}
+                      haptic="light"
+                      style={{ alignSelf: 'flex-start', marginTop: 2 }}
+                    >
+                      <AppText variant="caption" tone="accent">
+                        + Add set
+                      </AppText>
+                    </Touchable>
+                  </View>
+                ) : null}
               </Card>
             </Reveal>
           );

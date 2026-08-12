@@ -31,6 +31,8 @@ import {
   type CollectionOverrides,
   type CollectionSaveFacts,
 } from '@/collections/merge';
+import { nodeType } from '@/collections/collectionMeta';
+import { buildCandidate, rankCandidates, type NextAction } from '@/collections/nextAction';
 import type { KnowledgeGroup } from '@/data/repository';
 import { buildTree as buildGroupTree, collectSaveIds, findGroup, type GroupSaveFacts } from '@/groups/tree';
 import type { LocalStore } from './store';
@@ -180,6 +182,37 @@ export async function readCollectionSources(
   const saveIds = new Set<string>();
   entities.forEach((entity) => entity.sources.forEach((source) => saveIds.add(source.saveId)));
   return store.readSavesByIds([...saveIds]);
+}
+
+/** Every node with no folders under it — the only nodes a candidate can ever be about. */
+function leafNodes(nodes: CollectionNodeResponse[]): CollectionNodeResponse[] {
+  const out: CollectionNodeResponse[] = [];
+  const walk = (n: CollectionNodeResponse) => {
+    if (n.subgroups.length === 0) out.push(n);
+    else n.subgroups.forEach(walk);
+  };
+  nodes.forEach(walk);
+  return out;
+}
+
+/**
+ * Home's single "Today" tile — the highest-weighted `@/collections/nextAction`
+ * candidate across every type's whole tree. Walks every leaf once; each leaf's
+ * own entities are already a cheap read (`readCollectionEntities` re-merges
+ * from the in-memory `readySaves`, not a second store round trip), and a
+ * user's tree is small enough that this costs nothing worth memoising
+ * further. Returns null when nothing cleared any type's threshold — an empty
+ * "Today" is the honest answer, not an error.
+ */
+export async function readTopNextAction(store: LocalStore): Promise<NextAction | null> {
+  const tree = await readCollections(store);
+  const candidates: NextAction[] = [];
+  for (const leaf of leafNodes(tree)) {
+    const entities = await readCollectionEntities(store, leaf.id);
+    const candidate = buildCandidate(nodeType(leaf.id), leaf, entities);
+    if (candidate) candidates.push(candidate);
+  }
+  return rankCandidates(candidates);
 }
 
 // ------------------------------------------------- Space collections (S1)

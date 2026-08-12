@@ -1,5 +1,6 @@
 import type { SaveResponse } from '@/api/types';
 import { entityKey as computeEntityKey } from '@/collections/entities';
+import { estimateSessionLoad } from '@/collections/workoutLoad';
 
 /** One row inside a {@link DetailObject} — a labelled value or chip list. */
 export interface DetailObjectRow {
@@ -184,50 +185,21 @@ function resolveObjectState(
  * duration when the content did not already state one (`workout.duration`) —
  * no point guessing at what the creator already said.
  *
- * The per-set time (`ASSUMED_SECONDS_PER_SET`) is a fixed, undisclosed-to-the-
- * user constant standing in for time-under-tension plus transition — it is
- * not extracted from anything, which is why the result is always labelled
- * "est." rather than presented as a fact.
+ * The estimate itself is `@/collections/workoutLoad`'s `estimateSessionLoad`
+ * — shared with the collection layer's per-split summary card, which runs the
+ * identical arithmetic over a *merged* split's exercises. Keeping one copy is
+ * what stops the two figures reading differently for the same exercises.
  */
-const ASSUMED_SECONDS_PER_SET = 40;
-
-function parseLeadingInt(value: unknown): number | null {
-  const text = clean(value);
-  if (!text) return null;
-  const match = text.match(/\d+/);
-  return match ? parseInt(match[0], 10) : null;
-}
-
-function parseSecondsLenient(value: unknown): number | null {
-  const text = clean(value);
-  if (!text) return null;
-  const match = text.match(/(\d+(?:\.\d+)?)\s*(s|sec|second|m|min|minute)/i);
-  if (!match) return null;
-  const amount = parseFloat(match[1]);
-  return Math.round(match[2].toLowerCase().startsWith('m') ? amount * 60 : amount);
-}
-
 function workoutLoadField(exercises: unknown, statedDuration: string | null): DetailField | null {
   if (!Array.isArray(exercises)) return null;
-  let totalSets = 0;
-  let estimatedSeconds = 0;
-  let countedExercises = 0;
-  for (const raw of exercises) {
-    if (!isRecord(raw)) continue;
-    const sets = parseLeadingInt(raw.sets);
-    if (sets === null) continue;
-    countedExercises++;
-    totalSets += sets;
-    const rest = parseSecondsLenient(raw.rest) ?? 0;
-    estimatedSeconds += sets * (ASSUMED_SECONDS_PER_SET + rest);
-  }
-  if (!countedExercises) return null;
+  const usable = exercises.filter(isRecord);
+  const load = estimateSessionLoad(usable);
+  if (!load) return null;
 
-  const parts = [`${totalSets} set${totalSets === 1 ? '' : 's'} across ${countedExercises} exercise${countedExercises === 1 ? '' : 's'}`];
-  if (!statedDuration) {
-    const minutes = Math.max(1, Math.round(estimatedSeconds / 60));
-    parts.push(`~${minutes} min (est.)`);
-  }
+  const parts = [
+    `${load.totalSets} set${load.totalSets === 1 ? '' : 's'} across ${load.countedExercises} exercise${load.countedExercises === 1 ? '' : 's'}`,
+  ];
+  if (!statedDuration) parts.push(`~${load.estimatedMinutes} min (est.)`);
   return { label: 'Session load', text: parts.join(' · '), style: 'text' };
 }
 
