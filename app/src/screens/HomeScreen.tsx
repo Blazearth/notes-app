@@ -24,6 +24,8 @@ import { USE_MOCK_DATA } from '@/data/config';
 import { GREETING_NAME } from '@/data/sampleContent';
 import { morphFrom } from '@/motion/morph';
 import { usePreferences } from '@/prefs/PreferencesProvider';
+import { useDigestDismissed } from '@/saves/digestDismiss';
+import { daysLeftInWeek } from '@/saves/digestWeek';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
 import { writeSaveFlags, writeDeleteSave } from '@/local/writes';
@@ -417,6 +419,11 @@ export function HomeScreen() {
   // finished digest; `null` renders as absent rather than as a loading state
   // nobody would wait around for.
   const digest = useLiveValue<DigestResponse | null>(['kv'], (store) => store.readKv<DigestResponse>(KV.digest), null);
+  // Dismissal is keyed to the digest's own `weekStart`, so a new week's digest
+  // is never suppressed by last week's dismissal — see `digestDismiss.ts`.
+  const { dismissed: digestDismissed, dismiss: dismissDigest, hydrated: digestDismissHydrated } =
+    useDigestDismissed(digest?.weekStart);
+  const digestDaysLeft = digest ? daysLeftInWeek(digest.weekStart) : 0;
 
   return (
     <Screen
@@ -577,15 +584,46 @@ export function HomeScreen() {
 
       {/* Hidden until a real digest exists — 'pending' and 'empty' both
           render as absent rather than as a loading or error state, since
-          nobody is waiting on this tile the way they wait on the feed. */}
-      {digest?.status === 'ready' ? (
+          nobody is waiting on this tile the way they wait on the feed.
+          Also hidden once dismissed for its own week — gated on
+          `digestDismissHydrated` so a digest the user already dismissed
+          never flashes on screen for a frame before disappearing. */}
+      {digest?.status === 'ready' && digestDismissHydrated && !digestDismissed ? (
         <Reveal index={5}>
           <Card variant="accent" padding={spacing.lg} style={{ marginBottom: spacing.xxl - 2 }}>
             {/* On the accent container, not the page — so the label uses the
-                container's computed on-colour rather than the accent itself. */}
-            <AppText variant="sectionLabel" tone="onAccentContainer" style={{ marginBottom: spacing.sm }}>
-              Weekly digest
-            </AppText>
+                container's computed on-colour rather than the accent itself.
+                Days-left and dismiss share this header row rather than
+                adding one of their own, so the card gains no extra height
+                for them — both stay small and secondary next to the title. */}
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: spacing.sm,
+              }}
+            >
+              <AppText variant="sectionLabel" tone="onAccentContainer">
+                Weekly digest
+              </AppText>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                <AppText variant="caption" tone="onAccentContainer" style={{ fontSize: 11, opacity: 0.65 }}>
+                  {digestDaysLeft} {digestDaysLeft === 1 ? 'day' : 'days'} left
+                </AppText>
+                <Touchable
+                  accessibilityRole="button"
+                  accessibilityLabel="Dismiss weekly digest for this week"
+                  onPress={dismissDigest}
+                  haptic="light"
+                  weight="tile"
+                  hitSlop={8}
+                  style={{ width: 16, height: 16, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Glyph name="close" size={11} weight={2} color={palette.onAccentContainer} style={{ opacity: 0.55 }} />
+                </Touchable>
+              </View>
+            </View>
             <AppText tone="onAccentContainer">{digest.summary}</AppText>
           </Card>
         </Reveal>
