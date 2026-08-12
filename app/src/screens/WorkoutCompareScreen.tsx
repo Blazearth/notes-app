@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { ActivityIndicator, ScrollView, View } from 'react-native';
+import { ActivityIndicator, View } from 'react-native';
 
 import type { SaveResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
@@ -11,87 +11,150 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { useLive } from '@/local';
-import { compareWorkouts, type WorkoutCompareRow } from '@/saves/workoutCompare';
+import {
+  compareWorkouts,
+  type WorkoutCompareColumn,
+  type WorkoutCompareMembershipRow,
+  type WorkoutCompareStatRow,
+} from '@/saves/workoutCompare';
 import { useTheme } from '@/theme/ThemeProvider';
 
 /** Stable identity for the "store has nothing yet" case — see `useLive`. */
 const EMPTY_SAVES: SaveResponse[] = [];
 
-function Chip({ label, muted }: { label: string; muted?: boolean }) {
-  const { palette, radius, spacing } = useTheme();
+/** Fixed width for the attribute-label column so every row's value columns line up. */
+const LABEL_WIDTH = 96;
+
+function Header({ columns }: { columns: WorkoutCompareColumn[] }) {
+  const { spacing } = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', marginBottom: spacing.sm }}>
+      <View style={{ width: LABEL_WIDTH }} />
+      {columns.map((col) => (
+        <View key={col.saveId} style={{ flex: 1, paddingHorizontal: 4 }}>
+          <AppText variant="label" numberOfLines={2} style={{ textAlign: 'center' }}>
+            {col.title}
+          </AppText>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * One attribute row — a fixed label, then one value per workout. A row where
+ * every workout agrees is de-emphasized (muted text, no fill); a row where
+ * they differ is emphasized (default text weight, a faint accent fill) —
+ * that contrast is the entire point of a comparison table.
+ */
+function StatRowView({ row }: { row: WorkoutCompareStatRow }) {
+  const { palette, spacing, radius } = useTheme();
   return (
     <View
       style={{
-        paddingVertical: 3,
-        paddingHorizontal: spacing.sm,
-        borderRadius: radius.pill,
-        backgroundColor: muted ? palette.surfaceVariant : `${palette.accent}1a`,
-        borderWidth: 1,
-        borderColor: muted ? palette.border : `${palette.accent}40`,
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: spacing.sm,
+        paddingHorizontal: row.allSame ? 0 : spacing.xs,
+        marginHorizontal: row.allSame ? 0 : -spacing.xs,
+        borderRadius: radius.sm,
+        backgroundColor: row.allSame ? 'transparent' : `${palette.accent}12`,
       }}
     >
-      <AppText variant="caption" tone={muted ? 'muted' : 'accent'} style={{ fontSize: 11 }}>
-        {label}
-      </AppText>
-    </View>
-  );
-}
-
-function StatLine({ label, value }: { label: string; value: string }) {
-  const { spacing } = useTheme();
-  return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.xs }}>
-      <AppText variant="caption" tone="muted">
-        {label}
-      </AppText>
-      <AppText variant="caption" style={{ maxWidth: '60%', textAlign: 'right' }}>
-        {value}
-      </AppText>
-    </View>
-  );
-}
-
-/** One workout's column in the side-by-side compare. */
-function CompareColumn({ row }: { row: WorkoutCompareRow }) {
-  const { spacing } = useTheme();
-  return (
-    <Card radius={16} style={{ width: 220, marginRight: spacing.smd }}>
-      <AppText variant="cardTitle" numberOfLines={2} style={{ marginBottom: spacing.sm, minHeight: 40 }}>
-        {row.title}
-      </AppText>
-
-      <StatLine label="Goal" value={row.goal ?? '—'} />
-      <StatLine
-        label="Duration"
-        value={row.durationMin ? `${row.durationMin} min${row.durationIsEstimate ? ' (est.)' : ''}` : '—'}
-      />
-      <StatLine
-        label="Difficulty"
-        value={row.difficulty ? `${row.difficulty}${row.difficultyIsEstimate ? ' (est.)' : ''}` : '—'}
-      />
-      <StatLine label="Exercises" value={String(row.exerciseCount)} />
-
-      {row.muscleGroups.length > 0 ? (
-        <View style={{ marginTop: spacing.sm }}>
-          <AppText variant="caption" tone="faint" style={{ marginBottom: spacing.xs }}>
-            Muscle groups
+      <View style={{ width: LABEL_WIDTH - (row.allSame ? 0 : spacing.xs) }}>
+        <AppText variant="caption" tone={row.allSame ? 'faint' : 'muted'}>
+          {row.label}
+        </AppText>
+      </View>
+      {row.values.map((value, i) => (
+        // eslint-disable-next-line react/no-array-index-key -- values are positional, same length as columns every render
+        <View key={i} style={{ flex: 1, paddingHorizontal: 4 }}>
+          <AppText
+            variant="caption"
+            tone={row.allSame ? 'muted' : 'default'}
+            numberOfLines={1}
+            style={{ textAlign: 'center' }}
+          >
+            {value.text}
+            {value.estimate ? ' (est.)' : ''}
           </AppText>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
-            {row.muscleGroups.map((m) => (
-              <Chip key={m} label={m} muted />
-            ))}
-          </View>
         </View>
-      ) : null}
+      ))}
+    </View>
+  );
+}
+
+/** A muscle-group / equipment row — a check where a workout has it, a dash where it doesn't. */
+function MembershipRowView({ row }: { row: WorkoutCompareMembershipRow }) {
+  const { palette, spacing } = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.xs }}>
+      <View style={{ width: LABEL_WIDTH }}>
+        <AppText variant="caption" tone={row.inAll ? 'default' : 'muted'} numberOfLines={2}>
+          {row.label}
+        </AppText>
+      </View>
+      {row.present.map((present, i) => (
+        // eslint-disable-next-line react/no-array-index-key -- values are positional, same length as columns every render
+        <View key={i} style={{ flex: 1, alignItems: 'center' }}>
+          {present ? (
+            <Glyph name="check" size={13} weight={2.5} color={palette.success} />
+          ) : (
+            <AppText variant="caption" tone="faint">
+              —
+            </AppText>
+          )}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function SourceRow({ column, onPress }: { column: WorkoutCompareColumn; onPress: () => void }) {
+  const { palette, spacing, radius, icon } = useTheme();
+  return (
+    <Card padding={0} radius={radius.md} style={{ marginBottom: spacing.sm }}>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${column.title}`}
+        onPress={onPress}
+        haptic="selection"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.smd, padding: spacing.md }}
+      >
+        <View style={{ flex: 1 }}>
+          <AppText variant="cardTitle" numberOfLines={2}>
+            {column.title}
+          </AppText>
+          <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
+            Saved from · {column.sourceLabel}
+          </AppText>
+        </View>
+        <View style={{ transform: [{ scaleX: -1 }] }}>
+          <Glyph name="chevron" size={icon.sm} color={palette.textFaint} />
+        </View>
+      </Touchable>
     </Card>
   );
 }
 
 /**
- * K5's shipped alternative to AI synthesis — side-by-side comparison of
+ * K5's shipped alternative to AI synthesis — a comparison table over
  * several workout saves, entirely local compute (`compareWorkouts`). No
  * merge, no rewrite: each source keeps its own column, and the only thing
- * computed across them is a plain set intersection for "in common".
+ * computed across them is which attributes agree and a plain set
+ * intersection for muscle groups / equipment "in common".
+ *
+ * A table rather than a row of cards: on a phone-width viewport a card per
+ * workout only ever shows one card at a time, which defeats "compare" —
+ * a table's rows stay legible because only the value columns need width,
+ * and 2-3 short values fit without horizontal scrolling.
+ *
+ * Deliberately no "start this workout" / "save as routine" action spanning
+ * the compared saves — that would mean synthesizing one routine out of
+ * several sources' exercises, exactly the generative merge K5 declined (see
+ * `workoutCompare.ts`). The action this screen offers instead is opening a
+ * specific source, where Phase 4's own exercise/rest-timer controls already
+ * live.
  */
 export function WorkoutCompareScreen({ ids }: { ids: string[] }) {
   const { palette, spacing } = useTheme();
@@ -161,11 +224,13 @@ export function WorkoutCompareScreen({ ids }: { ids: string[] }) {
           Compare workouts
         </AppText>
         <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.xxl - 2 }}>
-          {model.rows.length} of {ids.length} selected — side by side, nothing merged
+          {model.columns.length >= 2
+            ? `Comparing ${model.columns.length} workouts`
+            : `${model.columns.length} of ${ids.length} selected`}
         </AppText>
       </Reveal>
 
-      {model.rows.length < 2 ? (
+      {model.columns.length < 2 ? (
         <Reveal index={1}>
           <Card>
             <AppText variant="caption" tone="muted">
@@ -176,44 +241,49 @@ export function WorkoutCompareScreen({ ids }: { ids: string[] }) {
       ) : (
         <>
           <Reveal index={1}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.xxl - 2 }}>
-              {model.rows.map((row) => (
-                <CompareColumn key={row.saveId} row={row} />
+            <Card style={{ marginBottom: spacing.xxl - 2 }}>
+              <Header columns={model.columns} />
+              <View style={{ height: 1, backgroundColor: palette.border, marginBottom: spacing.xs }} />
+              {model.stats.map((row) => (
+                <StatRowView key={row.label} row={row} />
               ))}
-            </ScrollView>
+
+              {model.muscleGroups.length > 0 ? (
+                <>
+                  <View style={{ height: 1, backgroundColor: palette.border, marginVertical: spacing.sm }} />
+                  <AppText variant="caption" tone="faint" style={{ marginBottom: spacing.xs, letterSpacing: 0.5 }}>
+                    MUSCLE GROUPS
+                  </AppText>
+                  {model.muscleGroups.map((row) => (
+                    <MembershipRowView key={row.label} row={row} />
+                  ))}
+                </>
+              ) : null}
+
+              {model.equipment.length > 0 ? (
+                <>
+                  <View style={{ height: 1, backgroundColor: palette.border, marginVertical: spacing.sm }} />
+                  <AppText variant="caption" tone="faint" style={{ marginBottom: spacing.xs, letterSpacing: 0.5 }}>
+                    EQUIPMENT
+                  </AppText>
+                  {model.equipment.map((row) => (
+                    <MembershipRowView key={row.label} row={row} />
+                  ))}
+                </>
+              ) : null}
+            </Card>
           </Reveal>
 
-          {model.commonMuscleGroups.length > 0 || model.commonEquipment.length > 0 ? (
-            <Reveal index={2}>
-              <SectionLabel>In common</SectionLabel>
-              <Card style={{ marginBottom: spacing.md }}>
-                {model.commonMuscleGroups.length > 0 ? (
-                  <View style={{ marginBottom: model.commonEquipment.length > 0 ? spacing.sm : 0 }}>
-                    <AppText variant="caption" tone="faint" style={{ marginBottom: spacing.xs }}>
-                      Muscle groups every workout trains
-                    </AppText>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
-                      {model.commonMuscleGroups.map((m) => (
-                        <Chip key={m} label={m} />
-                      ))}
-                    </View>
-                  </View>
-                ) : null}
-                {model.commonEquipment.length > 0 ? (
-                  <View>
-                    <AppText variant="caption" tone="faint" style={{ marginBottom: spacing.xs }}>
-                      Equipment every workout needs
-                    </AppText>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
-                      {model.commonEquipment.map((e) => (
-                        <Chip key={e} label={e} />
-                      ))}
-                    </View>
-                  </View>
-                ) : null}
-              </Card>
-            </Reveal>
-          ) : null}
+          <Reveal index={2}>
+            <SectionLabel>Sources</SectionLabel>
+            {model.columns.map((column) => (
+              <SourceRow
+                key={column.saveId}
+                column={column}
+                onPress={() => router.push({ pathname: '/save/[id]', params: { id: column.saveId } })}
+              />
+            ))}
+          </Reveal>
         </>
       )}
     </Screen>

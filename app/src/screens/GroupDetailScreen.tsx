@@ -22,6 +22,14 @@ import { useTheme } from '@/theme/ThemeProvider';
 const EMPTY_SAVES: SaveResponse[] = [];
 
 /**
+ * Three is the practical ceiling for the compare table on a phone-width
+ * screen — see `WorkoutCompareScreen`. Capping selection here, rather than
+ * letting the table degrade under an arbitrary N, keeps every comparison
+ * legible without horizontal scrolling.
+ */
+const MAX_COMPARE = 3;
+
+/**
  * One row in the subgroup list.
  *
  * A row rather than a tile: subgroup names run to three words ("Research
@@ -134,10 +142,15 @@ export function GroupDetailScreen({ id }: { id: string }) {
 
   const toggleCompareSelection = useCallback((saveId: string) => {
     setCompareIds((current) => {
-      const next = new Set(current);
-      if (next.has(saveId)) next.delete(saveId);
-      else next.add(saveId);
-      return next;
+      if (current.has(saveId)) {
+        const next = new Set(current);
+        next.delete(saveId);
+        return next;
+      }
+      // Silently ignore a 4th tap rather than bumping something else off —
+      // the user can see exactly which three are selected and deselect one.
+      if (current.size >= MAX_COMPARE) return current;
+      return new Set(current).add(saveId);
     });
   }, []);
 
@@ -224,7 +237,7 @@ export function GroupDetailScreen({ id }: { id: string }) {
         </AppText>
         <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.xxl - 2 }}>
           {comparing
-            ? `${compareIds.size} selected — pick at least 2 workouts to compare`
+            ? `${compareIds.size} selected — pick 2-${MAX_COMPARE} workouts to compare`
             : (group.description ??
               (hasSubgroups
                 ? `${group.subgroups.length} subgroups · ${group.itemCount} items`

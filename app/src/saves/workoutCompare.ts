@@ -17,30 +17,55 @@
  * caller can label it, the same "(estimated)" contract `detailModel.ts`
  * already applies to a single workout's `estimatedDurationMin`/
  * `estimatedDifficulty`.
+ *
+ * The shape here is a comparison **table** — attribute rows, one column per
+ * workout — rather than a card per workout. A card-per-workout layout reads
+ * fine at desktop width but on a ~360-400px phone viewport only one card is
+ * ever fully visible, which defeats "side by side" entirely; a table's rows
+ * stay legible because only the *columns* need horizontal room, and 2-3
+ * short values fit without scrolling.
  */
 
 import type { SaveResponse } from '@/api/types';
 
-export interface WorkoutCompareRow {
+export interface WorkoutCompareColumn {
   saveId: string;
   title: string;
-  goal: string | null;
-  muscleGroups: string[];
-  equipment: string[];
-  difficulty: string | null;
-  difficultyIsEstimate: boolean;
-  durationMin: number | null;
-  durationIsEstimate: boolean;
-  exerciseCount: number;
-  exerciseNames: string[];
+  sourceUrl?: string;
+  /** Hostname-ish label for the Sources list — never a raw scheme+path dump. */
+  sourceLabel: string;
+}
+
+export interface WorkoutCompareStatValue {
+  text: string;
+  estimate: boolean;
+}
+
+export interface WorkoutCompareStatRow {
+  label: string;
+  /** One entry per column, same order as `WorkoutComparison.columns`. */
+  values: WorkoutCompareStatValue[];
+  /**
+   * True when every column has the same underlying value. Drives the
+   * emphasize-differences / de-emphasize-agreement styling the table uses —
+   * a comparison's whole point is showing what's different.
+   */
+  allSame: boolean;
+}
+
+export interface WorkoutCompareMembershipRow {
+  label: string;
+  /** One entry per column: does that workout include this muscle group / equipment item. */
+  present: boolean[];
+  /** True when every column has it — rendered ahead of the partial rows. */
+  inAll: boolean;
 }
 
 export interface WorkoutComparison {
-  rows: WorkoutCompareRow[];
-  /** Muscle groups every compared workout trains — empty unless there are at least two rows. */
-  commonMuscleGroups: string[];
-  /** Equipment every compared workout needs. */
-  commonEquipment: string[];
+  columns: WorkoutCompareColumn[];
+  stats: WorkoutCompareStatRow[];
+  muscleGroups: WorkoutCompareMembershipRow[];
+  equipment: WorkoutCompareMembershipRow[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -65,8 +90,31 @@ function parseLeadingInt(value: unknown): number | null {
   return match ? parseInt(match[0], 10) : null;
 }
 
-/** One workout's own comparison row — `null` if it isn't a usable workout save. */
-function compareRow(save: SaveResponse): WorkoutCompareRow | null {
+function sourceLabel(sourceUrl: string | undefined): string {
+  if (!sourceUrl) return 'Saved note';
+  try {
+    return new URL(sourceUrl).hostname.replace(/^www\./, '');
+  } catch {
+    return sourceUrl;
+  }
+}
+
+interface WorkoutFields {
+  saveId: string;
+  title: string;
+  sourceUrl?: string;
+  goal: string | null;
+  muscleGroups: string[];
+  equipment: string[];
+  difficulty: string | null;
+  difficultyIsEstimate: boolean;
+  durationMin: number | null;
+  durationIsEstimate: boolean;
+  exerciseCount: number;
+}
+
+/** One workout's own extracted fields — `null` if it isn't a usable workout save. */
+function workoutFields(save: SaveResponse): WorkoutFields | null {
   if (save.knowledgeType !== 'workout' || !isRecord(save.structuredData)) return null;
   const d = save.structuredData;
   const title = clean(d.title);
@@ -80,6 +128,7 @@ function compareRow(save: SaveResponse): WorkoutCompareRow | null {
   return {
     saveId: save.id,
     title,
+    sourceUrl: save.sourceUrl,
     goal: clean(d.goal),
     muscleGroups: cleanList(d.muscleGroups),
     equipment: cleanList(d.equipment),
@@ -88,16 +137,34 @@ function compareRow(save: SaveResponse): WorkoutCompareRow | null {
     durationMin: statedDuration ?? estimatedDuration,
     durationIsEstimate: statedDuration === null && estimatedDuration !== null,
     exerciseCount: Array.isArray(d.exercises) ? d.exercises.length : 0,
-    exerciseNames: Array.isArray(d.exercises)
-      ? d.exercises.map((e) => (isRecord(e) ? clean(e.name) : null)).filter((v): v is string => v !== null)
-      : [],
   };
 }
 
-function intersection(lists: string[][]): string[] {
-  if (lists.length < 2) return [];
-  const [first, ...rest] = lists;
-  return first.filter((item) => rest.every((list) => list.includes(item)));
+/** A stat row from a per-column raw-value + formatter pair. `allSame` compares the raw values, never the formatted text. */
+function statRow<T>(
+  label: string,
+  rows: WorkoutFields[],
+  raw: (w: WorkoutFields) => T,
+  format: (w: WorkoutFields) => WorkoutCompareStatValue,
+): WorkoutCompareStatRow {
+  const rawValues = rows.map(raw);
+  const allSame = rawValues.every((v) => v !== null && v === rawValues[0]);
+  return { label, values: rows.map(format), allSame };
+}
+
+/** Union of a per-workout list field, in first-seen order, as membership rows across all columns. */
+function membershipRows(rows: WorkoutFields[], pick: (w: WorkoutFields) => string[]): WorkoutCompareMembershipRow[] {
+  const lists = rows.map(pick);
+  const order: string[] = [];
+  for (const list of lists) {
+    for (const item of list) if (!order.includes(item)) order.push(item);
+  }
+  const built = order.map((label) => {
+    const present = lists.map((list) => list.includes(label));
+    return { label, present, inAll: present.every(Boolean) };
+  });
+  // Shared items first — that's the "in common" answer a comparison exists to give.
+  return built.sort((a, b) => Number(b.inAll) - Number(a.inAll));
 }
 
 /**
@@ -107,10 +174,49 @@ function intersection(lists: string[][]): string[] {
  * rather than shown blank.
  */
 export function compareWorkouts(saves: SaveResponse[]): WorkoutComparison {
-  const rows = saves.map(compareRow).filter((r): r is WorkoutCompareRow => r !== null);
+  const rows = saves.map(workoutFields).filter((r): r is WorkoutFields => r !== null);
+
+  const columns: WorkoutCompareColumn[] = rows.map((r) => ({
+    saveId: r.saveId,
+    title: r.title,
+    sourceUrl: r.sourceUrl,
+    sourceLabel: sourceLabel(r.sourceUrl),
+  }));
+
+  const stats: WorkoutCompareStatRow[] = [
+    statRow(
+      'Goal',
+      rows,
+      (w) => w.goal,
+      (w) => ({ text: w.goal ?? '—', estimate: false }),
+    ),
+    statRow(
+      'Duration',
+      rows,
+      (w) => w.durationMin,
+      (w) => ({
+        text: w.durationMin !== null ? `${w.durationMin} min` : '—',
+        estimate: w.durationIsEstimate,
+      }),
+    ),
+    statRow(
+      'Difficulty',
+      rows,
+      (w) => w.difficulty,
+      (w) => ({ text: w.difficulty ?? '—', estimate: w.difficultyIsEstimate }),
+    ),
+    statRow(
+      'Exercises',
+      rows,
+      (w) => w.exerciseCount,
+      (w) => ({ text: String(w.exerciseCount), estimate: false }),
+    ),
+  ];
+
   return {
-    rows,
-    commonMuscleGroups: intersection(rows.map((r) => r.muscleGroups)),
-    commonEquipment: intersection(rows.map((r) => r.equipment)),
+    columns,
+    stats,
+    muscleGroups: membershipRows(rows, (w) => w.muscleGroups),
+    equipment: membershipRows(rows, (w) => w.equipment),
   };
 }
