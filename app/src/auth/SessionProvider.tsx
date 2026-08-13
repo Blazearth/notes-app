@@ -3,6 +3,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { supabase } from './supabase';
+import { getAuthCallbackUrl } from './redirectUrl';
 import { getMe } from '@/api/client';
 import { USE_MOCK_DATA } from '@/data/config';
 import { MOCK_USER_ID } from '@/data/mockData';
@@ -134,13 +135,21 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     const { data, error } = await supabase.auth.signUp({
       email: email.trim(),
       password,
-      // Stored as Supabase user metadata (`raw_user_meta_data`). Not read by
-      // anything server-side yet — `ProfileService.ensureExists` only inserts
-      // the id, so `profiles.display_name` stays null regardless. Harmless to
-      // send now and there for a future backend read; the local greeting
-      // (`prefs.userName`, set right after this call) is what actually fixes
-      // the "shows Maya" bug today.
-      options: trimmedName ? { data: { full_name: trimmedName } } : undefined,
+      options: {
+        // Stored as Supabase user metadata (`raw_user_meta_data`). Not read by
+        // anything server-side yet — `ProfileService.ensureExists` only inserts
+        // the id, so `profiles.display_name` stays null regardless. Harmless to
+        // send now and there for a future backend read; the local greeting
+        // (`prefs.userName`, set right after this call) is what actually fixes
+        // the "shows Maya" bug today.
+        data: trimmedName ? { full_name: trimmedName } : undefined,
+        // Without this, Supabase falls back to the project's dashboard-configured
+        // Site URL for the confirmation email's link — which is `localhost` on
+        // an unconfigured project. This is what actually brings the user back
+        // into the app; see `getAuthCallbackUrl` and `app/README.md` for the
+        // matching Redirect URLs allow-list entry this depends on.
+        emailRedirectTo: getAuthCallbackUrl(),
+      },
     });
     if (error) throw new Error(error.message);
     // With email confirmation enabled, signUp returns a user but no session.

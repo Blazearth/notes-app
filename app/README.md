@@ -51,6 +51,7 @@ so restart the bundler after changing them.
 | Preferences (persisted to AsyncStorage) | **real** |
 | Appearance settings | **real** — every control writes through and takes effect immediately |
 | Auth (Supabase email/password) | **real, works on a device** — sign-in succeeded on Android on 2026-08-01 |
+| Email verification redirect | **real, in-app; needs a one-time Supabase Dashboard step** — see below |
 | Home feed ← `GET /v1/saves` | **real, works on a device** — loading / error / empty / per-status states; seen rendering live saves on Android |
 | Bottom navigation | **real, works on a device** — painted nothing on the first device run (`TabPane`'s `zIndex` beat a nav that had none); fixed with an explicit `zIndex` on a hoisted nav layer, confirmed in Chrome and on the phone |
 | Capture sheet | **real, fix unverified on a device** — the tiles' rows collapsed to no height on Android (`flex: 1` on an auto-height column child is 0 in Yoga, not in CSS). Chrome renders this screen correctly either way, so the browser cannot confirm the fix |
@@ -148,6 +149,40 @@ dashboard toggle nobody has enabled. The cost is testing friction: a new account
 must have its email confirmed through the admin API (service-role key) before it
 can sign in. `signUp` surfaces this rather than failing silently.
 
+**The confirmation-email redirect is handled in-app, and depends on one
+Supabase Dashboard setting this repo cannot configure for you.** `signUp`
+(`src/auth/SessionProvider.tsx`) passes `emailRedirectTo:
+getAuthCallbackUrl()` (`src/auth/redirectUrl.ts`), which resolves via
+`Linking.createURL('/auth/callback')` — `weavr://auth/callback` in any native
+build (dev client and standalone alike, since this project requires an EAS
+dev client rather than Expo Go, so both use the app's real `weavr` scheme),
+or the page's own origin on web (`http://localhost:<port>/auth/callback` in
+local dev, the hosted origin in a real web deployment). Tapping the link
+lands on `/auth/callback` (`src/screens/AuthCallbackScreen.tsx`), which
+exchanges the PKCE `code` Supabase hands back for a session
+(`supabase.auth.exchangeCodeForSession`, needing `flowType: 'pkce'` on the
+client) and redirects into Home the moment `SessionProvider` picks the
+session up — or shows a clear, recoverable error for an expired/already-used
+link, a link opened on a different device than the one that signed up (the
+account is verified either way; this device's PKCE verifier just isn't the
+one that matches, so the fix is signing in normally), or an already-active
+session from a second tap of the same link.
+
+**Nothing in this repo can set the Supabase side.** Supabase only honours an
+`emailRedirectTo` that matches an entry in **Authentication → URL
+Configuration → Redirect URLs** in the Supabase Dashboard for project
+`sgjpiordywdklzhlhmwq`; anything unlisted is silently replaced with the
+dashboard's **Site URL**, which is what sends users to `localhost` regardless
+of what the app requests. Add, at minimum:
+- `weavr://auth/callback` (native — dev client and production)
+- `http://localhost:8081/auth/callback` and `http://localhost:8083/auth/callback` (local `expo start --web`; add whatever port you actually use)
+- the real origin's `/auth/callback`, once web is hosted anywhere
+
+and set **Site URL** to `weavr://auth/callback` too, so anything that falls
+through to the default (a redirect Supabase doesn't recognise, or a flow that
+doesn't pass `emailRedirectTo` at all) still lands in the app rather than on
+`localhost`.
+
 **The session lives in AsyncStorage, which the share extension cannot read.**
 Moving it to a shared Keychain access group — storing the **refresh** token, not
 just the access token — is a prerequisite for silent capture and is the retrofit
@@ -160,6 +195,7 @@ app/                    expo-router routes — thin wrappers and guards only
   _layout.tsx           providers, font loading, splash gate, config check
   index.tsx             the tab shell (Home / Library / Spaces + FAB)
   sign-in.tsx           redirects to / when a session exists
+  auth/callback.tsx     landed on from an email verification link
   capture.tsx           the Capture sheet, as a transparent modal
   settings.tsx          Settings, presented as a morph out of the Home gear
   appearance.tsx        Appearance settings

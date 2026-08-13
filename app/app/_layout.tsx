@@ -41,6 +41,12 @@ function Routes() {
       >
         <Stack.Screen name="index" />
         <Stack.Screen name="sign-in" options={{ animation: 'fade' }} />
+        {/* Landed on from an email verification (or password-reset) link —
+            see `getAuthCallbackUrl`. Explicitly listed for the same reason
+            every other route here is: K7 shipped a route file that rendered
+            fine on a direct visit and never worked from in-app navigation
+            because it was missing from this Stack. */}
+        <Stack.Screen name="auth/callback" options={{ animation: 'fade' }} />
         <Stack.Screen name="appearance" options={{ animation: 'slide_from_right' }} />
         {/* Settings does not slide in — it grows out of the gear that opened it
             (`MorphPresentation`). That needs three things from the stack, and
