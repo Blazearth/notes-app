@@ -318,6 +318,17 @@ export function patchUsername(username: string): Promise<MeResponse> {
 }
 
 /**
+ * `DELETE /v1/me` — permanently deletes the caller's account and everything
+ * it owns: Spaces it owns, every save (including ones shared into other
+ * people's Spaces), its memberships elsewhere, and every row scoped to its
+ * profile. Idempotent server-side, so a retried request after a network
+ * failure finishes the job rather than erroring.
+ */
+export function deleteAccount(): Promise<void> {
+  return request<void>('/v1/me', { method: 'DELETE' });
+}
+
+/**
  * `GET /v1/saves/search` — Postgres full-text and pgvector similarity, fused
  * server-side with Reciprocal Rank Fusion.
  *

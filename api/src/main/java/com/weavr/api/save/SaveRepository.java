@@ -100,4 +100,12 @@ public interface SaveRepository extends JpaRepository<Save, UUID> {
      * a row the service then has to remember to drop.
      */
     List<Save> findByIdInAndUserId(Collection<UUID> ids, UUID userId);
+
+    /**
+     * Every save this account owns, any status, any Space — account deletion's
+     * sweep. Unpaged and unfiltered for the same reason the group tree's own
+     * unpaged queries are: this has to be the whole set, not a page of it, or
+     * a save past the first page would silently survive its owner's account.
+     */
+    List<Save> findByUserId(UUID userId);
 }

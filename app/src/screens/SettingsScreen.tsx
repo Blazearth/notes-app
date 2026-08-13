@@ -4,6 +4,7 @@ import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, Te
 
 import type { MeResponse } from '@/api/types';
 import { ApiError, patchUsername } from '@/api/client';
+import { repo } from '@/data';
 import { KV, useLiveValue } from '@/local';
 import { sync } from '@/local/sync';
 import { useSession } from '@/auth/SessionProvider';
@@ -146,6 +147,22 @@ export function SettingsScreen() {
   const morphDismiss = useMorphDismiss();
   const goBack = morphDismiss ?? (() => router.back());
 
+  /**
+   * Settings is a modal presented *on top of* `index` (`MorphPresentation`),
+   * so a `session` flip to null alone does nothing visible: `index`'s own
+   * `<Redirect href="/sign-in">` fires, but it is buried under this screen in
+   * the stack, and the redirect target ends up hidden underneath rather than
+   * shown. Dismissing first, before or alongside the sign-out request, is
+   * what makes `index` the topmost route again in time for its own redirect
+   * to actually be seen — without this, "Log out" (and now account deletion)
+   * leaves the user staring at a Settings screen that has quietly forgotten
+   * who they are, rather than landing them on sign-in.
+   */
+  const leaveAndSignOut = () => {
+    goBack();
+    void signOut();
+  };
+
   // Not backed by an endpoint yet — mirrors the mockup's toggled-on defaults.
   const [pushNotifications, setPushNotifications] = useState(true);
   const [weeklyDigestEmail, setWeeklyDigestEmail] = useState(true);
@@ -202,6 +219,48 @@ export function SettingsScreen() {
       setUsernameError(e instanceof ApiError ? e.message : 'That username may already be taken.');
     } finally {
       setUsernameBusy(false);
+    }
+  };
+
+  // ---- Delete account: two-step confirmation ----
+  const [deleteAccountStep, setDeleteAccountStep] = useState<'none' | 'confirm' | 'final'>('none');
+  const [deleteAccountText, setDeleteAccountText] = useState('');
+  const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
+
+  const openDeleteAccount = () => {
+    setDeleteAccountText('');
+    setDeleteAccountError(null);
+    setDeleteAccountStep('confirm');
+  };
+
+  const closeDeleteAccount = () => {
+    if (deleteAccountBusy) return;
+    setDeleteAccountStep('none');
+  };
+
+  /**
+   * Never optimistic, same rule as Space deletion: the account and its data
+   * stay intact, and the user stays signed in, until the server actually
+   * confirms the delete. Only on success does anything local change — the
+   * sign-out that follows is what triggers `SyncProvider`'s existing
+   * sign-out effect to wipe the local store and `TabShell` to redirect to
+   * sign-in, the same two things "Log out" already does.
+   */
+  const confirmDeleteAccount = async () => {
+    if (deleteAccountBusy) return;
+    setDeleteAccountBusy(true);
+    setDeleteAccountError(null);
+    try {
+      await repo.deleteAccount();
+      setDeleteAccountStep('none');
+      leaveAndSignOut();
+    } catch (e) {
+      setDeleteAccountError(
+        e instanceof ApiError ? e.message : 'Could not delete your account. Check your connection and try again.',
+      );
+    } finally {
+      setDeleteAccountBusy(false);
     }
   };
 
@@ -337,9 +396,33 @@ export function SettingsScreen() {
         </Row>
       </View>
 
+      {/* Visually separated from ordinary settings, per the spec's own
+          "DANGER ZONE" example — its own labelled section rather than a row
+          folded into Support, where an irreversible action would sit beside
+          ordinary preference toggles. */}
+      <SectionLabel>Danger Zone</SectionLabel>
+      <View style={{ marginBottom: spacing.xxl }}>
+        <Row>
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Delete account"
+            onPress={openDeleteAccount}
+            haptic="medium"
+            style={{ paddingVertical: spacing.md }}
+          >
+            <AppText variant="bodySmall" style={{ fontSize: 14, fontWeight: '600', color: palette.danger }}>
+              Delete account
+            </AppText>
+            <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
+              Permanently delete your Weavr account and associated data.
+            </AppText>
+          </Touchable>
+        </Row>
+      </View>
+
       <Touchable
         accessibilityRole="button"
-        onPress={() => void signOut()}
+        onPress={leaveAndSignOut}
         // Signing out is destructive and unprompted — it earns the heavier tap.
         haptic="medium"
         style={{ paddingVertical: spacing.md, alignItems: 'center' }}
@@ -429,6 +512,128 @@ export function SettingsScreen() {
                   }
                 </Touchable>
               </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ---- Delete Account Modal: two steps, one component ---- */}
+      <Modal
+        visible={deleteAccountStep !== 'none'}
+        transparent
+        animationType="fade"
+        onRequestClose={closeDeleteAccount}
+      >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <Pressable
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', paddingHorizontal: spacing.xl }}
+            onPress={closeDeleteAccount}
+          >
+            <Pressable onPress={() => {}} style={{ backgroundColor: palette.surface, borderRadius: radius.lg, padding: spacing.xl, gap: spacing.md }}>
+              {deleteAccountStep === 'confirm' ? (
+                <>
+                  <AppText variant="cardTitle">Delete your account?</AppText>
+                  <AppText variant="caption" tone="muted">
+                    This will permanently delete your Weavr account and associated personal data.{'\n'}
+                    You may lose access to Spaces, saved content, preferences, and other account data.
+                  </AppText>
+
+                  <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.xs }}>
+                    <Touchable
+                      accessibilityRole="button"
+                      accessibilityLabel="Cancel delete account"
+                      onPress={closeDeleteAccount}
+                      style={{
+                        flex: 1, alignItems: 'center', paddingVertical: spacing.md,
+                        borderRadius: radius.pill, backgroundColor: palette.surfaceVariant,
+                      }}
+                    >
+                      <AppText variant="label" style={{ fontSize: 14 }}>Cancel</AppText>
+                    </Touchable>
+                    <Touchable
+                      accessibilityRole="button"
+                      accessibilityLabel="Continue to delete account"
+                      onPress={() => {
+                        setDeleteAccountText('');
+                        setDeleteAccountError(null);
+                        setDeleteAccountStep('final');
+                      }}
+                      haptic="medium"
+                      style={{
+                        flex: 1, alignItems: 'center', paddingVertical: spacing.md,
+                        borderRadius: radius.pill, backgroundColor: palette.danger,
+                      }}
+                    >
+                      <AppText variant="label" style={{ fontSize: 14, color: '#ffffff' }}>Continue</AppText>
+                    </Touchable>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <AppText variant="cardTitle">Type DELETE to confirm</AppText>
+                  <AppText variant="caption" tone="muted">
+                    This is the last step — your account and its data are permanently deleted the moment you confirm.
+                  </AppText>
+
+                  <TextInput
+                    value={deleteAccountText}
+                    onChangeText={(t) => {
+                      setDeleteAccountText(t);
+                      setDeleteAccountError(null);
+                    }}
+                    placeholder="DELETE"
+                    placeholderTextColor={palette.textFaint}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    editable={!deleteAccountBusy}
+                    style={{
+                      color: palette.text,
+                      fontSize: 16,
+                      paddingVertical: spacing.md,
+                      paddingHorizontal: spacing.md,
+                      borderRadius: radius.sm,
+                      backgroundColor: palette.surfaceVariant,
+                    }}
+                  />
+
+                  {deleteAccountError ? (
+                    <AppText variant="caption" style={{ color: palette.danger }}>
+                      {deleteAccountError}
+                    </AppText>
+                  ) : null}
+
+                  <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.xs }}>
+                    <Touchable
+                      accessibilityRole="button"
+                      onPress={closeDeleteAccount}
+                      disabled={deleteAccountBusy}
+                      style={{
+                        flex: 1, alignItems: 'center', paddingVertical: spacing.md,
+                        borderRadius: radius.pill, backgroundColor: palette.surfaceVariant,
+                      }}
+                    >
+                      <AppText variant="label" style={{ fontSize: 14 }}>Cancel</AppText>
+                    </Touchable>
+                    <Touchable
+                      accessibilityRole="button"
+                      accessibilityLabel="Confirm delete account"
+                      onPress={() => void confirmDeleteAccount()}
+                      disabled={deleteAccountBusy || deleteAccountText.trim() !== 'DELETE'}
+                      haptic="medium"
+                      baseOpacity={deleteAccountBusy || deleteAccountText.trim() !== 'DELETE' ? 0.45 : 1}
+                      style={{
+                        flex: 1, alignItems: 'center', paddingVertical: spacing.md,
+                        borderRadius: radius.pill, backgroundColor: palette.danger,
+                      }}
+                    >
+                      {deleteAccountBusy
+                        ? <ActivityIndicator color="#ffffff" />
+                        : <AppText variant="label" style={{ fontSize: 14, color: '#ffffff' }}>DELETE</AppText>
+                      }
+                    </Touchable>
+                  </View>
+                </>
+              )}
             </Pressable>
           </Pressable>
         </KeyboardAvoidingView>

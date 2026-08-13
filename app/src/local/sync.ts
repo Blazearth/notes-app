@@ -697,6 +697,12 @@ async function applyDeletion(type: string, id: string): Promise<void> {
     case 'space_member':
       await store.removeSpaceMember(head, tail);
       break;
+    // A save deleted on another device, or by account deletion cascading
+    // through a Space this account contributed to but does not own — see
+    // TombstoneService#SAVE.
+    case 'save':
+      await store.removeSave(id);
+      break;
     case 'shopping_item':
       await store.removeShoppingItems([id]);
       break;

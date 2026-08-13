@@ -18,6 +18,7 @@ import com.weavr.api.save.dto.CreateSaveRequest;
 import com.weavr.api.save.dto.SaveResponse;
 import com.weavr.api.space.SpaceRole;
 import com.weavr.api.space.SpaceService;
+import com.weavr.api.sync.TombstoneService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -46,14 +47,16 @@ public class SaveService {
     private final JobQueue jobs;
     private final SpaceService spaces;
     private final SupabaseStorageClient storage;
+    private final TombstoneService tombstones;
 
     SaveService(SaveRepository saves, ProfileService profiles, JobQueue jobs,
-                SpaceService spaces, SupabaseStorageClient storage) {
+                SpaceService spaces, SupabaseStorageClient storage, TombstoneService tombstones) {
         this.saves = saves;
         this.profiles = profiles;
         this.jobs = jobs;
         this.spaces = spaces;
         this.storage = storage;
+        this.tombstones = tombstones;
     }
 
     /**
@@ -363,7 +366,14 @@ public class SaveService {
     public void delete(UUID userId, UUID saveId) {
         Save save = saves.findByIdAndUserId(saveId, userId)
                 .orElseThrow(() -> new NotFoundException("Save not found"));
+        // Read the audience before the delete — same ordering rule as
+        // SpaceService#delete. save_item_states, comments and votes cascade
+        // away with the save, so a tombstone written afterwards would have
+        // nobody left to address, and a shared save would leave every other
+        // Space member holding a dead reference indefinitely.
+        List<UUID> audience = tombstones.audienceForSave(saveId);
         saves.delete(save);
+        tombstones.recordFor(audience, TombstoneService.SAVE, saveId.toString());
         log.info("Deleted save id={} user={}", saveId, userId);
     }
 

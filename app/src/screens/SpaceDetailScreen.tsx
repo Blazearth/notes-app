@@ -1,11 +1,20 @@
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, RefreshControl, View } from 'react-native';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  RefreshControl,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
-import { useLive, useLiveValue } from '@/local';
+import { getStore, useLive, useLiveValue } from '@/local';
 import { sync } from '@/local/sync';
 import { writePin, writeUnpin } from '@/local/writes';
 import type {
@@ -478,6 +487,13 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   const [invite, setInvite] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // ---- Delete Space: owner-only menu + confirmation ----
+  const [spaceMenuOpen, setSpaceMenuOpen] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   // The Space, its saves and its members read the local store, so arriving here
   // from the Spaces list paints the header and the saves tab on the first frame.
   const space = useLiveValue<Space | null>(['spaces'], (store) => store.readSpace(spaceId), null, [spaceId]);
@@ -541,6 +557,50 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   }, [load]);
 
   const canEdit = space?.myRole === 'owner' || space?.myRole === 'editor';
+  // Only the owner can delete a Space — a member never sees the action at
+  // all, per the same access-control boundary SpaceService enforces
+  // server-side (removing this Space's row is `SpaceRole.OWNER`-gated there
+  // too, so a member who somehow triggered this would just get a 403).
+  const isOwner = space?.myRole === 'owner';
+  // "Substantial shared content" — real collaboration or a real library, not
+  // a Space someone just created and hasn't used yet — earns the heavier
+  // type-the-name confirmation instead of a plain Cancel/Delete.
+  const requiresTypedConfirmation = !!space && (space.saveCount >= 5 || space.memberCount > 1);
+  const deleteConfirmMatches =
+    !requiresTypedConfirmation || deleteConfirmText.trim() === (space?.name ?? '').trim();
+
+  const openDeleteModal = useCallback(() => {
+    setSpaceMenuOpen(false);
+    setDeleteConfirmText('');
+    setDeleteError(null);
+    setDeleteModalOpen(true);
+  }, []);
+
+  /**
+   * Never optimistic: the Space stays in the local store, and the screen
+   * stays put, until the server actually confirms the delete. A rejected
+   * request leaves the user exactly where they were, with a reason and a way
+   * to try again — the opposite of `writeDeleteSave`'s queue-and-forget
+   * shape, which is right for a checkbox tick and wrong for something this
+   * destructive and this rare.
+   */
+  const confirmDeleteSpace = useCallback(async () => {
+    if (!space || deleteBusy) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await repo.deleteSpace(space.id);
+      await getStore().removeSpace(space.id);
+      setDeleteModalOpen(false);
+      router.back();
+    } catch (e) {
+      setDeleteError(
+        e instanceof ApiError ? e.message : 'Could not delete this Space. Check your connection and try again.',
+      );
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [space, deleteBusy, router]);
 
   // Derived from saves already in the store — no request, no AI. See
   // `@/spaces/spaceOverview` for what S0 deliberately stops short of.
@@ -735,33 +795,83 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
               {space.memberCount === 1 ? 'member' : 'members'} · you are {space.myRole}
             </AppText>
           </View>
-          {/* The frictionless-add path: opening Capture from here pre-targets
-              this Space (`CaptureSheet` reads `spaceId`), so a save made while
-              looking at a Space lands in it directly instead of needing a
-              second trip through `AddToSpaceSheet` afterwards. */}
-          {canEdit ? (
-            <Touchable
-              accessibilityRole="button"
-              accessibilityLabel={`Add to ${space.name}`}
-              onPress={() => router.push({ pathname: '/capture', params: { spaceId } })}
-              haptic="selection"
-              weight="tile"
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: radius.sm,
-                backgroundColor: palette.surface,
-                borderWidth: 1,
-                borderColor: palette.border,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Glyph name="plus" size={16} weight={2} color={palette.accent} />
-            </Touchable>
-          ) : null}
+          <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+            {/* Owner-only: the one destructive action for this Space. A
+                member never sees this button at all, per the spec's rule
+                that the action must not be reachable by anyone but the
+                owner — not just rejected server-side if they try. */}
+            {isOwner ? (
+              <Touchable
+                accessibilityRole="button"
+                accessibilityLabel="Space settings"
+                onPress={() => setSpaceMenuOpen((v) => !v)}
+                haptic="selection"
+                weight="tile"
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: radius.sm,
+                  backgroundColor: spaceMenuOpen ? palette.text : palette.surface,
+                  borderWidth: 1,
+                  borderColor: spaceMenuOpen ? 'transparent' : palette.border,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Glyph
+                  name="settings"
+                  size={16}
+                  weight={2}
+                  color={spaceMenuOpen ? palette.background : undefined}
+                />
+              </Touchable>
+            ) : null}
+            {/* The frictionless-add path: opening Capture from here pre-targets
+                this Space (`CaptureSheet` reads `spaceId`), so a save made while
+                looking at a Space lands in it directly instead of needing a
+                second trip through `AddToSpaceSheet` afterwards. */}
+            {canEdit ? (
+              <Touchable
+                accessibilityRole="button"
+                accessibilityLabel={`Add to ${space.name}`}
+                onPress={() => router.push({ pathname: '/capture', params: { spaceId } })}
+                haptic="selection"
+                weight="tile"
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: radius.sm,
+                  backgroundColor: palette.surface,
+                  borderWidth: 1,
+                  borderColor: palette.border,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Glyph name="plus" size={16} weight={2} color={palette.accent} />
+              </Touchable>
+            ) : null}
+          </View>
         </View>
       </Reveal>
+
+      {spaceMenuOpen && isOwner ? (
+        <Reveal index={2} style={{ marginBottom: spacing.lg }}>
+          <Card radius={radius.md} padding={0} style={{ paddingHorizontal: spacing.md }}>
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={`Delete ${space.name}`}
+              onPress={openDeleteModal}
+              haptic="medium"
+              style={{ paddingVertical: spacing.md }}
+            >
+              <AppText variant="label" style={{ fontSize: 14, fontWeight: '600', color: palette.danger }}>
+                Delete Space
+              </AppText>
+            </Touchable>
+          </Card>
+        </Reveal>
+      ) : null}
 
       {duplicates.length > 0 ? (
         <Reveal index={2}>
@@ -1218,6 +1328,113 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       ) : null}
 
       <View style={{ height: spacing.lg }} />
+
+      {/* ---- Delete Space confirmation (cross-platform, works on Android) ---- */}
+      <Modal
+        visible={deleteModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !deleteBusy && setDeleteModalOpen(false)}
+      >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <Pressable
+            style={{
+              flex: 1,
+              backgroundColor: 'rgba(0,0,0,0.55)',
+              justifyContent: 'center',
+              paddingHorizontal: spacing.xl,
+            }}
+            onPress={() => !deleteBusy && setDeleteModalOpen(false)}
+          >
+            <Pressable
+              onPress={() => {}}
+              style={{ backgroundColor: palette.surface, borderRadius: radius.lg, padding: spacing.xl, gap: spacing.md }}
+            >
+              <AppText variant="cardTitle">Delete &ldquo;{space.name}&rdquo;?</AppText>
+              <AppText variant="caption" tone="muted">
+                This will permanently delete this Space and its shared content.{'\n'}This action cannot be undone.
+              </AppText>
+
+              {requiresTypedConfirmation ? (
+                <View style={{ gap: spacing.xs }}>
+                  <AppText variant="caption" tone="muted">
+                    Type <AppText variant="caption" style={{ fontWeight: '700' }}>{space.name}</AppText> to confirm.
+                  </AppText>
+                  <TextInput
+                    value={deleteConfirmText}
+                    onChangeText={(t) => {
+                      setDeleteConfirmText(t);
+                      setDeleteError(null);
+                    }}
+                    placeholder={space.name}
+                    placeholderTextColor={palette.textFaint}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!deleteBusy}
+                    style={{
+                      color: palette.text,
+                      fontSize: 16,
+                      paddingVertical: spacing.md,
+                      paddingHorizontal: spacing.md,
+                      borderRadius: radius.sm,
+                      backgroundColor: palette.surfaceVariant,
+                    }}
+                  />
+                </View>
+              ) : null}
+
+              {deleteError ? (
+                <AppText variant="caption" style={{ color: palette.danger }}>
+                  {deleteError}
+                </AppText>
+              ) : null}
+
+              <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.xs }}>
+                <Touchable
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel delete Space"
+                  onPress={() => setDeleteModalOpen(false)}
+                  disabled={deleteBusy}
+                  style={{
+                    flex: 1,
+                    alignItems: 'center',
+                    paddingVertical: spacing.md,
+                    borderRadius: radius.pill,
+                    backgroundColor: palette.surfaceVariant,
+                  }}
+                >
+                  <AppText variant="label" style={{ fontSize: 14 }}>
+                    Cancel
+                  </AppText>
+                </Touchable>
+                <Touchable
+                  accessibilityRole="button"
+                  accessibilityLabel="Confirm delete Space"
+                  onPress={() => void confirmDeleteSpace()}
+                  disabled={deleteBusy || !deleteConfirmMatches}
+                  haptic="medium"
+                  baseOpacity={deleteBusy || !deleteConfirmMatches ? 0.45 : 1}
+                  style={{
+                    flex: 1,
+                    alignItems: 'center',
+                    paddingVertical: spacing.md,
+                    borderRadius: radius.pill,
+                    backgroundColor: palette.danger,
+                  }}
+                >
+                  {deleteBusy ? (
+                    <ActivityIndicator color="#ffffff" />
+                  ) : (
+                    <AppText variant="label" style={{ fontSize: 14, color: '#ffffff' }}>
+                      Delete Space
+                    </AppText>
+                  )}
+                </Touchable>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
     </Screen>
   );
 }

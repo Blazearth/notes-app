@@ -3,6 +3,8 @@ package com.weavr.api.save;
 import java.util.Optional;
 import java.util.UUID;
 
+import java.util.List;
+
 import com.weavr.api.common.NotFoundException;
 import com.weavr.api.config.SupabaseStorageClient;
 import com.weavr.api.job.JobQueue;
@@ -10,8 +12,10 @@ import com.weavr.api.profile.ProfileService;
 import com.weavr.api.save.dto.CreateSaveRequest;
 import com.weavr.api.space.SpaceRole;
 import com.weavr.api.space.SpaceService;
+import com.weavr.api.sync.TombstoneService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -20,6 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -41,6 +46,7 @@ class SaveServiceTest {
     private JobQueue jobs;
     private SpaceService spaces;
     private SupabaseStorageClient storage;
+    private TombstoneService tombstones;
     private SaveService service;
 
     @BeforeEach
@@ -50,7 +56,8 @@ class SaveServiceTest {
         jobs = mock(JobQueue.class);
         spaces = mock(SpaceService.class);
         storage = mock(SupabaseStorageClient.class);
-        service = new SaveService(saves, profiles, jobs, spaces, storage);
+        tombstones = mock(TombstoneService.class);
+        service = new SaveService(saves, profiles, jobs, spaces, storage, tombstones);
 
         // @UuidGenerator only assigns `id` on a real flush; simulate that here
         // so create()'s save.getId() (used to build the job payload) isn't null.
@@ -222,5 +229,47 @@ class SaveServiceTest {
 
         assertThatThrownBy(() -> service.setFlags(userId, saveId, true, null))
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    /**
+     * Mirrors {@code SpaceServiceTombstoneTest} — {@code DELETE /v1/saves/{id}}
+     * used to write no tombstone at all, so every other device of the same
+     * user (and every Space member, for a shared save) kept a dead save
+     * cached forever. See {@code TombstoneService#SAVE}.
+     */
+    @Test
+    void deletingASaveTombstonesItForTheAudience() {
+        UUID userId = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        UUID saveId = UUID.randomUUID();
+        Save save = Save.accepted(userId, SourceType.URL, "https://example.com/reel", null, null, null);
+        when(saves.findByIdAndUserId(saveId, userId)).thenReturn(Optional.of(save));
+        when(tombstones.audienceForSave(saveId)).thenReturn(List.of(userId, other));
+
+        service.delete(userId, saveId);
+
+        verify(saves).delete(save);
+        verify(tombstones).recordFor(List.of(userId, other), TombstoneService.SAVE, saveId.toString());
+    }
+
+    /**
+     * The ordering that makes the tombstone above worth anything: the save's
+     * comments, votes and item states cascade away with it, so an audience
+     * read after the delete is empty and every other reader keeps the dead
+     * save cached indefinitely.
+     */
+    @Test
+    void theAudienceIsReadBeforeTheSaveIsDeleted() {
+        UUID userId = UUID.randomUUID();
+        UUID saveId = UUID.randomUUID();
+        Save save = Save.accepted(userId, SourceType.URL, "https://example.com/reel", null, null, null);
+        when(saves.findByIdAndUserId(saveId, userId)).thenReturn(Optional.of(save));
+        when(tombstones.audienceForSave(saveId)).thenReturn(List.of(userId));
+
+        service.delete(userId, saveId);
+
+        InOrder order = inOrder(tombstones, saves);
+        order.verify(tombstones).audienceForSave(saveId);
+        order.verify(saves).delete(save);
     }
 }

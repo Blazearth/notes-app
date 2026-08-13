@@ -513,6 +513,13 @@ export const mockRepository: Repository = {
     });
   },
 
+  /** Empties the two arrays a signed-out session would otherwise still see. */
+  deleteAccount(): Promise<void> {
+    saves.splice(0, saves.length);
+    spaces.splice(0, spaces.length);
+    return delay(undefined);
+  },
+
   getWeeklyDigest(): Promise<DigestResponse> {
     return delay<DigestResponse>({
       summary: MOCK_WEEKLY_DIGEST,

@@ -81,6 +81,12 @@ export interface Repository {
 
   // Account
   getMe(): Promise<MeResponse>;
+  /**
+   * Permanently deletes the caller's account and everything it owns. The
+   * caller must sign out immediately after this resolves — the account no
+   * longer exists to make further authenticated requests as.
+   */
+  deleteAccount(): Promise<void>;
 
   /**
    * The current week's summary. `status: 'pending'` means the server just

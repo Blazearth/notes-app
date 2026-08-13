@@ -49,20 +49,13 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>{@link #COLLECTION_OVERRIDE} — {@code "<overrideType>|<subjectKey>"}</li>
  * </ul>
  *
- * <p><b>Known gap: {@code DELETE /v1/saves/&#123;id&#125;} writes no tombstone.</b> This
+ * <p><b>{@code DELETE /v1/saves/&#123;id&#125;} used to write no tombstone at all.</b> This
  * class previously reasoned that no type was needed for a deleted save because no
  * delete path existed — "declaring a constant for a delete that does not exist
  * would be a thing to forget rather than a thing to build on." The delete endpoint
- * landed without the constant, which is precisely the forgetting that predicted.
- * The consequence is silent: a save deleted on one device stays cached on every
- * other device of the same user until a pull-to-refresh, because
- * {@code replaceAll} reaping is the only thing that can currently notice. The
- * cascade compounds it — a deleted save takes its {@code save_item_states},
- * comments and votes with it, and a shared save leaves every Space member holding
- * it. Fixing it means a {@code SAVE} constant recorded against
- * {@link com.weavr.api.sync.TombstoneService#audienceForSave} (read the audience
- * <i>before</i> the delete, same ordering rule as a Space) plus a client-side
- * handler for the new type.
+ * landed without the constant, which was precisely the forgetting that predicted.
+ * Fixed by {@link #SAVE}: {@link com.weavr.api.save.SaveService#delete} now reads
+ * {@link #audienceForSave} before deleting, same ordering rule as a Space.
  *
  * <p>There is still deliberately no type for a deleted item state:
  * {@code save_item_states} only ever loses rows by cascading from its save, so
@@ -75,6 +68,14 @@ public class TombstoneService {
 
     public static final String SPACE = "space";
     public static final String SPACE_MEMBER = "space_member";
+    /**
+     * A permanently deleted save. Recorded against {@link #audienceForSave},
+     * read <i>before</i> the delete for the same reason a Space's audience is
+     * — {@code save_item_states}, comments and votes cascade away with the
+     * save, and a shared save leaves every Space member holding a dead
+     * reference until this fires. See {@link com.weavr.api.save.SaveService#delete}.
+     */
+    public static final String SAVE = "save";
     public static final String COMMENT = "comment";
     /**
      * S3's entity-level comment. A separate type from {@link #COMMENT} because
