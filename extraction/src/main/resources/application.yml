@@ -1,0 +1,114 @@
+spring:
+  application:
+    name: weavr-extraction
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 26MB
+
+server:
+  port: ${PORT:8081}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+
+weavr:
+  extraction:
+    # --------------------------------------------------------------------------
+    # Auth — the service's only access control.
+    # --------------------------------------------------------------------------
+    # Blank rejects every non-/health request with 401 rather than opening the
+    # service to anonymous callers — the same "unset disables rather than
+    # opens" rule api's own billing webhook secret follows. Deploy behind no
+    # public ingress (Phase 6); this is defence in depth, not the only control.
+    auth:
+      shared-secret: ${WEAVR_EXTRACTION_SHARED_SECRET:}
+
+    # --------------------------------------------------------------------------
+    # Artifacts — a stand-in for Phase 4's real Supabase Storage integration.
+    # --------------------------------------------------------------------------
+    # Local disk, in-memory registry: does not survive a restart and does not
+    # work across more than one running instance. That is fine for standing
+    # Phase 3 up on its own; Phase 4 replaces this whole thing.
+    artifact:
+      secret: ${WEAVR_EXTRACTION_ARTIFACT_SECRET:}
+      ttl: 10m
+
+    # In-memory Idempotency-Key cache. Same non-durability caveat as artifacts
+    # above — the backend's own idempotency (saves.idempotency_key) is the
+    # real guarantee; this only avoids re-extracting inside one instance's
+    # uptime.
+    idempotency:
+      ttl: 10m
+
+  # --------------------------------------------------------------------------
+  # yt-dlp — the free half of the extraction cascade. Same settings as api's
+  # own copy (docs/extraction-architecture.md Phase 3 ports this unchanged).
+  # --------------------------------------------------------------------------
+  ytdlp:
+    binary: ${WEAVR_YTDLP_BINARY:yt-dlp}
+    probe-timeout: 60s
+    caption-timeout: 90s
+    # Exact codes, NOT a regex — see CLAUDE.md: `en.*` synthesises 29 tracks
+    # and a 429, because yt-dlp names translated tracks `<source>-<target>`.
+    subtitle-langs: ${WEAVR_YTDLP_SUB_LANGS:en,en-orig}
+    audio-timeout: 120s
+    video-timeout: 180s
+    video-format: ${WEAVR_YTDLP_VIDEO_FORMAT:worst[height>=360]/worst}
+    cookies-base64: ${WEAVR_YTDLP_COOKIES_BASE64:}
+    player-clients: ${WEAVR_YTDLP_PLAYER_CLIENTS:tv,android,web}
+
+  # --------------------------------------------------------------------------
+  # RapidAPI YouTube — primary metadata + transcript path for YouTube URLs.
+  # --------------------------------------------------------------------------
+  rapid-yt:
+    api-key: ${WEAVR_RAPID_YT_API_KEY:}
+    timeout: 15s
+
+  # --------------------------------------------------------------------------
+  # ffmpeg — keyframe cutting only. The ASR downmix stays in the backend.
+  # --------------------------------------------------------------------------
+  ffmpeg:
+    binary: ${WEAVR_FFMPEG_BINARY:ffmpeg}
+    timeout: 60s
+
+  # --------------------------------------------------------------------------
+  # OCR — the visual tier. Measured settings, ported intact — see
+  # FrameExtractor's own class doc for what "measured" means here.
+  # --------------------------------------------------------------------------
+  ocr:
+    enabled: ${WEAVR_OCR_ENABLED:true}
+    binary: ${WEAVR_TESSERACT_BINARY:tesseract}
+    language: eng
+    page-segmentation: 6
+    timeout: 30s
+    max-video-seconds: ${WEAVR_OCR_MAX_VIDEO_SECONDS:90}
+    max-frames: ${WEAVR_OCR_MAX_FRAMES:12}
+    scene-threshold: 0.25
+    periodic-sample-frames: 150
+    # Upscale and greyscale ONLY — no contrast stage. See FrameExtractor.
+    frame-filters: ${WEAVR_OCR_FRAME_FILTERS:scale=iw*2:-2:flags=lanczos,format=gray}
+    min-mean-confidence: ${WEAVR_OCR_MIN_CONFIDENCE:60}
+    min-words: 8
+    min-alpha-ratio: 0.5
+    min-frame-votes: 2
+    # When true, a failed gate returns the sharpest frames as artifacts with
+    # needsVisionEscalation: true. When false, the below-floor OCR text is
+    # returned as the result with no artifacts at all.
+    vision-escalation: ${WEAVR_OCR_VISION_ESCALATION:true}
+    vision-frames: 4
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    com.weavr.extraction: ${WEAVR_LOG_LEVEL:INFO}
