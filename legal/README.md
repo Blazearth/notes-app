@@ -18,12 +18,14 @@ not loaded; the page uses the platform sans stack the app falls back to.
 
 ## Before publishing
 
-1. **Fill in every `[BRACKETED PLACEHOLDER]`.** They render as dashed inline
-   chips so an unfilled one is impossible to miss. `grep -o '\[[A-Z][^]]*\]' privacy.html`
-   lists them all.
-2. **Resolve every "Legal review required" callout.** These are decisions, not
-   wording — minimum age vs. the DPDP Act's under-18 rule, the public storage
-   bucket, transfer mechanisms, whether an EU/UK representative is needed.
+1. **Fill in every `[BRACKETED PLACEHOLDER]` — 17 distinct ones.** They render as
+   dashed inline chips so an unfilled one is impossible to miss.
+   `grep -o '\[[A-Z][^]]*\]' privacy.html | sort -u` lists them all.
+2. **Resolve every "Legal review required" item — 7 of them.** Five are their own
+   callouts; two are inline, in §4's AI-tier notice and §8's public-bucket notice,
+   so `grep -c 'callout review'` undercounts. These are decisions, not wording:
+   minimum age vs. the DPDP Act's under-18 rule, the public storage bucket,
+   transfer mechanisms, and whether an EU/UK representative is needed.
 3. **Re-check the AI tier disclosure** (§4) if the Gemini tier ever changes.
    Free-tier terms permit model improvement; paid terms differ, and the
    Play Data safety answers change with them.

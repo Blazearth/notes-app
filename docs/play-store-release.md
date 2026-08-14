@@ -66,7 +66,7 @@ Play requires a **publicly hosted privacy policy URL** for every app, entered in
 Console *and* (for apps that collect data) reachable from inside the app. What remains:
 
 - [ ] Fill in all 17 `[BRACKETED PLACEHOLDERS]` — legal entity, address, privacy email, grievance contact, effective date, minimum age, Supabase region
-- [ ] Resolve the 6 **Legal review required** callouts (see §4 and the report in `legal/README.md`)
+- [ ] Resolve the 7 **Legal review required** items — 5 are their own callouts, 2 are inline in the AI-tier and public-bucket notices (§4.1, §8)
 - [ ] Host it — `.github/workflows/legal-pages.yml` publishes *only* `legal/` to Pages, so `docs/` stays private. **Pages on a private repo needs a paid GitHub plan**; otherwise use Cloudflare Pages / Netlify / any static host
 - [ ] Set `PRIVACY_POLICY_URL` in `app/src/legal/links.ts` and confirm the Settings row appears
 - [ ] Add a Terms document and row if you intend to have terms — §1 of the policy already references `[TERMS URL]`

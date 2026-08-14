@@ -13,6 +13,8 @@ Built for the RevenueCat Shipaton 2026 (Aug 1 – Sep 30, 2026).
 - [docs/testing.md](docs/testing.md) — how to check work, and what each check does not prove
 - [docs/local-first.md](docs/local-first.md) — the local store / sync / offline-writes plan (**complete, L1–L5 landed 2026-08-09**: reads come from a local store, writes drain from a durable outbox, sync is a windowed `GET /v1/sync`, and search answers from the device's own FTS index before the server replies)
 - [docs/competitive-analysis.md](docs/competitive-analysis.md) — teardown and steal list
+- [docs/play-store-release.md](docs/play-store-release.md) — the Google Play submission checklist, with the blockers that live in this repo
+- [legal/README.md](legal/README.md) — the hosted privacy policy: what has to be filled in, and where to host it
 - [save-anything-app-spec.md](save-anything-app-spec.md) — original product spec (partly superseded)
 
 ## Layout
@@ -21,6 +23,7 @@ Built for the RevenueCat Shipaton 2026 (Aug 1 – Sep 30, 2026).
 api/     Spring Boot — REST API and (from Phase 2) the ingestion/AI pipeline
 app/     Expo (React Native + TypeScript) with an EAS dev client
 docs/    Plan, spec, competitive analysis
+legal/   Hosted legal pages (privacy policy) — published separately from docs/
 ```
 
 Supabase is a managed **Postgres + Auth + Storage** host here, not the backend.
@@ -52,7 +55,7 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Acts — recipe → shopping list | **real, verified live** | `V5__shopping_list.sql` + `act/`. One open list per user; a recipe's ingredients are normalised by one Gemini call into products, quantities and supermarket aisles, then **merged** into what's already there. Verified against two real recipes: garlic came out as 7 cloves (3 + 4) and olive oil as 4 tbsp (2 + 2), grouped in shop-layout order |
 | Acts — mobile | **real, never run on a device** | "Add to shopping list" on a recipe's detail screen, plus `/shopping-list` with optimistic tick-off and clear-checked |
 | Lifecycle | **real, verified live** | `PATCH /v1/saves/{id}/lifecycle` (`saved → planned → started → completed`) and `GET /v1/saves?lifecycle=…`, which backs the app's Continue rail. Deliberately not a state machine — going backwards is an ordinary thing to want |
-| Enrichment — TMDB / Google Places | **built, unverified live** | `enrich/`. Runs *between* classify and embed, because the vector is built from `structured_data` — embedding first would permanently omit the director and the address. Additive only: fills `[unclear]` and missing fields, never overwrites what the content said. 26 tests, all mocked; no real TMDB or Places key has been used |
+| Enrichment — TMDB / Google Places / Google Books | **built, unverified live** | `enrich/`. Runs *between* classify and embed, because the vector is built from `structured_data` — embedding first would permanently omit the director and the address. Additive only: fills `[unclear]` and missing fields, never overwrites what the content said. `GoogleBooksEnricher` (2026-08-14) covers `book` saves — title, plus the author when the content already stated one, narrowing the query for ambiguous titles like "Dune". All mocked; no real TMDB, Places or Books key has been used here |
 | RevenueCat / entitlements | **real, verified live** | `billing/` + `V6__billing.sql`. `POST /v1/webhooks/revenuecat`, shared-secret authenticated and **failing closed** when unset. Entitlement derived from expiry rather than event type, with dedupe and out-of-order guards. Six webhook cases driven live — see below |
 | Free-tier caps | **real, enforced, off by default** | 20 AI saves/month, 1 Act/week, checked in the worker before the Gemini request and again at the Act's controller for an immediate 402. `weavr.billing.enforce-free-caps` is off until there is a paid tier to escape to; the counters run regardless |
 | Spaces — CRUD, roles, invites | **real, verified live** | `space/` + `V7__spaces.sql`. Owner/editor/viewer, revocable invite codes with expiry and use limits, a Space feed. Authorisation verified live including the 404-vs-403 distinction |
@@ -87,6 +90,7 @@ surface, the RevenueCat webhook, entitlement gating, and the pipeline.
 | Deleting a Space | **real, verified live-equivalent** | Server-side `DELETE /v1/spaces/{id}` → `SpaceService.delete` already existed, owner-gated, tombstoned for every other member — it simply had no app UI until 2026-08-13. `SpaceDetailScreen` now has an owner-only settings button opening a `Delete "<name>"?` confirmation, requiring the Space's exact name typed back for any Space with real content or more than one member. Never optimistic — the Space stays intact until the server confirms. CDP-driven end to end: a non-owner Space shows no settings button at all; an owner Space's confirm button stays disabled on a wrong name and enables only on an exact match; a real delete removes the Space and returns to the Spaces list |
 | Deleting an account | **real, unit-tested; never run against a live server** | New 2026-08-13, and the first place it existed at all. `DELETE /v1/me` → `AccountService.deleteAccount` deletes every Space the account owns (tombstoned), every save it owns anywhere including ones in someone else's Space (tombstoned), leaves memberships in others' Spaces, deletes `profiles` (cascades the rest), then calls a new `SupabaseAdminClient` against the Supabase Admin API to revoke login and refresh tokens. Not one transaction — every step tolerates "already gone," so a retry after a partial failure finishes rather than restarting. **Stated limitation**: an access token already issued stays valid until its own expiry regardless, since `SecurityConfig` verifies it as a stateless JWT with no database lookup — the app mitigates by signing out and wiping local state the moment deletion succeeds. App-side: a "Danger Zone" section on Settings, a two-step Delete your account? → Continue → type-DELETE-to-confirm flow. CDP-driven end to end, including confirming the DELETE button's disabled/enabled gating and a clean landing on `/sign-in` after a real delete. See [CLAUDE.md](CLAUDE.md)'s 2026-08-13 entry for the ordering rationale and the sign-out navigation bug this work found and fixed along the way (pre-existing, also affected the plain "Log out" button) |
 | Action Layer — "what should I do next" nudges | **real, driven through headless Chrome (mock data); never run on a device** | `app/src/collections/nextAction.ts` — one grounded picker per item-bearing type (recommendation, workout, itinerary, checklist), local compute only, no new Gemini call, no synthesis. Surfaced as `NextActionCard` on a leaf `CollectionDetailScreen` and as Home's new "Today" tile (`readTopNextAction`, ranks the best candidate across the whole tree). 29 node-standalone assertions; CDP-confirmed the Home tile, the Romance decide card's "Why?" reasons and hand-off into the entity sheet, and the itinerary card's tab-switch CTA |
+| Privacy policy | **written and wired, not hosted** | `legal/privacy.html` (2026-08-14) — a v1.0 policy audited against this codebase, not templated, so it states the things a template gets wrong: the Gemini **free tier's** terms permit Google to use prompts and responses for model improvement, uploaded screenshots sit in a **public** Storage bucket (unlisted, but behind no auth check), a stateless JWT outlives account deletion until it expires, and there is no data export. Nine providers listed, matching the nine actually wired. Settings' `Data & privacy` row was `onPress={() => {}}`; it is now a real `Linking.openURL` that **renders only once `PRIVACY_POLICY_URL` is set** (`app/src/legal/links.ts`), so it can never be a dead affordance again. 8 CDP checks (22 TOC anchors resolving and landing, heading hierarchy, table captions/scoped headers, skip link, zero external resource references) — that run caught nowrap placeholder chips pushing the document to 529px at a 412px viewport with no scroll to recover the text. **Blocked on 17 placeholders and 7 legal-review items**, then hosting — see [legal/README.md](legal/README.md) and [docs/play-store-release.md](docs/play-store-release.md#14-the-privacy-policy-is-written-it-still-has-to-be-filled-in-and-hosted) |
 | Weekly digest — days-left indicator + dismiss | **real, driven through headless Chrome (mock data); never run on a device** | `digestWeek.ts`'s `daysLeftInWeek` (pure, clamped `[1,7]`) and `digestDismiss.ts` (a dedicated AsyncStorage key, not `Preferences` or the local-first `kv` table) — no content, copy or card-structure change, no extra card height. Dismissal keys off the digest's own `weekStart`, so a new week's digest is never suppressed by last week's dismissal. 7 node-standalone assertions; CDP-confirmed the indicator's real value, dismiss hiding the card, and the dismissal surviving a full page reload (unlike `mockRepository`'s in-memory data) |
 
 **Nothing is faked.** Every "real" row above is genuinely implemented — there are
@@ -755,9 +759,9 @@ HTTP ping to a static endpoint.
   own transaction. Found while fixing the activity-feed bug above; not fixed,
   because it deserves a test that actually races two requests.
 - **Enrichment and duplicate detection are mocked-test green only.** No real
-  TMDB or Google Places key has been used, and no two real saves have been
-  compared. This is the same shape of gap that hid three yt-dlp defects behind
-  27 passing tests and a UTF-8 bug behind 67.
+  TMDB, Google Places or Google Books key has been used, and no two real saves
+  have been compared. This is the same shape of gap that hid three yt-dlp
+  defects behind 27 passing tests and a UTF-8 bug behind 67.
 - ~~**`SecurityConfig` accepts `{ES256}` and nothing else.**~~ **Closed 2026-08-02.**
   `jwsAlgorithm()` adds to a set rather than extending the defaults, so naming
   only ES256 left a Supabase key rotation to RSA able to take auth down
@@ -780,6 +784,25 @@ HTTP ping to a static endpoint.
   a refresh-token exchange inside the worker or a way to surface `FAILED`
   captures (a Settings list, a notification) so "not decided yet" gets an
   answer instead of a silent drop with a paper trail nobody reads.
+
+**Store submission** (full list in [docs/play-store-release.md](docs/play-store-release.md))
+
+- **The `production` EAS profile still has no `env` block**, so a production AAB
+  built today inlines empty `EXPO_PUBLIC_*` values and every install lands on
+  `ConfigErrorScreen`. It builds, uploads and passes review's install check —
+  and is broken for 100% of real users. Highest-priority blocker.
+- **The privacy policy is written but not publishable yet.** `legal/privacy.html`
+  is complete and accurate against this codebase, but carries 17 placeholders
+  (legal entity, address, privacy email, grievance contact, minimum age,
+  Supabase region…) and 7 items marked *legal review required*. Two of those are
+  decisions with real consequences rather than wording: the **Gemini free tier**
+  permits Google to use prompts and responses for model improvement — which is
+  also the Play Data-safety answer — and uploaded screenshots sit in a **public**
+  Storage bucket (`SupabaseStorageClient` returns `/object/public/…`), unlisted
+  but behind no auth check. Hosting is also unresolved: the Pages workflow is
+  written, but Pages on a private repo needs a paid GitHub plan.
+- **No `versionCode`**, so the second upload is rejected; `submit.production` is
+  empty, so `eas submit` cannot upload at all.
 
 **Deferred by design, but easy to mistake for bugs**
 

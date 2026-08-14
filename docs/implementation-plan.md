@@ -516,6 +516,8 @@ Act, which is also unbuilt.
 
 Store listings, screenshots, privacy policy (**including the Gemini free-tier data-use disclosure**, and Apple's App Privacy + Play Data Safety forms answered against what the free tier actually does). Sandbox and license-tester purchases verified. Submit for review Sep 1–2.
 
+**Started 2026-08-14 — the privacy policy is written** (`legal/privacy.html`, audited against the codebase rather than templated; the free-tier disclosure this line asks for is §4). It is **not publishable yet**: 17 placeholders and 6 legal-review callouts, and no host. The full Play submission checklist — including a release-build blocker that predates this (`eas.json`'s `production` profile has no `env`, so every real install would land on `ConfigErrorScreen`) — is [docs/play-store-release.md](play-store-release.md). Sandbox purchases cannot be verified at all yet: `react-native-purchases` is not a dependency, so the app has no purchase flow and the launch is free-tier only.
+
 **Exit criteria:** public on at least one store · a real purchase completes in sandbox · entitlement gating verified server-side · first #BuildInPublic post.
 
 ---
