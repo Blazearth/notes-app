@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class LinkExtractorTest {
 
-    private final LinkExtractor extractor = new LinkExtractor(RestClient.builder());
+    private final LinkExtractor extractor = new LinkExtractor(new SafeUrlFetcher(RestClient.builder()));
 
     @Test
     void extractsTheArticleBodyAndTitleFromCleanHtml() {

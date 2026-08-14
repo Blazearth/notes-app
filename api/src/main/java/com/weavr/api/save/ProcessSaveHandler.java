@@ -11,12 +11,12 @@ import com.weavr.api.job.JobRecord;
 import com.weavr.api.job.JobType;
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.pipeline.ExtractionCascade;
+import com.weavr.api.pipeline.SafeUrlFetcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.client.RestClient;
 
 /**
  * Entry point for a new save: run the extraction cascade and park the result.
@@ -40,22 +40,25 @@ class ProcessSaveHandler implements JobHandler {
      */
     private static final int MAX_STORED_TEXT = 200_000;
 
+    /** Matches the Supabase bucket's own 10 MB upload limit for images. */
+    private static final long MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
     private final SaveRepository saves;
     private final SaveStageWriter stages;
     private final ExtractionCascade cascade;
     private final JobQueue jobQueue;
     private final JdbcClient jdbc;
-    private final RestClient http;
+    private final SafeUrlFetcher fetcher;
 
     ProcessSaveHandler(SaveRepository saves, SaveStageWriter stages,
                        ExtractionCascade cascade, JobQueue jobQueue, JdbcClient jdbc,
-                       RestClient.Builder restClientBuilder) {
+                       SafeUrlFetcher fetcher) {
         this.saves = saves;
         this.stages = stages;
         this.cascade = cascade;
         this.jobQueue = jobQueue;
         this.jdbc = jdbc;
-        this.http = restClientBuilder.build();
+        this.fetcher = fetcher;
     }
 
     @Override
@@ -163,12 +166,9 @@ class ProcessSaveHandler implements JobHandler {
 
         log.info("Downloading image for save={} from {}", saveId, url);
 
-        byte[] imageBytes = http.get()
-                .uri(url)
-                .retrieve()
-                .body(byte[].class);
+        byte[] imageBytes = fetcher.fetch(url, MAX_IMAGE_BYTES);
 
-        if (imageBytes == null || imageBytes.length == 0) {
+        if (imageBytes.length == 0) {
             throw new PermanentJobException("empty_image", "Downloaded image is empty.");
         }
 

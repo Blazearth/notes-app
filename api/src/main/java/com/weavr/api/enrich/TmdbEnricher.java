@@ -10,6 +10,7 @@ import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
@@ -40,7 +41,7 @@ class TmdbEnricher implements Enricher {
     private final ObjectMapper objectMapper;
 
     TmdbEnricher(EnrichmentProperties props, ObjectMapper objectMapper,
-                 RestClient.Builder restClientBuilder) {
+                 @Qualifier("enrich") RestClient.Builder restClientBuilder) {
         this.props = props;
         this.objectMapper = objectMapper;
         this.http = restClientBuilder.build();

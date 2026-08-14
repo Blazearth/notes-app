@@ -2,7 +2,7 @@
 
 Investigation of three reference YouTube extractors against our own cascade, the failure points it surfaced in our code, a recommended service split, and a hosting verdict.
 
-**Status: investigation only. No code was changed.** Dated 2026-08-14.
+**Status: investigation, plus Phase 1 of Part F below.** Dated 2026-08-14; Phase 1 landed 2026-08-15 — see [CLAUDE.md](../CLAUDE.md) for the verified details. Phases 2 onward, and the dedicated extraction service in Part D, remain investigation only.
 
 ---
 
@@ -383,11 +383,13 @@ Ordered so each phase is independently shippable and the riskiest work is de-ris
 
 ### Phase 1 — Stop the bleeding (in place, no new service)
 
-- Configure a request factory with connect and read timeouts on every `RestClient`, wired to the config values that already exist and are currently ignored (F1).
-- Add SSRF defence and a size ceiling to `LinkExtractor` and the image download (F2, F3). Resolve first, validate the resolved address, cap redirects, abort the stream at the ceiling rather than checking afterwards.
-- Add `WEAVR_RAPID_YT_API_KEY` to `.env.example` (F10).
+**Landed 2026-08-15 — see [CLAUDE.md](../CLAUDE.md) for the verified writeup (full backend suite 478/478, 11 new tests).**
 
-*Gate: a save against a private address is refused; a deliberately hung endpoint fails within the timeout instead of pinning the worker.*
+- ~~Configure a request factory with connect and read timeouts on every `RestClient`, wired to the config values that already exist and are currently ignored (F1).~~ Done via a new `RestClientConfig` (per-client `@Qualifier`-named beans for the five clients with their own `weavr.*.timeout` property; one default-timeout bean for everything else) — not inside each client's constructor, which would have silently broken every `MockRestServiceServer`-bound test.
+- ~~Add SSRF defence and a size ceiling to `LinkExtractor` and the image download (F2, F3). Resolve first, validate the resolved address, cap redirects, abort the stream at the ceiling rather than checking afterwards.~~ Done via a new shared `SafeUrlFetcher`. **Closes the obvious case, not DNS rebinding** — pinning the validated address for the actual connection is still Part D's job, not this fix's. `PdfExtractor.download` has the identical shape and was deliberately left open — outside this phase's named scope.
+- ~~Add `WEAVR_RAPID_YT_API_KEY` to `.env.example` (F10).~~ Done.
+
+*Gate: a save against a private address is refused (verified by mocked test — not fired at a real target); a deliberately hung endpoint fails within the timeout instead of pinning the worker (verified by code review of `JdkClientHttpRequestFactory`'s timeout semantics — not fired at a real hung endpoint).*
 
 ### Phase 2 — Extractor refactor (behaviour first, boundary second)
 

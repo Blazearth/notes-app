@@ -3,6 +3,7 @@ package com.weavr.api.asr;
 import com.weavr.api.job.RetryableJobException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -37,7 +38,8 @@ public class GroqClient {
     // RestClient.Builder is injected, not built ad hoc, so tests can bind
     // MockRestServiceServer to it instead of hitting the real Groq API — the
     // same fix applied to GeminiClient after the encoding bug.
-    GroqClient(GroqProperties props, ObjectMapper objectMapper, RestClient.Builder restClientBuilder) {
+    GroqClient(GroqProperties props, ObjectMapper objectMapper,
+              @Qualifier("groq") RestClient.Builder restClientBuilder) {
         this.props = props;
         this.objectMapper = objectMapper;
         this.http = restClientBuilder.build();

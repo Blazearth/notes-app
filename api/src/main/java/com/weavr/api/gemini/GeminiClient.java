@@ -9,6 +9,7 @@ import java.util.UUID;
 import com.weavr.api.job.RetryableJobException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -51,7 +52,7 @@ public class GeminiClient {
     // bean) rather than built ad hoc, so tests can bind MockRestServiceServer
     // to it instead of hitting the real Gemini API.
     GeminiClient(GeminiProperties props, ObjectMapper objectMapper, JdbcClient jdbc,
-                RestClient.Builder restClientBuilder) {
+                @Qualifier("gemini") RestClient.Builder restClientBuilder) {
         this.props = props;
         this.objectMapper = objectMapper;
         this.jdbc = jdbc;

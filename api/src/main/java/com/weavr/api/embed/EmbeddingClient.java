@@ -8,6 +8,7 @@ import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -51,7 +52,7 @@ public class EmbeddingClient {
     // MockRestServiceServer to it rather than mocking the HTTP layer away —
     // the pattern the Gemini UTF-8 bug forced on every client here.
     EmbeddingClient(EmbeddingProperties props, GeminiProperties gemini,
-                    ObjectMapper objectMapper, RestClient.Builder restClientBuilder) {
+                    ObjectMapper objectMapper, @Qualifier("embedding") RestClient.Builder restClientBuilder) {
         this.props = props;
         this.gemini = gemini;
         this.objectMapper = objectMapper;

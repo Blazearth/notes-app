@@ -4,13 +4,11 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.Optional;
 
-import com.weavr.api.job.RetryableJobException;
 import net.dankito.readability4j.Article;
 import net.dankito.readability4j.Readability4J;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
 
 /**
  * Readable-text extraction for a plain link — step 4 of the cascade's
@@ -21,21 +19,20 @@ import org.springframework.web.client.RestClient;
 @Component
 public class LinkExtractor {
 
-    private final RestClient http;
+    /** Generous for an article page; {@link SafeUrlFetcher} aborts the stream at this ceiling. */
+    private static final long MAX_HTML_BYTES = 5 * 1024 * 1024;
 
-    LinkExtractor(RestClient.Builder restClientBuilder) {
-        // A default browser-like UA: some sites 403 a bare Java HTTP client.
-        this.http = restClientBuilder
-                .defaultHeader("User-Agent",
-                        "Mozilla/5.0 (compatible; WeavrBot/1.0; +https://weavr.app)")
-                .build();
+    private final SafeUrlFetcher fetcher;
+
+    LinkExtractor(SafeUrlFetcher fetcher) {
+        this.fetcher = fetcher;
     }
 
     public record LinkExtraction(String title, String text) {
     }
 
     public Optional<LinkExtraction> extract(String url) {
-        byte[] html = fetch(url);
+        byte[] html = fetcher.fetch(url, MAX_HTML_BYTES);
         if (html.length == 0) {
             return Optional.empty();
         }
@@ -65,14 +62,5 @@ public class LinkExtractor {
         }
         String title = article.getTitle();
         return Optional.of(new LinkExtraction(title == null ? "" : title.strip(), text.strip()));
-    }
-
-    private byte[] fetch(String url) {
-        try {
-            byte[] bytes = http.get().uri(url).retrieve().body(byte[].class);
-            return bytes == null ? new byte[0] : bytes;
-        } catch (Exception e) {
-            throw new RetryableJobException("Could not fetch link: " + e.getMessage(), e);
-        }
     }
 }

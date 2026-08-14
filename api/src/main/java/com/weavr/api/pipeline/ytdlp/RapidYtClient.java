@@ -10,6 +10,7 @@ import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
@@ -57,7 +58,8 @@ public class RapidYtClient {
     private final RestClient captionHttp; // plain, no RapidAPI headers
     private final ObjectMapper objectMapper;
 
-    RapidYtClient(RapidYtProperties props, RestClient.Builder builder, ObjectMapper objectMapper) {
+    RapidYtClient(RapidYtProperties props, @Qualifier("rapidYt") RestClient.Builder builder,
+                 ObjectMapper objectMapper) {
         this.props = props;
         this.objectMapper = objectMapper;
         this.http = builder.clone()
