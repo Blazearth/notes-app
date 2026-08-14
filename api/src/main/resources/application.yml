@@ -141,6 +141,16 @@ weavr:
     player-clients: ${WEAVR_YTDLP_PLAYER_CLIENTS:tv,android,web}
 
   # --------------------------------------------------------------------------
+  # Extraction service (Phase 5) — the dedicated extraction microservice.
+  # When url is blank (default), api/ falls back to its own in-process cascade.
+  # Set WEAVR_EXTRACTION_URL + WEAVR_EXTRACTION_SHARED_SECRET to route through
+  # the service instead.
+  # --------------------------------------------------------------------------
+  extraction-service:
+    url: ${WEAVR_EXTRACTION_URL:}
+    shared-secret: ${WEAVR_EXTRACTION_SHARED_SECRET:}
+
+  # --------------------------------------------------------------------------
   # RapidAPI YouTube — primary metadata + transcript path for YouTube URLs.
   # Bypasses YouTube's datacenter-IP bot check that blocks yt-dlp on Render.
   # When api-key is blank the client is disabled and yt-dlp is used directly.

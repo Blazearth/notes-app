@@ -11,6 +11,7 @@ import com.weavr.api.job.JobRecord;
 import com.weavr.api.job.JobType;
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.pipeline.ExtractionCascade;
+import com.weavr.api.pipeline.ExtractionServiceClient;
 import com.weavr.api.pipeline.SafeUrlFetcher;
 import com.weavr.api.pipeline.SourceExtractor;
 import org.slf4j.Logger;
@@ -47,16 +48,19 @@ class ProcessSaveHandler implements JobHandler {
     private final SaveRepository saves;
     private final SaveStageWriter stages;
     private final SourceExtractor cascade;
+    private final ExtractionServiceClient extractionService;
     private final JobQueue jobQueue;
     private final JdbcClient jdbc;
     private final SafeUrlFetcher fetcher;
 
     ProcessSaveHandler(SaveRepository saves, SaveStageWriter stages,
-                       SourceExtractor cascade, JobQueue jobQueue, JdbcClient jdbc,
+                       SourceExtractor cascade, ExtractionServiceClient extractionService,
+                       JobQueue jobQueue, JdbcClient jdbc,
                        SafeUrlFetcher fetcher) {
         this.saves = saves;
         this.stages = stages;
         this.cascade = cascade;
+        this.extractionService = extractionService;
         this.jobQueue = jobQueue;
         this.jdbc = jdbc;
         this.fetcher = fetcher;
@@ -117,8 +121,15 @@ class ProcessSaveHandler implements JobHandler {
             throw new PermanentJobException("bad_payload", "That save has no link to open.");
         }
 
-        ExtractionCascade.Extraction extraction =
-                cascade.extractFromUrl(save.getSourceUrl(), saveId);
+        // Phase 5: use the dedicated extraction service when deployed.
+        // Falls back to the in-process cascade when the service URL is not configured.
+        ExtractionCascade.Extraction extraction;
+        if (extractionService.enabled()) {
+            log.info("Save {} using extraction service", saveId);
+            extraction = extractionService.extract(save.getSourceUrl(), saveId);
+        } else {
+            extraction = cascade.extractFromUrl(save.getSourceUrl(), saveId);
+        }
 
         // Persist thumbnail URL if the pipeline found one — used by the client
         // to show a real image instead of the placeholder hatch pattern.

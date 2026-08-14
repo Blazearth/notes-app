@@ -71,3 +71,43 @@ services:
         sync: false
       - key: WEAVR_SUPABASE_STORAGE_BUCKET
         value: "screenshots"
+      # ── Extraction service (Phase 5) — blank until extraction/ is deployed ──
+      - key: WEAVR_EXTRACTION_URL
+        sync: false
+      - key: WEAVR_EXTRACTION_SHARED_SECRET
+        sync: false
+
+  # ── Dedicated extraction service ────────────────────────────────────────────
+  - type: private_service
+    name: weavr-extraction
+    runtime: docker
+    dockerfilePath: ./extraction/Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon
+    branch: main
+    healthCheckPath: /health
+    envVars:
+      # ── Auth — shared secret with weavr-api ─────────────────────────────────
+      - key: WEAVR_EXTRACTION_SHARED_SECRET
+        sync: false
+      # ── Artifact storage ─────────────────────────────────────────────────────
+      - key: WEAVR_EXTRACTION_ARTIFACT_SECRET
+        sync: false
+      - key: WEAVR_EXTRACTION_ARTIFACT_BUCKET
+        value: "extraction-artifacts"
+      # ── Supabase (same project as weavr-api) ─────────────────────────────────
+      - key: WEAVR_SUPABASE_URL
+        sync: false
+      - key: WEAVR_SUPABASE_SERVICE_KEY
+        sync: false
+      # ── yt-dlp / RapidAPI (same keys as weavr-api) ───────────────────────────
+      - key: WEAVR_RAPID_YT_API_KEY
+        sync: false
+      - key: WEAVR_YTDLP_COOKIES_BASE64
+        sync: false
+      # ── App ──────────────────────────────────────────────────────────────────
+      - key: PORT
+        value: "8081"
+      - key: WEAVR_LOG_LEVEL
+        value: "INFO"
