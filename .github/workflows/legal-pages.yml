@@ -1,0 +1,51 @@
+name: Publish legal pages
+
+# Publishes ONLY the `legal/` directory to GitHub Pages.
+#
+# Scoping the artifact to that one directory is the point: pointing Pages at
+# the repo root or at `docs/` would also publish the internal engineering docs
+# (competitive analysis, testing notes, release checklists), which are not
+# meant to be public.
+#
+# Requires Settings -> Pages -> Source: GitHub Actions. On a private repo,
+# Pages needs a paid GitHub plan — see legal/README.md for alternatives.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "legal/**"
+      - ".github/workflows/legal-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # A root index so the site URL itself resolves rather than 404-ing.
+      - name: Stage site
+        run: |
+          mkdir -p _site
+          cp legal/privacy.html _site/privacy.html
+          cp legal/privacy.html _site/index.html
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -53,24 +53,27 @@ No Play service-account key is configured, so `eas submit` can't upload.
 - [ ] Create a Google Play service account (Play Console → Setup → API access), grant it release permissions, download the JSON
 - [ ] Reference it from `submit.production.android.serviceAccountKeyPath`, and **gitignore the JSON** — it's a credential, and this repo has already leaked one credential to git once (`www.youtube.com_cookies.txt`, see CLAUDE.md). Add the ignore rule in the same commit as the key, not after.
 
-### 1.4 There is no privacy policy, and the link in Settings is a no-op
+### 1.4 The privacy policy is written; it still has to be filled in and hosted
 
-[app/src/screens/SettingsScreen.tsx:392](../app/src/screens/SettingsScreen.tsx#L392):
-
-```tsx
-<SettingLink title="Data & privacy" onPress={() => {}} />
-```
+**Written 2026-08-14.** [legal/privacy.html](../legal/privacy.html) is a complete v1.0
+policy, audited against this codebase rather than templated — see
+[legal/README.md](../legal/README.md). The Settings row is wired
+([app/src/screens/SettingsScreen.tsx](../app/src/screens/SettingsScreen.tsx),
+[app/src/legal/links.ts](../app/src/legal/links.ts)) and **hides itself until
+`PRIVACY_POLICY_URL` is set**, so it can never be the no-op it used to be.
 
 Play requires a **publicly hosted privacy policy URL** for every app, entered in the Play
-Console *and* (for apps that collect data) reachable from inside the app. Nothing in this
-repo is one.
+Console *and* (for apps that collect data) reachable from inside the app. What remains:
 
-- [ ] Write the policy and host it at a stable URL (GitHub Pages off this repo is fine)
-- [ ] Wire the Settings row to open it (`Linking.openURL`)
-- [ ] Add a Terms row the same way if you intend to have terms
+- [ ] Fill in all 17 `[BRACKETED PLACEHOLDERS]` — legal entity, address, privacy email, grievance contact, effective date, minimum age, Supabase region
+- [ ] Resolve the 6 **Legal review required** callouts (see §4 and the report in `legal/README.md`)
+- [ ] Host it — `.github/workflows/legal-pages.yml` publishes *only* `legal/` to Pages, so `docs/` stays private. **Pages on a private repo needs a paid GitHub plan**; otherwise use Cloudflare Pages / Netlify / any static host
+- [ ] Set `PRIVACY_POLICY_URL` in `app/src/legal/links.ts` and confirm the Settings row appears
+- [ ] Add a Terms document and row if you intend to have terms — §1 of the policy already references `[TERMS URL]`
 
-The policy has to state things this app actually does, several of which are non-obvious —
-see §4.
+The policy states things this app actually does that a template would have got wrong —
+the Gemini free tier's model-improvement terms, the **public** screenshot bucket, the
+JWT that outlives account deletion, and the absence of data export. See §4.
 
 ### 1.5 The backend is on free tiers that go to sleep
 
@@ -201,8 +204,8 @@ Account deletion landed 2026-08-13 (`DELETE /v1/me`, Settings → Danger Zone), 
 satisfies the in-app half. Play **also** requires a **publicly reachable web URL** where a
 user can request account and data deletion without installing the app.
 
-- [ ] Publish a deletion-request page (can live beside the privacy policy)
-- [ ] Enter it in Play Console → App content → Data deletion
+- [x] Publish a deletion-request page — [legal/privacy.html](../legal/privacy.html) §10 is written to serve as one: it covers the in-app route *and* an email route that works without installing the app, which is what Play actually requires. A second document would only drift from this one.
+- [ ] Enter `<policy URL>#account-deletion` in Play Console → App content → Data deletion
 - [ ] Be accurate about what's deleted vs retained. Note the known residual documented in
       CLAUDE.md: an already-issued JWT stays valid until it expires, because auth is
       stateless. Short window, but don't claim instant global session revocation.

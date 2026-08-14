@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, TextInput, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, TextInput, View } from 'react-native';
 
 import type { MeResponse } from '@/api/types';
 import { ApiError, patchUsername } from '@/api/client';
@@ -16,6 +16,7 @@ import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { SettingLink, SettingSwitch } from '@/components/SettingRow';
 import { Touchable } from '@/components/Touchable';
+import { PRIVACY_POLICY_URL, hasLegalUrl } from '@/legal/links';
 import { useMorphDismiss } from '@/motion/MorphPresentation';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import type { ThemeMode } from '@/prefs/types';
@@ -388,9 +389,21 @@ export function SettingsScreen() {
 
       <SectionLabel>Support</SectionLabel>
       <View style={{ marginBottom: spacing.xxl }}>
-        <Row>
-          <SettingLink title="Data & privacy" onPress={() => {}} />
-        </Row>
+        {/*
+          Rendered only once a real URL is configured (`@/legal/links`). A row
+          that opens nothing is the same dead affordance the fictional
+          "Connected accounts" rows above were removed for — and Play requires
+          the policy to be a hosted page anyway, so there is no in-app screen
+          to fall back to.
+        */}
+        {hasLegalUrl(PRIVACY_POLICY_URL) ? (
+          <Row>
+            <SettingLink
+              title="Privacy policy"
+              onPress={() => void Linking.openURL(PRIVACY_POLICY_URL).catch(() => {})}
+            />
+          </Row>
+        ) : null}
         <Row>
           <SettingLink title="Help & support" onPress={() => {}} />
         </Row>

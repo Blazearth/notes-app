@@ -1,0 +1,1345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Weavr</title>
+<meta name="description" content="How Weavr collects, uses, processes and protects your information.">
+<meta name="robots" content="index, follow">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%235D69CB'/></svg>">
+<style>
+/* ---------------------------------------------------------------------------
+   Tokens, lifted from app/src/theme/palettes.ts and typography.ts so this page
+   reads as the same product as the app. Surface family `weavr`, accent `weavr`.
+   No webfont is loaded on purpose: pulling Sora from a font CDN would send
+   every reader's IP address to a third party from the privacy policy itself.
+   --------------------------------------------------------------------------- */
+:root {
+  --bg:        #F7F5F1;
+  --surface:   #FDFBFA;
+  --raised:    #FFFFFF;
+  --border:    #DEDAD5;
+  --text:      #14110D;
+  --muted:     #59544E;
+  --accent:    #5D69CB;
+  --accent-sub:#EDEEF9;
+  --warn-bg:   #FBF3EC;
+  --warn-bd:   #E3CDB8;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 16px;
+  --gutter:    20px;
+  --maxw:      760px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #0F0D09;
+    --surface:   #1A1814;
+    --raised:    #201E19;
+    --border:    #35322E;
+    --text:      #EDEBE7;
+    --muted:     #A8A49F;
+    --accent:    #8D9DF5;
+    --accent-sub:#1E2033;
+    --warn-bg:   #241D16;
+    --warn-bd:   #4A3B2B;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Skip link ---------------------------------------------------------------- */
+.skip {
+  position: absolute; left: -9999px; top: 0;
+  background: var(--accent); color: #fff;
+  padding: 10px 16px; border-radius: 0 0 var(--radius-sm) 0;
+  z-index: 100; text-decoration: none; font-weight: 600;
+}
+.skip:focus { left: 0; }
+
+/* Focus -------------------------------------------------------------------- */
+a:focus-visible, button:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+/* Header ------------------------------------------------------------------- */
+header.masthead {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.masthead-inner {
+  max-width: calc(var(--maxw) + 300px);
+  margin: 0 auto;
+  padding: 28px var(--gutter) 24px;
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 700; font-size: 17px; letter-spacing: -0.01em;
+  color: var(--text); text-decoration: none;
+}
+.brand-mark {
+  width: 26px; height: 26px; border-radius: 8px;
+  background: var(--accent); flex: none;
+}
+h1 {
+  font-size: 30px; line-height: 1.2; letter-spacing: -0.02em;
+  margin: 20px 0 8px; font-weight: 700;
+}
+.meta {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  margin: 0; padding: 0; list-style: none;
+  color: var(--muted); font-size: 13.5px;
+}
+.meta li { min-width: 0; }
+.meta strong { color: var(--text); font-weight: 600; }
+
+/* Layout ------------------------------------------------------------------- */
+.wrap {
+  max-width: calc(var(--maxw) + 300px);
+  margin: 0 auto;
+  padding: 0 var(--gutter) 80px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 32px;
+}
+@media (min-width: 960px) {
+  .wrap { grid-template-columns: 240px minmax(0, 1fr); gap: 48px; padding-top: 40px; }
+}
+
+/* Table of contents -------------------------------------------------------- */
+.toc { font-size: 14px; }
+@media (min-width: 960px) {
+  .toc { position: sticky; top: 32px; align-self: start; max-height: calc(100vh - 64px); overflow-y: auto; }
+  .toc details { display: contents; }
+  .toc summary { display: none; }
+}
+.toc summary {
+  cursor: pointer; padding: 14px 16px; margin-top: 24px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface); font-weight: 600; list-style-position: inside;
+}
+.toc-title {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted);
+  margin: 0 0 10px; padding-left: 12px;
+}
+@media (max-width: 959px) { .toc-title { display: none; } }
+.toc ol { list-style: none; margin: 0; padding: 0; counter-reset: toc; }
+@media (max-width: 959px) {
+  .toc ol { padding: 8px 6px 12px; border: 1px solid var(--border); border-top: 0;
+            border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--surface); }
+}
+.toc li { counter-increment: toc; }
+.toc a {
+  display: block; padding: 5px 12px; border-radius: 8px;
+  color: var(--muted); text-decoration: none; line-height: 1.4;
+}
+.toc a::before { content: counter(toc) ". "; color: var(--muted); opacity: 0.65; }
+.toc a:hover { color: var(--text); background: var(--accent-sub); }
+
+/* Content ------------------------------------------------------------------ */
+main { max-width: var(--maxw); min-width: 0; }
+section { scroll-margin-top: 24px; padding-top: 8px; }
+section + section { margin-top: 44px; }
+
+h2 {
+  font-size: 21px; line-height: 1.3; letter-spacing: -0.01em;
+  font-weight: 700; margin: 0 0 4px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+h2 .num { color: var(--muted); font-weight: 600; margin-right: 8px; }
+h3 { font-size: 16.5px; font-weight: 700; margin: 28px 0 6px; letter-spacing: -0.005em; }
+h4 { font-size: 15px; font-weight: 600; margin: 20px 0 4px; color: var(--text); }
+p  { margin: 12px 0; }
+ul, ol { margin: 12px 0; padding-left: 22px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 6px 0; }
+strong { font-weight: 600; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+
+.lede { font-size: 17px; color: var(--muted); margin-top: 0; }
+
+/* Tables ------------------------------------------------------------------- */
+.table-scroll { overflow-x: auto; margin: 18px 0; -webkit-overflow-scrolling: touch; }
+table {
+  border-collapse: collapse; width: 100%; min-width: 520px;
+  font-size: 14.5px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+caption {
+  caption-side: top; text-align: left; font-size: 13px;
+  color: var(--muted); padding-bottom: 8px;
+}
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-weight: 600; font-size: 13px; letter-spacing: 0.02em; }
+thead th { background: var(--accent-sub); }
+tbody tr:last-child td { border-bottom: 0; }
+
+/* Callouts ----------------------------------------------------------------- */
+.callout {
+  border: 1px solid var(--border); background: var(--surface);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm); padding: 14px 16px; margin: 18px 0;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+.callout-title {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); margin: 0 0 6px;
+}
+.callout.review { background: var(--warn-bg); border-color: var(--warn-bd); border-left-color: #C2705A; }
+
+/* Placeholders ------------------------------------------------------------- */
+/* Wrappable on purpose: `white-space: nowrap` reads better on a wide screen,
+   but the longest placeholders here are 60+ characters and a nowrap chip runs
+   straight off a phone viewport — measured at 412px, where one of them ended
+   at x=529 and was simply unreadable, with no horizontal scroll to recover it. */
+.ph {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em; background: var(--accent-sub); color: var(--text);
+  border: 1px dashed var(--border); border-radius: 5px;
+  padding: 1px 6px;
+  overflow-wrap: anywhere; word-break: break-word;
+}
+
+/* Definition-style contact block ------------------------------------------- */
+.contact { display: grid; gap: 14px; margin: 18px 0; }
+@media (min-width: 560px) { .contact { grid-template-columns: 1fr 1fr; } }
+.contact div {
+  border: 1px solid var(--border); background: var(--surface);
+  border-radius: var(--radius-md); padding: 14px 16px;
+}
+.contact dt { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+              color: var(--muted); font-weight: 600; margin-bottom: 4px; }
+.contact dd { margin: 0; font-size: 15px; }
+
+footer.pagefoot {
+  border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 13.5px;
+  max-width: calc(var(--maxw) + 300px);
+  margin: 0 auto; padding: 24px var(--gutter) 48px;
+}
+
+@media print {
+  .toc, .skip { display: none; }
+  body { background: #fff; color: #000; font-size: 11pt; }
+  .wrap { display: block; }
+  a { color: #000; }
+}
+</style>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to policy</a>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <span class="brand"><span class="brand-mark" aria-hidden="true"></span>Weavr</span>
+    <h1>Privacy Policy</h1>
+    <ul class="meta">
+      <li><strong>Effective date:</strong> <span class="ph">[EFFECTIVE DATE]</span></li>
+      <li><strong>Last updated:</strong> <span class="ph">[LAST UPDATED DATE]</span></li>
+      <li><strong>Version:</strong> 1.0</li>
+    </ul>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <nav class="toc" aria-label="Table of contents">
+    <details open>
+      <summary>Contents</summary>
+      <p class="toc-title">Contents</p>
+      <ol>
+        <li><a href="#introduction">Introduction</a></li>
+        <li><a href="#information-we-collect">Information we collect</a></li>
+        <li><a href="#how-we-use">How we use information</a></li>
+        <li><a href="#ai-processing">AI processing</a></li>
+        <li><a href="#third-parties">Third-party services and sharing</a></li>
+        <li><a href="#connected-services">Connected services and imported content</a></li>
+        <li><a href="#cookies">Cookies and similar technologies</a></li>
+        <li><a href="#storage">Data storage</a></li>
+        <li><a href="#retention">Data retention</a></li>
+        <li><a href="#account-deletion">Account deletion</a></li>
+        <li><a href="#data-export">Data export</a></li>
+        <li><a href="#your-rights">Your privacy rights</a></li>
+        <li><a href="#india">India — DPDP Act, 2023</a></li>
+        <li><a href="#international">International users</a></li>
+        <li><a href="#gdpr">EEA and UK rights</a></li>
+        <li><a href="#children">Children's privacy</a></li>
+        <li><a href="#security">Security</a></li>
+        <li><a href="#incidents">Security incidents</a></li>
+        <li><a href="#business-transfers">Business transfers</a></li>
+        <li><a href="#legal-disclosures">Legal disclosures</a></li>
+        <li><a href="#changes">Changes to this policy</a></li>
+        <li><a href="#contact">Contact us</a></li>
+      </ol>
+    </details>
+  </nav>
+
+  <main id="main">
+
+    <p class="lede">
+      Weavr is a “save anything” app. You share a link, a screenshot, a note or a
+      document into it, and Weavr turns that into a structured, searchable object you can
+      act on later. Doing that means reading your content, sending parts of it to AI and
+      lookup services, and storing what comes back. This policy explains exactly what
+      that involves, in the order it happens.
+    </p>
+
+    <div class="callout review">
+      <p class="callout-title">Before publishing</p>
+      <p>
+        Every <span class="ph">[BRACKETED VALUE]</span> below is a placeholder that must be
+        filled in with real legal and contact details. Items marked
+        <strong>Legal review required</strong> are decisions that should be confirmed by a
+        qualified privacy professional for your jurisdiction before this policy is
+        published or referenced from an app store listing.
+      </p>
+    </div>
+
+    <!-- 1 ------------------------------------------------------------------ -->
+    <section id="introduction">
+      <h2><span class="num">1.</span>Introduction</h2>
+
+      <h3>What Weavr is</h3>
+      <p>
+        Weavr is a mobile application and its supporting backend service. You save content
+        into Weavr — a social media link, a web page, a screenshot, a PDF, or a note you
+        type yourself. Weavr then attempts to extract the useful information from it,
+        classify what kind of thing it is (a recipe, a workout, a place, a watchlist, a
+        checklist, and so on), pull out structured fields, and present it as something you
+        can search, organise, share into a Space with other people, and act on.
+      </p>
+
+      <h3>Who operates Weavr</h3>
+      <p>
+        Weavr is operated by <span class="ph">[LEGAL COMPANY NAME]</span>
+        (“Weavr”, “we”, “us”, “our”), registered at
+        <span class="ph">[REGISTERED ADDRESS]</span>. For the purposes of applicable data
+        protection law, <span class="ph">[LEGAL COMPANY NAME]</span> is the controller
+        (or, under Indian law, the Data Fiduciary) for personal data processed through
+        Weavr.
+      </p>
+
+      <h3>What this policy covers</h3>
+      <p>
+        This policy covers the Weavr mobile app, the Weavr backend API, and any website we
+        operate that links to this policy. It does not cover third-party services you reach
+        from Weavr — for example the original social platform, website or map listing a
+        saved link points to. When you open one of those, that service's own privacy policy
+        applies.
+      </p>
+
+      <h3>Relationship to our Terms</h3>
+      <p>
+        This Privacy Policy forms part of, and should be read alongside, our Terms of
+        Service (<span class="ph">[TERMS URL]</span>). Where this policy describes how we
+        handle information and the Terms describe the rules for using the service, this
+        policy governs on privacy matters.
+      </p>
+
+      <h3>How to reach us about privacy</h3>
+      <p>
+        Privacy questions, requests and complaints go to
+        <span class="ph">[PRIVACY EMAIL]</span>. Full contact details, including the
+        grievance contact for users in India, are in <a href="#contact">section 22</a>.
+      </p>
+    </section>
+
+    <!-- 2 ------------------------------------------------------------------ -->
+    <section id="information-we-collect">
+      <h2><span class="num">2.</span>Information we collect</h2>
+
+      <p>
+        We group information into three categories: what you give us, what is collected
+        automatically as the service runs, and what Weavr generates from your content.
+        The third category is unusually large for an app like this, so it has its own
+        subsection.
+      </p>
+
+      <h3>A. Information you provide</h3>
+
+      <h4>Account information</h4>
+      <ul>
+        <li><strong>Email address</strong> — required to create an account. Accounts are created and authenticated through Supabase Auth (see <a href="#third-parties">section 5</a>).</li>
+        <li><strong>Password</strong> — chosen by you at sign-up. It is handled by our authentication provider; we do not receive or store your password in Weavr's own database.</li>
+        <li><strong>Display name</strong> — the name you enter at sign-up, shown to other members of any Space you join.</li>
+        <li><strong>Username</strong> — a unique handle you choose. It must be unique across all Weavr users, so it is stored in a form that lets us check that.</li>
+      </ul>
+      <p>
+        We do <strong>not</strong> ask for your phone number, date of birth, postal address,
+        government identifiers, or a profile photo. There is no profile picture upload
+        anywhere in the app; member avatars are drawn from initials.
+      </p>
+
+      <h4>Content you save</h4>
+      <p>Weavr accepts five kinds of source material, and this is the core of what we process:</p>
+      <ul>
+        <li><strong>Links (URLs)</strong> — shared from another app via the system share sheet, or pasted from your clipboard.</li>
+        <li><strong>Text notes</strong> — typed directly into the app.</li>
+        <li><strong>Images and screenshots</strong> — chosen from your photo library, or shared into Weavr from another app.</li>
+        <li><strong>PDF documents</strong> — where a saved link points to a PDF.</li>
+        <li><strong>Audio</strong> — where a saved link points to media with an audio track that we transcribe (see <a href="#ai-processing">section 4</a>).</li>
+      </ul>
+
+      <h4>Content you create inside Weavr</h4>
+      <ul>
+        <li><strong>Spaces</strong> — their names, types, and who you invite. Invitations are issued as codes.</li>
+        <li><strong>Comments</strong> — on individual saves and on merged “entities” inside a Space. Visible to the other members of that Space.</li>
+        <li><strong>Votes and pins</strong> — signals you attach to shared items.</li>
+        <li><strong>Progress and status</strong> — checklist ticks, watch status and ratings, exercise completion, lifecycle status (“planned”, “started”, “completed”), favourites and archive flags.</li>
+        <li><strong>Shopping lists</strong> — items generated from a saved recipe, plus your ticks and edits. A shopping list can be personal or shared inside a Space.</li>
+        <li><strong>Organisational overrides</strong> — where you rename or merge a collection or an item, we store that instruction.</li>
+        <li><strong>Notes attached to a save</strong>, and search queries you type.</li>
+      </ul>
+
+      <h4>Device permissions you grant</h4>
+      <ul>
+        <li><strong>Photo library</strong> — requested only when you choose to attach an image. We receive only the image you pick, not your library.</li>
+        <li><strong>Clipboard</strong> — read only at the moment you tap “Paste link”. We do not monitor your clipboard in the background.</li>
+        <li><strong>Share sheet</strong> — on Android, Weavr registers to receive shared text and images. We receive only what you deliberately share into Weavr.</li>
+      </ul>
+
+      <h3>B. Information collected automatically</h3>
+      <p>
+        Weavr contains <strong>no analytics SDK, no advertising SDK, and no third-party
+        crash-reporting SDK</strong>. We do not build behavioural profiles, and there is no
+        event-tracking pipeline in the app. What is collected automatically is limited to
+        what running a networked service necessarily involves:
+      </p>
+      <div class="table-scroll">
+        <table>
+          <caption>Automatically collected information and why</caption>
+          <thead>
+            <tr><th scope="col">What</th><th scope="col">Why it exists</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>IP address and standard request metadata</strong> (approximate origin, request time, user agent, response status)</td>
+              <td>Processed by our hosting, database and authentication providers as an inherent part of routing and serving network requests, and for their own abuse prevention and security. We do not record IP addresses in Weavr's own application database.</td>
+            </tr>
+            <tr>
+              <td><strong>Server logs</strong></td>
+              <td>Our backend writes operational logs (which job ran, whether it succeeded, error codes and messages). These can include a saved URL or an error string derived from your content, because that is what failed.</td>
+            </tr>
+            <tr>
+              <td><strong>Authentication session data</strong></td>
+              <td>Our authentication provider issues and refreshes session tokens and keeps its own records of sign-in activity for security purposes.</td>
+            </tr>
+            <tr>
+              <td><strong>Processing and usage counters</strong></td>
+              <td>We count saves and conversions per account per period, to apply fair-use limits and manage capacity. We record per-request AI metadata — which model ran, token counts, a confidence score, and whether it succeeded — but <em>not</em> the content of the request.</td>
+            </tr>
+            <tr>
+              <td><strong>Connectivity state</strong></td>
+              <td>The app checks on-device whether you are online, so it can queue work while you are offline. This check stays on your device.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        We do not collect precise device location. Where a saved place has an address or
+        coordinates, those describe the <em>saved place</em> — not where you are.
+      </p>
+
+      <h3>C. Information Weavr creates from your content</h3>
+      <p>
+        This is derived data: information that did not exist until Weavr processed
+        something you saved. It is stored alongside the original and is treated as your
+        personal data wherever the source content is.
+      </p>
+      <ul>
+        <li><strong>Extracted text</strong> — captions and subtitles published with a video, page text from a link, text from a PDF, a transcript of an audio track, and text read from video frames or screenshots by optical character recognition.</li>
+        <li><strong>A knowledge type</strong> — the classification of what the save is (recipe, movie, place, workout, article, product, book, checklist, itinerary, course, code repository, recommendation list, and similar), plus a confidence score.</li>
+        <li><strong>Structured fields</strong> — the type-specific data pulled out of the content: ingredients and quantities, exercises with sets and reps, an address, a synopsis, a list of recommended titles with the reason each was recommended, and so on.</li>
+        <li><strong>Enrichment data</strong> — facts fetched from external catalogues to fill gaps the content itself left empty (see <a href="#third-parties">section 5</a>).</li>
+        <li><strong>Embeddings</strong> — a numeric vector representing the meaning of a save, used for semantic search and for spotting when two members of a Space have saved the same thing. It is generated from the structured fields, not from the raw source text.</li>
+        <li><strong>Search indexes</strong> — a full-text index built from the structured fields, held both on our servers and on your device.</li>
+        <li><strong>Collections and groups</strong> — a derived organisation of your library. These are computed on demand from your saves rather than stored as a fixed structure.</li>
+        <li><strong>Weekly digest</strong> — a short AI-written summary of the week's saves, generated only when you actually open the screen that shows it, and then cached for that week.</li>
+        <li><strong>A thumbnail link</strong> — where a source platform publishes a thumbnail, we store the URL of that image. We do not copy the image itself.</li>
+      </ul>
+      <div class="callout">
+        <p class="callout-title">What we deliberately do not keep</p>
+        <p>
+          To extract text, our servers may temporarily download audio or a low-quality
+          copy of a video into scratch storage on the processing machine. That material is
+          deleted when the job finishes, whether it succeeded or failed. Weavr does not
+          retain, host or re-publish downloaded videos or audio.
+        </p>
+      </div>
+    </section>
+
+    <!-- 3 ------------------------------------------------------------------ -->
+    <section id="how-we-use">
+      <h2><span class="num">3.</span>How we use information</h2>
+
+      <div class="table-scroll">
+        <table>
+          <caption>Purposes, the data each uses, and the basis we rely on</caption>
+          <thead>
+            <tr>
+              <th scope="col">Purpose</th>
+              <th scope="col">Data used</th>
+              <th scope="col">Legal / business reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Creating and authenticating your account</td><td>Email, password (via our auth provider), display name, username</td><td>Performance of our contract with you</td></tr>
+            <tr><td>Storing the content you save</td><td>Saved links, notes, images, documents</td><td>Performance of contract</td></tr>
+            <tr><td>Extracting text and understanding content</td><td>Saved content, extracted text, transcripts, video frames</td><td>Performance of contract</td></tr>
+            <tr><td>Classifying and structuring a save</td><td>Extracted text and selected frames, sent to an AI provider</td><td>Performance of contract</td></tr>
+            <tr><td>Enriching a save with missing details</td><td>A title, name or place string derived from your content, sent to a lookup service</td><td>Performance of contract</td></tr>
+            <tr><td>Search — keyword and semantic</td><td>Structured fields, embeddings, your search query</td><td>Performance of contract</td></tr>
+            <tr><td>Organising your library into collections</td><td>Structured fields of your saves</td><td>Performance of contract</td></tr>
+            <tr><td>Weekly digest</td><td>Titles and structured fields of that week's saves</td><td>Performance of contract</td></tr>
+            <tr><td>Collaboration in Spaces</td><td>Saves you place in a Space, comments, votes, pins, progress, display name and username</td><td>Performance of contract</td></tr>
+            <tr><td>Duplicate detection inside a Space</td><td>Embeddings of saves in that Space</td><td>Legitimate interests — making a shared library usable</td></tr>
+            <tr><td>Offline use and synchronisation</td><td>A copy of your library and queued changes, held on your device</td><td>Performance of contract</td></tr>
+            <tr><td>Fair-use limits and capacity management</td><td>Per-account counts of saves and conversions; per-request AI metadata</td><td>Legitimate interests — keeping a shared, capacity-limited service available to everyone</td></tr>
+            <tr><td>Reliability, debugging and security</td><td>Server logs, error codes, job outcomes</td><td>Legitimate interests — operating a secure and functioning service</td></tr>
+            <tr><td>Preventing abuse and enforcing our Terms</td><td>Account information, activity records</td><td>Legitimate interests; legal obligation where applicable</td></tr>
+            <tr><td>Responding to your support and privacy requests</td><td>Whatever you send us, plus account information needed to identify you</td><td>Performance of contract; legal obligation</td></tr>
+            <tr><td>Subscription management, if and when paid plans launch</td><td>An entitlement record and a payment-platform customer identifier</td><td>Performance of contract</td></tr>
+            <tr><td>Complying with law</td><td>As required by the request</td><td>Legal obligation</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        We do not use your content or activity for advertising, ad targeting, or profiling
+        for marketing. We do not sell personal information, and we do not share it for
+        cross-context behavioural advertising.
+      </p>
+    </section>
+
+    <!-- 4 ------------------------------------------------------------------ -->
+    <section id="ai-processing">
+      <h2><span class="num">4.</span>AI processing</h2>
+
+      <p>
+        AI is not an optional add-on in Weavr — it is how a saved link becomes a usable
+        object. This section explains what it does, what leaves our systems, and what the
+        limits are.
+      </p>
+
+      <h3>What AI does in Weavr</h3>
+      <ul>
+        <li>Decides what kind of thing you saved, and how confident it is about that.</li>
+        <li>Pulls structured fields out of unstructured content — ingredients, exercises, addresses, ranked recommendations and their stated reasons.</li>
+        <li>Transcribes speech from a saved video or audio track, when no published captions exist.</li>
+        <li>Reads on-screen text from video frames and screenshots.</li>
+        <li>Produces the numeric representation used for semantic search and duplicate detection.</li>
+        <li>Writes your weekly digest summary.</li>
+        <li>Normalises a recipe's ingredient lines into shopping-list products, quantities and aisles.</li>
+      </ul>
+
+      <h3>How processing works, step by step</h3>
+      <ol>
+        <li>You save something. It is recorded and queued for background processing.</li>
+        <li>Our server tries the cheapest text sources first: captions or subtitles the platform already publishes, then the post's own title, description and metadata, then readable text from a web page or a PDF.</li>
+        <li>If none of that yields usable text, we escalate — downloading only the audio and transcribing it, or sampling a small number of video frames and reading them with optical character recognition on our own servers.</li>
+        <li>Only if local text-reading fails or produces low-confidence output do we send images to an AI vision model.</li>
+        <li>The assembled text (and, in the fallback case, a handful of frames) is sent to our AI provider in a single request, which returns the classification and the structured fields.</li>
+        <li>We fill remaining gaps from external catalogues, generate the search embedding, and store the result on your account.</li>
+        <li>The finished object appears in your library, and syncs to your device.</li>
+      </ol>
+      <p>
+        Scratch files created during steps 3 and 4 are deleted when the job ends. The
+        result of steps 5 to 7 is stored.
+      </p>
+
+      <h3>AI and lookup providers we use</h3>
+      <p>
+        The providers below are the ones actually integrated in Weavr today. Their role and
+        what reaches them is set out in <a href="#third-parties">section 5</a>.
+      </p>
+      <ul>
+        <li><strong>Google (Gemini API)</strong> — classification and extraction, vision fallback, digest writing, shopping-list normalisation, and embeddings.</li>
+        <li><strong>Groq</strong> — speech-to-text transcription, using a Whisper model.</li>
+      </ul>
+
+      <div class="callout review">
+        <p class="callout-title">Important — AI provider tier and model improvement</p>
+        <p>
+          Weavr currently uses Google's Gemini API on a <strong>free service tier</strong>.
+          Under Google's published terms for that tier, prompts and responses may be used
+          by Google to improve its products, and may be reviewed by human reviewers. This
+          means content you save — including text extracted from your screenshots,
+          documents and shared links — may be processed by Google for purposes beyond
+          simply returning a result to Weavr.
+        </p>
+        <p>
+          If you do not want your content processed on those terms, do not save content you
+          consider sensitive or confidential into Weavr.
+        </p>
+        <p>
+          <strong>Legal review required:</strong> this disclosure, and the corresponding
+          answers on app-store data-safety forms, must be re-checked and updated if Weavr
+          moves to a paid Gemini tier, where the applicable terms differ.
+        </p>
+      </div>
+
+      <h3>We do not train our own models on your content</h3>
+      <p>
+        Weavr does not train, fine-tune or develop machine-learning models of its own, and
+        does not use your content to do so. Where third-party AI providers are involved,
+        their handling of the data sent to them is governed by their own terms and privacy
+        commitments — including, on Google's free tier, the model-improvement use described
+        above.
+      </p>
+
+      <h3>Limits of AI output</h3>
+      <p>
+        AI-generated results can be wrong. Classification can pick the wrong type,
+        extraction can miss or misread a field, transcription and text recognition make
+        mistakes, and enrichment lookups can match the wrong title or place. Weavr marks
+        fields it could not determine rather than guessing at them, and enrichment only
+        ever adds to what your content said — it never overwrites it. Even so:
+      </p>
+      <p>
+        <strong>Do not rely on Weavr's output for anything consequential without checking
+        the original.</strong> That applies especially to ingredients and quantities,
+        allergen information, medical or fitness guidance, dosages, addresses, prices, and
+        anything with a safety implication. Every save keeps a link back to its source so
+        you can verify it.
+      </p>
+    </section>
+
+    <!-- 5 ------------------------------------------------------------------ -->
+    <section id="third-parties">
+      <h2><span class="num">5.</span>Third-party services and data sharing</h2>
+
+      <p>
+        We share information with the service providers below because Weavr cannot function
+        without them. Each processes data on our instructions for the purpose described,
+        under its own terms.
+      </p>
+
+      <h3>Service providers (processors and infrastructure)</h3>
+      <div class="table-scroll">
+        <table>
+          <caption>Providers integrated in Weavr, and what reaches each one</caption>
+          <thead>
+            <tr>
+              <th scope="col">Provider</th>
+              <th scope="col">Purpose</th>
+              <th scope="col">Data potentially processed</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Supabase</strong></td>
+              <td>Authentication, application database, file storage</td>
+              <td>Email address, password credentials, session tokens, your entire saved library and everything derived from it, uploaded images, request metadata including IP address</td>
+            </tr>
+            <tr>
+              <td><strong>Render</strong></td>
+              <td>Hosting for the Weavr backend and processing pipeline</td>
+              <td>All API traffic in transit, request metadata including IP address, server logs</td>
+            </tr>
+            <tr>
+              <td><strong>Google — Gemini API</strong></td>
+              <td>Content classification and extraction, vision fallback, digest writing, shopping-list normalisation, embeddings</td>
+              <td>Text extracted from your saved content; in the vision fallback, selected video frames or your screenshot; titles and structured fields for digests and embeddings</td>
+            </tr>
+            <tr>
+              <td><strong>Google — Places API</strong></td>
+              <td>Filling in details for a saved place</td>
+              <td>A place name or address string derived from your content</td>
+            </tr>
+            <tr>
+              <td><strong>Groq</strong></td>
+              <td>Speech-to-text transcription</td>
+              <td>A short audio excerpt extracted from media you saved</td>
+            </tr>
+            <tr>
+              <td><strong>TMDB (The Movie Database)</strong></td>
+              <td>Filling in film and television details</td>
+              <td>A title string, and optionally a year, derived from your content</td>
+            </tr>
+            <tr>
+              <td><strong>RapidAPI</strong> (YouTube metadata provider)</td>
+              <td>Fetching public metadata and caption tracks for a saved YouTube link</td>
+              <td>The video identifier from the URL you saved</td>
+            </tr>
+            <tr>
+              <td><strong>RevenueCat</strong></td>
+              <td>Subscription entitlement records</td>
+              <td>A customer identifier and subscription status. <em>No purchase flow exists in the app today</em> — this integration is inactive until paid plans launch.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Enrichment lookups (Google Places, TMDB) are optional per installation and are
+        disabled when no credential is configured. Transcription is likewise only used
+        when earlier, cheaper text sources produced nothing.
+      </p>
+
+      <h3>Source platforms</h3>
+      <p>
+        When you save a link, our servers fetch that URL to read its text — the same thing a
+        browser does. The site or platform you saved from therefore sees a request from our
+        server, not from your device, and may log it under its own policies. We only ever
+        fetch content <em>you</em> have chosen to save. We do not crawl, scrape in bulk, or
+        re-publish downloaded media.
+      </p>
+
+      <h3>Other Weavr users</h3>
+      <p>
+        Spaces are collaborative by design. When you add a save to a Space, or comment,
+        vote or pin in one, the other members of that Space can see it, along with your
+        display name and username.
+      </p>
+      <div class="callout">
+        <p class="callout-title">One consequence worth knowing about</p>
+        <p>
+          Progress markers such as “watched” are recorded against your account globally,
+          not per Space. If a Space contains an item you already marked as watched from
+          your own private library, other members of that Space will see it as watched by
+          you. The app repeats this notice wherever another member's status is shown.
+        </p>
+      </div>
+
+      <h3>Independent third parties</h3>
+      <p>
+        We do not sell personal information, and we do not share it with advertisers, data
+        brokers, or any third party for their own independent marketing purposes.
+      </p>
+
+      <h3>Legal disclosures</h3>
+      <p>Separate from the above, and covered in <a href="#legal-disclosures">section 20</a>.</p>
+    </section>
+
+    <!-- 6 ------------------------------------------------------------------ -->
+    <section id="connected-services">
+      <h2><span class="num">6.</span>Connected services and imported content</h2>
+
+      <p>
+        <strong>Weavr does not connect to your third-party accounts.</strong> There is no
+        “connect your Instagram”, no calendar or email integration, no OAuth link to
+        another service, and no import of your account history from anywhere. Weavr has no
+        access to any account of yours other than the Weavr account itself.
+      </p>
+      <p>
+        The only route content takes into Weavr is one you take deliberately, each time:
+        sharing an item via your device's share sheet, pasting a link, typing a note, or
+        picking an image. Because there is no persistent connection to another service,
+        there is nothing to disconnect, and no background import to stop.
+      </p>
+      <p>
+        Saving a public link does not give us access to your account on the platform that
+        link came from. Content that platform makes available only to signed-in users may
+        simply fail to process.
+      </p>
+    </section>
+
+    <!-- 7 ------------------------------------------------------------------ -->
+    <section id="cookies">
+      <h2><span class="num">7.</span>Cookies and similar technologies</h2>
+
+      <h3>In the mobile app</h3>
+      <p>
+        The Weavr app does not use advertising cookies, advertising identifiers, or
+        cross-app tracking. It does not request permission to track you across other
+        companies' apps and websites, because it does not do so. It uses the following
+        on-device storage, all of it essential:
+      </p>
+      <ul>
+        <li><strong>Authentication storage</strong> — your session tokens, kept so you stay signed in.</li>
+        <li><strong>A local database</strong> — a copy of your library, so the app opens instantly and works offline.</li>
+        <li><strong>A pending-changes queue</strong> — changes made offline, held until they can be sent.</li>
+        <li><strong>Preferences</strong> — theme, accent, font, haptics, and whether the app opens when you share into it.</li>
+        <li><strong>A small share-handoff file</strong> — on Android, so the background share handler can identify your account and upload what you shared.</li>
+      </ul>
+      <p>
+        All of this is removed when you sign out or uninstall the app.
+      </p>
+
+      <h3>On this page and any Weavr website</h3>
+      <p>
+        This policy page sets no cookies, loads no external fonts, scripts or trackers, and
+        makes no third-party requests. Where we operate other web pages, any use of cookies
+        beyond what is strictly necessary will be described there.
+        <span class="ph">[CONFIRM IF A MARKETING SITE IS ADDED]</span>
+      </p>
+    </section>
+
+    <!-- 8 ------------------------------------------------------------------ -->
+    <section id="storage">
+      <h2><span class="num">8.</span>Data storage</h2>
+
+      <h3>On our servers</h3>
+      <ul>
+        <li><strong>Database</strong> — a managed PostgreSQL database provided by Supabase, in the region <span class="ph">[SUPABASE REGION]</span>. It holds your account record, your saves, everything derived from them, your Spaces and collaboration data.</li>
+        <li><strong>Backend service</strong> — hosted on Render in the United States (Oregon region). This is where the processing pipeline runs.</li>
+        <li><strong>File storage</strong> — images you upload are stored in a Supabase Storage bucket.</li>
+      </ul>
+
+      <div class="callout review">
+        <p class="callout-title">Uploaded images are stored in a public bucket</p>
+        <p>
+          Images you share or upload are stored at a URL that is <strong>publicly
+          reachable by anyone who has the exact link</strong>. The link contains random
+          identifiers and is not listed or searchable anywhere, so it is not practically
+          guessable — but it is not protected by a sign-in check either. Treat an uploaded
+          screenshot as “unlisted”, not “private”.
+        </p>
+        <p>
+          <strong>Legal review required:</strong> confirm this is acceptable for your risk
+          posture before launch, or move the bucket to authenticated access. This statement
+          must be updated if that changes.
+        </p>
+      </div>
+
+      <h3>On your device</h3>
+      <p>
+        Weavr keeps a local copy of your library so the app works without a connection.
+        That copy lives in the app's private storage area, protected by your device's own
+        app sandboxing and, on most modern devices, by full-disk encryption. It is removed
+        when you sign out or uninstall.
+      </p>
+
+      <h3>Encryption</h3>
+      <p>
+        All traffic between the app, our backend and our providers uses HTTPS/TLS. Our
+        database and storage providers encrypt data at rest as part of their managed
+        platforms. We do not additionally encrypt individual fields within the database,
+        and Weavr is not end-to-end encrypted — our servers necessarily read your content
+        in order to process it.
+      </p>
+
+      <h3>Backups</h3>
+      <p>
+        Backups are those provided by our managed database platform, on that platform's
+        schedule and retention terms. We do not maintain a separate backup system of our
+        own. See <a href="#retention">section 9</a> for what this means for deletion.
+      </p>
+    </section>
+
+    <!-- 9 ------------------------------------------------------------------ -->
+    <section id="retention">
+      <h2><span class="num">9.</span>Data retention</h2>
+
+      <p>
+        We have not fixed a numeric retention period for every category, and we would rather
+        say so than publish a number we do not enforce. What we can state precisely is the
+        rule each category follows:
+      </p>
+
+      <div class="table-scroll">
+        <table>
+          <caption>Retention by category</caption>
+          <thead>
+            <tr><th scope="col">Category</th><th scope="col">Retained</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Account record (email, name, username)</td><td>For as long as your account exists. Deleted when you delete your account.</td></tr>
+            <tr><td>Saves and everything derived from them</td><td>Until you delete the save, or delete your account. There is no automatic expiry — a save you keep, we keep.</td></tr>
+            <tr><td>Uploaded images</td><td>With the save they belong to.</td></tr>
+            <tr><td>Comments, votes, pins, Space activity</td><td>With the Space they belong to, or until deleted.</td></tr>
+            <tr><td>Downloaded audio, video and frames</td><td>Deleted as soon as the processing job ends — within minutes, and never persisted.</td></tr>
+            <tr><td>Weekly digests</td><td>Cached per week; regenerated rather than accumulated.</td></tr>
+            <tr><td>Usage counters and AI request metadata</td><td>Usage counters are tied to your account and removed with it. AI request metadata records no content, and is retained for capacity and cost management. <span class="ph">[CONFIRM RETENTION PERIOD]</span></td></tr>
+            <tr><td>Server logs</td><td>Retained on our hosting platform's default schedule, which is short and rolling. <span class="ph">[CONFIRM WITH HOSTING PROVIDER]</span></td></tr>
+            <tr><td>Authentication records</td><td>Held by our authentication provider for as long as the account exists.</td></tr>
+            <tr><td>Backups</td><td>On our database platform's backup retention schedule. Deleted data can persist in a backup for a limited period after deletion, and is overwritten as backups roll forward.</td></tr>
+            <tr><td>Data sent to AI providers</td><td>Governed by that provider's own retention terms, not ours. See <a href="#ai-processing">section 4</a>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Where no fixed period is set, we decide how long to keep something by weighing:</p>
+      <ul>
+        <li>whether it is still needed to provide the service to you;</li>
+        <li>whether it is needed to keep the service secure or to prevent abuse;</li>
+        <li>whether a law requires us to keep it, or a dispute makes it necessary; and</li>
+        <li>whether an aggregated or de-identified form would do instead.</li>
+      </ul>
+    </section>
+
+    <!-- 10 ----------------------------------------------------------------- -->
+    <section id="account-deletion">
+      <h2><span class="num">10.</span>Account deletion</h2>
+
+      <h3>How to delete your account</h3>
+      <p><strong>In the app:</strong> Settings → Danger Zone → Delete account. You will be
+        asked to confirm twice, including by typing the word <strong>DELETE</strong>.
+        Deletion begins immediately once confirmed.</p>
+      <p><strong>Without the app:</strong> email
+        <span class="ph">[PRIVACY EMAIL]</span> from the address on your Weavr account and
+        ask for deletion. We will verify the request and action it.</p>
+
+      <h3>What deletion actually does</h3>
+      <ol>
+        <li>Every <strong>Space you own</strong> is deleted. Its members are notified that it is gone, and lose access to it.</li>
+        <li>Every <strong>save you own</strong> is deleted — including saves you had placed in someone else's Space. Everything attached to a save goes with it: extracted text, structured fields, embeddings, comments, votes, progress and uploaded images.</li>
+        <li>You are <strong>removed from Spaces owned by others</strong>.</li>
+        <li>Your <strong>profile record is deleted</strong>, which cascades to your subscription record, usage counters, digests, saved progress and organisational overrides.</li>
+        <li>Your <strong>authentication account is deleted</strong> at our authentication provider. You can no longer sign in, and the email address is released.</li>
+        <li>On the device you deleted from, the <strong>local copy of your library is wiped</strong> and you are signed out.</li>
+      </ol>
+      <p>
+        In normal operation this completes within minutes. If a step fails partway, the
+        process is safe to retry and will finish from where it stopped.
+      </p>
+
+      <h3>What is not immediate, and why</h3>
+      <ul>
+        <li>
+          <strong>An already-issued sign-in token stays valid until it expires.</strong>
+          Our backend verifies session tokens cryptographically rather than checking a
+          database on every request, so a token issued shortly before deletion remains
+          technically valid for its short remaining lifetime. The app signs you out and
+          wipes local data immediately, which closes this on the device you used. We do not
+          claim instant global session revocation.
+        </li>
+        <li>
+          <strong>Backups roll forward.</strong> Deleted data can remain in a database
+          backup for a limited period before being overwritten.
+        </li>
+        <li>
+          <strong>Content in another member's Space that they created</strong> — their
+          comments, their saves — is theirs and stays. What was yours is removed.
+        </li>
+        <li>
+          <strong>Data already sent to an AI provider</strong> is subject to that
+          provider's retention and deletion terms. We cannot delete on their behalf.
+        </li>
+        <li>
+          <strong>Records we must keep</strong> — for example to meet a legal obligation or
+          resolve a dispute — are retained only for as long as that reason lasts.
+        </li>
+      </ul>
+    </section>
+
+    <!-- 11 ----------------------------------------------------------------- -->
+    <section id="data-export">
+      <h2><span class="num">11.</span>Data export</h2>
+      <p>
+        <strong>Weavr does not currently offer a self-service export.</strong> There is no
+        “download my data” button in the app, and we would rather say that than describe a
+        feature that does not exist.
+      </p>
+      <p>
+        You can still exercise your right to portability where it applies: email
+        <span class="ph">[PRIVACY EMAIL]</span> from your account address and we will
+        provide the personal data we hold about you in a structured, commonly used,
+        machine-readable format. We will confirm receipt and respond within the time
+        applicable law allows.
+      </p>
+      <p>
+        The export will cover your account record, your saves and their extracted and
+        derived fields, your Spaces and collaboration data, and your uploaded images. It
+        will not include another member's content, or internal operational logs.
+      </p>
+    </section>
+
+    <!-- 12 ----------------------------------------------------------------- -->
+    <section id="your-rights">
+      <h2><span class="num">12.</span>Your privacy rights</h2>
+      <p>
+        Depending on where you live, you may have some or all of the rights below. Not
+        every right applies to every user, and some are subject to conditions and
+        exceptions under the law that grants them.
+      </p>
+      <ul>
+        <li><strong>Access</strong> — to know whether we process your personal data and to obtain a copy.</li>
+        <li><strong>Correction</strong> — to have inaccurate or incomplete data corrected. Your name, username and saved content are editable in the app.</li>
+        <li><strong>Deletion</strong> — to have your personal data erased. See <a href="#account-deletion">section 10</a>.</li>
+        <li><strong>Portability</strong> — to receive your data in a machine-readable format. See <a href="#data-export">section 11</a>.</li>
+        <li><strong>Restriction</strong> — to ask us to limit how we process your data in certain circumstances.</li>
+        <li><strong>Objection</strong> — to object to processing based on legitimate interests.</li>
+        <li><strong>Withdrawal of consent</strong> — where we rely on consent, you may withdraw it at any time. This does not affect processing already carried out.</li>
+        <li><strong>Non-discrimination</strong> — we will not degrade the service because you exercised a privacy right.</li>
+        <li><strong>Complaint</strong> — to lodge a complaint with your data protection authority.</li>
+      </ul>
+      <p>
+        To exercise a right, email <span class="ph">[PRIVACY EMAIL]</span>. We may need to
+        verify your identity — normally by confirming you control the email address on the
+        account — before acting, and we will not use verification information for any other
+        purpose.
+      </p>
+      <div class="callout review">
+        <p class="callout-title">Legal review required</p>
+        <p>
+          Response deadlines, verification standards and any additional
+          jurisdiction-specific rights (for example under US state privacy laws, if Weavr
+          meets their applicability thresholds) should be confirmed for each market where
+          Weavr is distributed.
+        </p>
+      </div>
+    </section>
+
+    <!-- 13 ----------------------------------------------------------------- -->
+    <section id="india">
+      <h2><span class="num">13.</span>India — Digital Personal Data Protection Act, 2023</h2>
+      <p>
+        Where applicable, Weavr processes personal data in accordance with applicable Indian
+        data protection laws, including the Digital Personal Data Protection Act, 2023 and
+        the rules or regulations issued under it. Where that Act applies,
+        <span class="ph">[LEGAL COMPANY NAME]</span> acts as the Data Fiduciary and you are
+        the Data Principal.
+      </p>
+
+      <h3>Notice and consent</h3>
+      <p>
+        This policy, together with the consent you give when creating an account, is
+        intended to serve as the notice describing the personal data we process, the
+        purposes for which we process it, and how you may exercise your rights and make a
+        complaint. We ask for personal data only where it is needed for the purposes set
+        out in <a href="#how-we-use">section 3</a>.
+      </p>
+
+      <h3>Withdrawing consent</h3>
+      <p>
+        You may withdraw your consent at any time by emailing
+        <span class="ph">[PRIVACY EMAIL]</span> or by deleting your account. Withdrawal is
+        as easy as giving consent. Because processing your saved content is how Weavr
+        works, withdrawing consent generally means we can no longer provide the service to
+        you, and your account will be closed.
+      </p>
+
+      <h3>Your rights as a Data Principal</h3>
+      <ul>
+        <li>The right to access a summary of the personal data we process and the processing activities undertaken.</li>
+        <li>The right to correction, completion, updating and erasure of your personal data.</li>
+        <li>The right to nominate another individual to exercise your rights in the event of your death or incapacity.</li>
+        <li>The right of grievance redressal, described below.</li>
+      </ul>
+
+      <h3>Grievance redressal</h3>
+      <p>
+        If you are dissatisfied with how we have handled your personal data or a request,
+        contact our grievance contact:
+      </p>
+      <dl class="contact">
+        <div>
+          <dt>Grievance officer / privacy contact</dt>
+          <dd><span class="ph">[GRIEVANCE OFFICER / PRIVACY CONTACT]</span></dd>
+        </div>
+        <div>
+          <dt>Grievance email</dt>
+          <dd><span class="ph">[GRIEVANCE EMAIL / CONTACT]</span></dd>
+        </div>
+      </dl>
+      <p>
+        We will acknowledge and respond to grievances within the period required by
+        applicable law. If you remain dissatisfied, you may escalate to the Data Protection
+        Board of India.
+      </p>
+
+      <div class="callout review">
+        <p class="callout-title">Legal review required</p>
+        <p>
+          The DPDP Act treats anyone under 18 as a child and requires verifiable parental
+          consent for their data, together with restrictions on tracking and targeted
+          advertising. Weavr does not currently verify age at sign-up. The minimum age
+          stated in <a href="#children">section 16</a>, the sign-up flow, and this section
+          must be reconciled with a qualified adviser before Weavr is offered in India.
+        </p>
+      </div>
+    </section>
+
+    <!-- 14 ----------------------------------------------------------------- -->
+    <section id="international">
+      <h2><span class="num">14.</span>International users and transfers</h2>
+      <p>
+        Weavr is operated from <span class="ph">[OPERATING COUNTRY]</span> and its
+        infrastructure is not confined to any one country. In particular:
+      </p>
+      <ul>
+        <li>Our backend service runs in the <strong>United States</strong> (Render, Oregon region).</li>
+        <li>Our database, authentication and file storage run on Supabase in the region <span class="ph">[SUPABASE REGION]</span>.</li>
+        <li>Our AI and lookup providers process data on their own global infrastructure.</li>
+      </ul>
+      <p>
+        If you use Weavr from outside those countries, your personal data will be
+        transferred to and processed in them. Laws there may differ from those in your own
+        country.
+      </p>
+      <p>
+        Where a transfer requires a legal safeguard, we rely on the mechanisms our
+        providers make available — typically standard contractual clauses incorporated into
+        their data processing terms.
+        <span class="ph">[CONFIRM TRANSFER MECHANISM PER PROVIDER]</span>
+      </p>
+      <div class="callout review">
+        <p class="callout-title">Legal review required</p>
+        <p>
+          We do not claim certification under any specific transfer framework. Confirm the
+          applicable mechanism with each provider, and whether a transfer impact assessment
+          is required, before publishing.
+        </p>
+      </div>
+    </section>
+
+    <!-- 15 ----------------------------------------------------------------- -->
+    <section id="gdpr">
+      <h2><span class="num">15.</span>Additional information for users in the EEA and UK</h2>
+      <p>
+        This section applies if you are in the European Economic Area, the United Kingdom or
+        Switzerland, and supplements the rest of this policy.
+      </p>
+
+      <h3>Controller</h3>
+      <p>
+        <span class="ph">[LEGAL COMPANY NAME]</span>,
+        <span class="ph">[REGISTERED ADDRESS]</span>, contactable at
+        <span class="ph">[PRIVACY EMAIL]</span>, is the controller of your personal data.
+      </p>
+
+      <h3>Legal bases</h3>
+      <p>
+        The table in <a href="#how-we-use">section 3</a> sets out the basis for each
+        purpose. In summary, we rely on:
+      </p>
+      <ul>
+        <li><strong>Performance of a contract</strong> — for everything needed to give you the service you signed up for: your account, storing and processing your saves, search, Spaces, and synchronisation.</li>
+        <li><strong>Legitimate interests</strong> — for security, abuse prevention, debugging, fair-use limits and capacity management. We have considered these against your rights and consider them proportionate; you may object at any time.</li>
+        <li><strong>Legal obligation</strong> — where the law requires us to retain or disclose information.</li>
+        <li><strong>Consent</strong> — where we ask for it specifically, such as device permissions you grant.</li>
+      </ul>
+
+      <h3>Your rights</h3>
+      <p>
+        The rights listed in <a href="#your-rights">section 12</a> apply, including access,
+        rectification, erasure, restriction, portability, objection, and withdrawal of
+        consent. There is no automated decision-making producing legal or similarly
+        significant effects on you. AI classification of your saved content organises your
+        library; it does not make decisions about you.
+      </p>
+
+      <h3>Data Protection Officer and representative</h3>
+      <p>
+        We have not appointed a Data Protection Officer.
+        <span class="ph">[CONFIRM WHETHER AN ARTICLE 27 EU/UK REPRESENTATIVE IS REQUIRED]</span>
+        Privacy enquiries should be directed to <span class="ph">[PRIVACY EMAIL]</span>.
+      </p>
+
+      <h3>Complaints</h3>
+      <p>
+        You may lodge a complaint with your local supervisory authority — in the UK, the
+        Information Commissioner's Office; in the EEA, the authority for your country of
+        residence, place of work, or where the alleged infringement occurred. We would
+        appreciate the chance to address your concern first.
+      </p>
+
+      <div class="callout review">
+        <p class="callout-title">Legal review required</p>
+        <p>
+          Whether an EU or UK representative must be appointed, and whether the legitimate
+          interests assessments above are adequately documented, should be confirmed before
+          Weavr is offered in these regions.
+        </p>
+      </div>
+    </section>
+
+    <!-- 16 ----------------------------------------------------------------- -->
+    <section id="children">
+      <h2><span class="num">16.</span>Children's privacy</h2>
+      <p>
+        Weavr is a general-audience product intended for adults. It is not designed for,
+        directed to, or marketed to children, and it contains no features aimed at
+        children.
+      </p>
+      <p>
+        You must be at least <span class="ph">[MINIMUM AGE]</span> years old to create a
+        Weavr account. Where local law sets a higher age for consenting to data processing,
+        that higher age applies.
+      </p>
+      <p>
+        We do not knowingly collect personal data from children below the applicable age.
+        If we learn that we have, we will delete the account and its data promptly. If you
+        believe a child has created an account, contact
+        <span class="ph">[PRIVACY EMAIL]</span> and we will act on it.
+      </p>
+      <p>
+        We do not claim COPPA compliance, because Weavr is not directed to children under
+        13 and we do not knowingly collect their data.
+      </p>
+      <div class="callout review">
+        <p class="callout-title">Legal review required</p>
+        <p>
+          Weavr does not currently verify age at sign-up. Setting the minimum age, deciding
+          whether an age gate is needed, and reconciling that with the DPDP Act's
+          under-18 rule (<a href="#india">section 13</a>) and with app-store target-audience
+          declarations, are decisions for legal review — not defaults.
+        </p>
+      </div>
+    </section>
+
+    <!-- 17 ----------------------------------------------------------------- -->
+    <section id="security">
+      <h2><span class="num">17.</span>Security</h2>
+      <p>
+        We implement reasonable technical and organisational safeguards designed to protect
+        your information. In practice that means:
+      </p>
+      <ul>
+        <li><strong>Encrypted transport</strong> — all communication between the app, our backend and our providers uses HTTPS/TLS.</li>
+        <li><strong>Encryption at rest</strong> — provided by our managed database and storage platforms.</li>
+        <li><strong>Authenticated access</strong> — every API request is authenticated with a short-lived, cryptographically signed session token issued by our authentication provider.</li>
+        <li><strong>Server-side authorisation</strong> — every request is checked against the authenticated user's own identity on the server. Access to a Space is checked against membership, and access to a save against ownership or Space membership, on every request. The client is never trusted to assert what it may read.</li>
+        <li><strong>Credential handling</strong> — passwords are handled by our authentication provider and are never stored by Weavr. Service credentials are held as environment configuration, never in our source code.</li>
+        <li><strong>Least-privilege storage on device</strong> — local data lives in the app's private, sandboxed storage.</li>
+        <li><strong>Ephemeral processing</strong> — media downloaded for processing is written to scratch storage and deleted when the job ends.</li>
+        <li><strong>Monitoring</strong> — we monitor service health and error rates, and review logs when something fails.</li>
+      </ul>
+      <p>
+        Please also note the two limitations stated plainly elsewhere in this policy:
+        uploaded images are stored at unlisted but publicly reachable URLs
+        (<a href="#storage">section 8</a>), and an already-issued session token remains
+        valid until it expires (<a href="#account-deletion">section 10</a>).
+      </p>
+      <p>
+        <strong>No method of transmission over the internet, or method of electronic
+        storage, is completely secure.</strong> We cannot guarantee absolute security, and
+        we make no such guarantee. You also play a part: use a strong, unique password and
+        keep your device secure.
+      </p>
+    </section>
+
+    <!-- 18 ----------------------------------------------------------------- -->
+    <section id="incidents">
+      <h2><span class="num">18.</span>Security incidents</h2>
+      <p>
+        If we become aware of a security incident affecting personal data, we will
+        investigate, take steps to contain and remediate it, and assess what data and which
+        users are affected.
+      </p>
+      <p>
+        Where required by applicable law, we will notify the relevant supervisory authority
+        and affected users, within the timeframes that law prescribes. Notice to users will
+        describe, as far as we know it, what happened, what data was involved, what we are
+        doing about it, and what you can do.
+      </p>
+      <p>
+        We will not promise a fixed notification time here, because the applicable deadline
+        depends on the law that applies to you and on when an incident is confirmed.
+      </p>
+      <p>
+        To report a suspected vulnerability or incident, email
+        <span class="ph">[PRIVACY EMAIL]</span>.
+      </p>
+    </section>
+
+    <!-- 19 ----------------------------------------------------------------- -->
+    <section id="business-transfers">
+      <h2><span class="num">19.</span>Business transfers</h2>
+      <p>
+        If Weavr is involved in a merger, acquisition, financing, reorganisation,
+        bankruptcy, receivership, sale of assets, or transition of service to another
+        provider, your information may be transferred as part of that transaction.
+      </p>
+      <p>
+        We will require any acquirer or successor to continue to handle personal data in a
+        manner consistent with this policy, or to give you notice and, where the law
+        requires it, a choice before your information becomes subject to a materially
+        different policy.
+      </p>
+    </section>
+
+    <!-- 20 ----------------------------------------------------------------- -->
+    <section id="legal-disclosures">
+      <h2><span class="num">20.</span>Legal disclosures</h2>
+      <p>We may disclose personal information where we reasonably believe it is necessary to:</p>
+      <ul>
+        <li>comply with a law, regulation, subpoena, court order, or other binding legal process;</li>
+        <li>respond to a lawful request from a government or law enforcement authority;</li>
+        <li>investigate or prevent fraud, abuse of the service, or a violation of our Terms;</li>
+        <li>protect the security or integrity of Weavr and its users; or</li>
+        <li>establish, exercise or defend legal claims, or protect the rights, property or safety of Weavr, our users, or the public.</li>
+      </ul>
+      <p>
+        We review requests for validity and scope, and disclose only the information the
+        request actually requires. Where we are legally permitted to notify you of a request
+        for your data, we will make reasonable efforts to do so.
+      </p>
+    </section>
+
+    <!-- 21 ----------------------------------------------------------------- -->
+    <section id="changes">
+      <h2><span class="num">21.</span>Changes to this policy</h2>
+      <p>
+        We may update this policy as Weavr changes — for example if we add a feature, change
+        a provider, or move to a different AI service tier. When we do, we will update the
+        “Last updated” date at the top and increment the version number.
+      </p>
+      <p>
+        For <strong>material changes</strong> — a new category of data, a new purpose, a new
+        recipient, or a change in how AI providers may use your content — we will give
+        notice before the change takes effect, by in-app notice or by email to the address
+        on your account, and where the law requires it we will ask for your consent.
+      </p>
+      <p>
+        Continuing to use Weavr after a change takes effect means you accept the updated
+        policy, except where applicable law requires your explicit consent instead. If you
+        do not agree with a change, you can delete your account
+        (<a href="#account-deletion">section 10</a>).
+      </p>
+      <p>Earlier versions are available on request from <span class="ph">[PRIVACY EMAIL]</span>.</p>
+    </section>
+
+    <!-- 22 ----------------------------------------------------------------- -->
+    <section id="contact">
+      <h2><span class="num">22.</span>Contact us</h2>
+      <dl class="contact">
+        <div>
+          <dt>Privacy questions and requests</dt>
+          <dd><span class="ph">[PRIVACY EMAIL]</span></dd>
+        </div>
+        <div>
+          <dt>Legal entity</dt>
+          <dd><span class="ph">[LEGAL COMPANY NAME]</span></dd>
+        </div>
+        <div>
+          <dt>Registered address</dt>
+          <dd><span class="ph">[REGISTERED ADDRESS]</span></dd>
+        </div>
+        <div>
+          <dt>Grievance contact (India)</dt>
+          <dd>
+            <span class="ph">[GRIEVANCE OFFICER / PRIVACY CONTACT]</span><br>
+            <span class="ph">[GRIEVANCE EMAIL / CONTACT]</span>
+          </dd>
+        </div>
+      </dl>
+      <p>
+        To request account deletion without using the app, email
+        <span class="ph">[PRIVACY EMAIL]</span> from the address on your account. See
+        <a href="#account-deletion">section 10</a> for what deletion covers.
+      </p>
+    </section>
+
+  </main>
+</div>
+
+<footer class="pagefoot">
+  <p>
+    Weavr — Privacy Policy, version 1.0. Last updated
+    <span class="ph">[LAST UPDATED DATE]</span>.
+  </p>
+</footer>
+
+</body>
+</html>
