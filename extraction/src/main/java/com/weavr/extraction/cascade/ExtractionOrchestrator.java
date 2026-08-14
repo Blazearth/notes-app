@@ -79,7 +79,12 @@ public class ExtractionOrchestrator {
         this.ocrProperties = ocrProperties;
     }
 
-    public ExtractionResult extract(String url, ExtractionOptions options) {
+    /**
+     * @param prefix groups any stored artifacts under, e.g. the save id
+     *               carried in {@code Idempotency-Key} — see
+     *               {@link com.weavr.extraction.artifact.ArtifactStore#put}
+     */
+    public ExtractionResult extract(String url, ExtractionOptions options, String prefix) {
         if (looksLikePdf(url)) {
             return extractPdf(url);
         }
@@ -137,7 +142,7 @@ public class ExtractionOrchestrator {
 
         if (options.audio()) {
             Optional<ArtifactStore.StoredArtifact> audio = downloadAudioArtifact(
-                    url, resolvedDuration(options, DEFAULT_AUDIO_SECONDS));
+                    url, resolvedDuration(options, DEFAULT_AUDIO_SECONDS), prefix);
             if (audio.isPresent()) {
                 return new ExtractionResult("audio", "", true, false,
                         ExtractionMetadata.from(platform, metadata), List.of(audio.get()));
@@ -146,7 +151,7 @@ public class ExtractionOrchestrator {
 
         if (options.frames()) {
             Optional<VisualExtractor.VisualText> visualText = visual.extract(
-                    url, resolvedDuration(options, ocrProperties.maxVideoSeconds()));
+                    url, resolvedDuration(options, ocrProperties.maxVideoSeconds()), prefix);
             if (visualText.isPresent()) {
                 VisualExtractor.VisualText v = visualText.get();
                 if (!v.text().isBlank() || v.needsVisionEscalation()) {
@@ -201,7 +206,7 @@ public class ExtractionOrchestrator {
         }
     }
 
-    private Optional<ArtifactStore.StoredArtifact> downloadAudioArtifact(String url, int maxDurationSeconds) {
+    private Optional<ArtifactStore.StoredArtifact> downloadAudioArtifact(String url, int maxDurationSeconds, String prefix) {
         Path workDir = null;
         try {
             workDir = Files.createTempDirectory("weavr-extraction-audio-");
@@ -209,7 +214,7 @@ public class ExtractionOrchestrator {
             if (audio.isEmpty()) {
                 return Optional.empty();
             }
-            return Optional.of(artifacts.put("audio", Files.readAllBytes(audio.get())));
+            return Optional.of(artifacts.put(prefix, "audio", Files.readAllBytes(audio.get())));
         } catch (IOException e) {
             throw new ExtractionException(ErrorCode.INTERNAL_ERROR, "Could not create a temp directory for audio.", e);
         } catch (YtDlpFailedException e) {

@@ -1,45 +1,40 @@
 package com.weavr.extraction.artifact;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
-import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-import com.weavr.extraction.error.ErrorCode;
-import com.weavr.extraction.error.ExtractionException;
-import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * A stand-in for Phase 4's real artifact storage (a per-save prefix in the
- * shared Supabase bucket, signed expiring references — docs/extraction-architecture.md
- * Part D / Phase 4). This one writes to local disk and keeps its registry in
- * memory, so it does not survive a restart and does not work across more than
- * one running instance — acceptable for standing Phase 3 up on its own, and
- * explicitly not the deliverable Phase 4 replaces this class with.
+ * Phase 4's real artifact storage — the shared, private Supabase bucket,
+ * under a per-save prefix, behind an opaque signed reference
+ * (docs/extraction-architecture.md Part D / Phase 4). Replaces Phase 3's
+ * local-disk-and-in-memory-registry stand-in: bytes now live in
+ * {@link ArtifactBlobStorage} (backed by {@link SupabaseArtifactStorage}),
+ * which survives a restart and works across more than one running instance.
  *
- * <p>What it does keep from the real contract, because callers on both sides
- * of the wire are written against it: a {@code ref} is an <b>opaque, signed,
- * expiring token</b>, never a raw path or id — {@link #put} HMAC-signs
- * {@code id.expiresAtEpochSeconds} and {@link #read} verifies that signature
- * in constant time before touching the filesystem, so the storage layout
- * stays private and a leaked ref expires like the real thing will.
+ * <p>The {@code ref} keeps exactly the contract callers on both sides of the
+ * wire are written against: opaque, HMAC-signed, and expiring. What changed
+ * is what it takes to redeem one — the Phase 3 version needed an in-memory
+ * registry to translate an id back to a local file; this version embeds the
+ * per-save prefix in the signed payload itself, so {@link #read} can
+ * reconstruct the object's storage path (and therefore survive a restart)
+ * with no registry lookup at all, verifying the signature before ever
+ * touching storage.
  */
 @Component
 public class ArtifactStore {
@@ -47,25 +42,21 @@ public class ArtifactStore {
     private static final Logger log = LoggerFactory.getLogger(ArtifactStore.class);
     private static final String HMAC_ALGORITHM = "HmacSHA256";
     private static final String REF_PREFIX = "sig:";
+    /** Separator inside the signed payload — never '/', so a ref alone never spells out a storage path. */
+    private static final String PREFIX_ID_SEPARATOR = ":";
+    /** How much of a caller-supplied prefix (e.g. a save id) survives sanitisation. */
+    private static final int MAX_PREFIX_LENGTH = 80;
 
     private final ArtifactProperties properties;
-    private final Path root;
+    private final ArtifactBlobStorage storage;
     private final byte[] secretKey;
-    private final Map<String, Entry> registry = new ConcurrentHashMap<>();
 
     public record StoredArtifact(String kind, String ref, long bytes, Instant expiresAt) {
     }
 
-    private record Entry(Path path, Instant expiresAt) {
-    }
-
-    ArtifactStore(ArtifactProperties properties) {
+    ArtifactStore(ArtifactProperties properties, ArtifactBlobStorage storage) {
         this.properties = properties;
-        try {
-            this.root = Files.createTempDirectory("weavr-extraction-artifacts-");
-        } catch (IOException e) {
-            throw new IllegalStateException("Could not create the artifact store's temp directory", e);
-        }
+        this.storage = storage;
         this.secretKey = resolveSecret(properties.secret());
     }
 
@@ -73,8 +64,11 @@ public class ArtifactStore {
         if (configured != null && !configured.isBlank()) {
             return configured.getBytes(StandardCharsets.UTF_8);
         }
-        // Ephemeral key: refs minted before a restart are unusable after one
-        // regardless, since the registry itself is in-memory (see class doc).
+        // A ref signed with an ephemeral key stops validating the moment this
+        // instance restarts, or a sibling instance receives the redemption
+        // request instead of the one that minted it — set
+        // weavr.extraction.artifact.secret explicitly once more than one
+        // instance is deployed.
         byte[] random = new byte[32];
         new SecureRandom().nextBytes(random);
         log.info("weavr.extraction.artifact.secret not set — generated an ephemeral signing key for this run");
@@ -82,24 +76,28 @@ public class ArtifactStore {
     }
 
     /**
-     * @param kind a short label the caller assigns (e.g. "thumbnail", "audio", "frame")
+     * @param prefix groups the artifact under, e.g., the save id carried in
+     *               {@code Idempotency-Key} — sanitised to a safe charset,
+     *               or replaced with a random id if blank/absent
+     * @param kind   a short label the caller assigns (e.g. "thumbnail", "audio", "frame")
      */
-    public StoredArtifact put(String kind, byte[] bytes) {
+    public StoredArtifact put(String prefix, String kind, byte[] bytes) {
+        String safePrefix = sanitizePrefix(prefix);
         String id = UUID.randomUUID().toString();
-        Path path = root.resolve(id);
-        try {
-            Files.write(path, bytes);
-        } catch (IOException e) {
-            throw new ExtractionException(ErrorCode.STORAGE_ERROR, "Could not store an extracted artifact.", e);
-        }
+        storage.put(objectPath(safePrefix, id), bytes);
 
         Instant expiresAt = Instant.now().plus(properties.ttl());
-        registry.put(id, new Entry(path, expiresAt));
-        String ref = sign(id, expiresAt);
+        String ref = sign(safePrefix, id, expiresAt);
         return new StoredArtifact(kind, ref, bytes.length, expiresAt);
     }
 
-    /** @return the bytes, or empty if the ref is malformed, forged, expired, or unknown */
+    /**
+     * @return the bytes, or empty if the ref is malformed, forged, expired, or
+     *         the object is missing. A successful read deletes the artifact
+     *         from storage — Phase 4's "a completed save leaves no artifact
+     *         behind" gate, satisfied the moment it's consumed rather than
+     *         waiting for {@link #sweep}.
+     */
     public Optional<byte[]> read(String ref) {
         Parsed parsed = parse(ref);
         if (parsed == null) {
@@ -112,49 +110,75 @@ public class ArtifactStore {
         if (Instant.now().isAfter(parsed.expiresAt)) {
             return Optional.empty();
         }
-        Entry entry = registry.get(parsed.id);
-        if (entry == null || Instant.now().isAfter(entry.expiresAt())) {
-            return Optional.empty();
-        }
-        try {
-            return Optional.of(Files.readAllBytes(entry.path()));
-        } catch (IOException e) {
-            log.warn("Artifact {} was registered but could not be read from disk", parsed.id, e);
-            return Optional.empty();
-        }
+        String path = objectPath(parsed.prefix, parsed.id);
+        Optional<byte[]> bytes = storage.get(path);
+        bytes.ifPresent(b -> storage.delete(path));
+        return bytes;
     }
 
-    /** Deletes expired entries and their files — the store's own bounded-disk guarantee. */
+    /**
+     * Deletes anything left in the bucket past its TTL — the safety net for
+     * an artifact nobody ever redeemed (a crashed job, a response that never
+     * reached the backend). {@link #read}'s delete-on-consumption already
+     * handles the ordinary path; this only ever touches orphans, and it is
+     * best-effort by design — a listing failure skips that prefix rather
+     * than failing the whole sweep.
+     */
     @Scheduled(fixedDelay = 60_000)
     void sweep() {
-        Instant now = Instant.now();
-        registry.entrySet().removeIf(e -> {
-            boolean expired = now.isAfter(e.getValue().expiresAt());
-            if (expired) {
-                deleteQuietly(e.getValue().path());
+        Instant cutoff = Instant.now().minus(properties.ttl());
+        int deleted = 0;
+        for (String prefix : safeListPrefixes()) {
+            for (ArtifactBlobStorage.Entry entry : safeList(prefix)) {
+                if (entry.createdAt() != null && entry.createdAt().isBefore(cutoff)) {
+                    storage.delete(prefix + "/" + entry.name());
+                    deleted++;
+                }
             }
-            return expired;
-        });
-    }
-
-    @PreDestroy
-    void deleteAll() {
-        registry.values().forEach(e -> deleteQuietly(e.path()));
-    }
-
-    private static void deleteQuietly(Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (IOException ignored) {
-            // Best effort; the OS reclaims temp space regardless.
+        }
+        if (deleted > 0) {
+            log.info("Artifact sweep deleted {} orphaned object(s)", deleted);
         }
     }
 
-    private String sign(String id, Instant expiresAt) {
-        String payload = id + "." + expiresAt.getEpochSecond();
+    private List<String> safeListPrefixes() {
+        try {
+            return storage.listPrefixes();
+        } catch (RuntimeException e) {
+            log.warn("Artifact sweep could not list prefixes: {}", e.toString());
+            return List.of();
+        }
+    }
+
+    private List<ArtifactBlobStorage.Entry> safeList(String prefix) {
+        try {
+            return storage.list(prefix);
+        } catch (RuntimeException e) {
+            log.warn("Artifact sweep could not list prefix {}: {}", prefix, e.toString());
+            return List.of();
+        }
+    }
+
+    private static String objectPath(String prefix, String id) {
+        return prefix + "/" + id;
+    }
+
+    private static String sanitizePrefix(String prefix) {
+        if (prefix == null) {
+            return UUID.randomUUID().toString();
+        }
+        String cleaned = prefix.replaceAll("[^A-Za-z0-9_-]", "");
+        if (cleaned.isBlank()) {
+            return UUID.randomUUID().toString();
+        }
+        return cleaned.length() > MAX_PREFIX_LENGTH ? cleaned.substring(0, MAX_PREFIX_LENGTH) : cleaned;
+    }
+
+    private String sign(String prefix, String id, Instant expiresAt) {
+        String payload = prefix + PREFIX_ID_SEPARATOR + id + "." + expiresAt.getEpochSecond();
         byte[] mac = hmac(payload);
-        String encoder = Base64.getUrlEncoder().withoutPadding().encodeToString(mac);
-        return REF_PREFIX + payload + "." + encoder;
+        String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(mac);
+        return REF_PREFIX + payload + "." + encoded;
     }
 
     private byte[] hmac(String payload) {
@@ -167,7 +191,7 @@ public class ArtifactStore {
         }
     }
 
-    private record Parsed(String id, Instant expiresAt, String payload, byte[] signature) {
+    private record Parsed(String prefix, String id, Instant expiresAt, String payload, byte[] signature) {
     }
 
     private static Parsed parse(String ref) {
@@ -181,16 +205,22 @@ public class ArtifactStore {
         }
         String payload = rest.substring(0, lastDot);
         String sigPart = rest.substring(lastDot + 1);
-        int idDot = payload.lastIndexOf('.');
-        if (idDot < 0) {
+        int epochDot = payload.lastIndexOf('.');
+        if (epochDot < 0) {
             return null;
         }
-        String id = payload.substring(0, idDot);
-        String epochPart = payload.substring(idDot + 1);
+        String prefixAndId = payload.substring(0, epochDot);
+        String epochPart = payload.substring(epochDot + 1);
+        int sep = prefixAndId.lastIndexOf(PREFIX_ID_SEPARATOR);
+        if (sep < 0) {
+            return null;
+        }
+        String prefix = prefixAndId.substring(0, sep);
+        String id = prefixAndId.substring(sep + 1);
         try {
             Instant expiresAt = Instant.ofEpochSecond(Long.parseLong(epochPart));
             byte[] signature = Base64.getUrlDecoder().decode(sigPart);
-            return new Parsed(id, expiresAt, payload, signature);
+            return new Parsed(prefix, id, expiresAt, payload, signature);
         } catch (RuntimeException e) {
             return null;
         }

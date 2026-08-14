@@ -76,11 +76,13 @@ public class VisualExtractor {
     }
 
     /**
+     * @param prefix groups any stored frame artifacts under, e.g. the save
+     *               id — passed straight through to {@link ArtifactStore#put}
      * @return the text read from the video's frames (with or without an
      *         escalation flag), or empty when the tier is disabled, the
      *         source has no video, or no frames could be cut at all
      */
-    public Optional<VisualText> extract(String url, int maxDurationSeconds) {
+    public Optional<VisualText> extract(String url, int maxDurationSeconds, String prefix) {
         if (!properties.enabled()) {
             log.debug("Visual tier is disabled; not attempting OCR for {}", url);
             return Optional.empty();
@@ -113,7 +115,7 @@ public class VisualExtractor {
                         voted.meanConfidence(), decision.reason(), false, List.of()));
             }
 
-            return Optional.of(belowFloor(keyframes, voted, decision));
+            return Optional.of(belowFloor(keyframes, voted, decision, prefix));
 
         } catch (IOException e) {
             throw new ExtractionException(ErrorCode.INTERNAL_ERROR,
@@ -152,7 +154,7 @@ public class VisualExtractor {
      * result, same as the monolith's own "degrade" path.
      */
     private VisualText belowFloor(FrameExtractor.Keyframes keyframes, FrameTextVoter.VotedText voted,
-                                  OcrQualityGate.Decision decision) {
+                                  OcrQualityGate.Decision decision, String prefix) {
         if (!properties.visionEscalation()) {
             return new VisualText(voted.text(), "ocr-below-floor", voted.framesRead(),
                     voted.meanConfidence(), decision.reason(), false, List.of());
@@ -160,7 +162,7 @@ public class VisualExtractor {
 
         List<Path> chosen = thumbnails.best(keyframes.colour(), properties.visionFrames());
         List<ArtifactStore.StoredArtifact> stored = chosen.stream()
-                .map(this::storeFrame)
+                .map(path -> storeFrame(path, prefix))
                 .flatMap(Optional::stream)
                 .toList();
 
@@ -175,9 +177,9 @@ public class VisualExtractor {
                 voted.meanConfidence(), decision.reason(), true, stored);
     }
 
-    private Optional<ArtifactStore.StoredArtifact> storeFrame(Path path) {
+    private Optional<ArtifactStore.StoredArtifact> storeFrame(Path path, String prefix) {
         try {
-            return Optional.of(artifacts.put("frame", Files.readAllBytes(path)));
+            return Optional.of(artifacts.put(prefix, "frame", Files.readAllBytes(path)));
         } catch (IOException e) {
             log.debug("Could not read frame {} to store as an artifact: {}", path.getFileName(), e.toString());
             return Optional.empty();

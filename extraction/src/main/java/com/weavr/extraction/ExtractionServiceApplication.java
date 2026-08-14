@@ -13,8 +13,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * {@code api}; this process owns only the media bytes.
  *
  * <p>{@code @EnableScheduling} backs {@link com.weavr.extraction.artifact.ArtifactStore}'s
- * periodic sweep of expired artifacts — the bounded-disk guarantee every
- * temp-file-writing class in this codebase carries.
+ * periodic sweep of orphaned objects in Supabase Storage — the bounded-bucket
+ * guarantee every temp-file-writing class in this codebase carries, applied
+ * to the shared bucket now that Phase 4 moved artifacts off local disk.
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan

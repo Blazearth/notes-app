@@ -64,7 +64,7 @@ class ExtractControllerTest {
         ExtractionResult result = new ExtractionResult("captions", "some text", false, false,
                 new ExtractionMetadata("youtube", "abc123", "Title", "desc", "uploader", 42.0, List.of("en"), null),
                 List.of());
-        when(orchestrator.extract(anyString(), any(ExtractionOptions.class))).thenReturn(result);
+        when(orchestrator.extract(anyString(), any(ExtractionOptions.class), anyString())).thenReturn(result);
 
         mockMvc.perform(post("/extract").contentType(MediaType.APPLICATION_JSON)
                         .header("Authorization", AUTH_HEADER)
@@ -95,7 +95,7 @@ class ExtractControllerTest {
     @EnumSource(ErrorCode.class)
     void everyErrorCodeMapsToItsDocumentedHttpStatusAndRetryableFlag(ErrorCode code) throws Exception {
         when(idempotency.get(anyString())).thenReturn(java.util.Optional.empty());
-        when(orchestrator.extract(anyString(), any(ExtractionOptions.class)))
+        when(orchestrator.extract(anyString(), any(ExtractionOptions.class), anyString()))
                 .thenThrow(new ExtractionException(code, "a user-safe message"));
 
         mockMvc.perform(post("/extract").contentType(MediaType.APPLICATION_JSON)
@@ -112,7 +112,7 @@ class ExtractControllerTest {
     @Test
     void anUnexpectedExceptionNeverLeaksInternalsAndIsRetryable() throws Exception {
         when(idempotency.get(anyString())).thenReturn(java.util.Optional.empty());
-        when(orchestrator.extract(anyString(), any(ExtractionOptions.class)))
+        when(orchestrator.extract(anyString(), any(ExtractionOptions.class), anyString()))
                 .thenThrow(new RuntimeException("some internal NullPointerException at line 42 of SecretClass.java"));
 
         mockMvc.perform(post("/extract").contentType(MediaType.APPLICATION_JSON)

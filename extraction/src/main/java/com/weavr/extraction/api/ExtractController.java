@@ -1,6 +1,7 @@
 package com.weavr.extraction.api;
 
 import java.util.Optional;
+import java.util.UUID;
 
 import com.weavr.extraction.api.dto.ExtractRequest;
 import com.weavr.extraction.api.dto.SuccessResponse;
@@ -48,7 +49,9 @@ class ExtractController {
         }
 
         ExtractionOptions options = toOptions(request.options());
-        ExtractionResult result = orchestrator.extract(request.url(), options);
+        String artifactPrefix = idempotencyKey != null && !idempotencyKey.isBlank()
+                ? idempotencyKey : UUID.randomUUID().toString();
+        ExtractionResult result = orchestrator.extract(request.url(), options, artifactPrefix);
         SuccessResponse response = SuccessResponse.of(result);
         idempotency.put(idempotencyKey, response);
         return response;

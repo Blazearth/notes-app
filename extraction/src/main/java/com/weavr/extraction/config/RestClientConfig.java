@@ -3,6 +3,7 @@ package com.weavr.extraction.config;
 import java.net.http.HttpClient;
 import java.time.Duration;
 
+import com.weavr.extraction.artifact.SupabaseStorageProperties;
 import com.weavr.extraction.ytdlp.RapidYtProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
@@ -50,6 +51,13 @@ class RestClientConfig {
     @Qualifier("rapidYt")
     @Scope("prototype")
     RestClient.Builder rapidYtRestClientBuilder(RapidYtProperties props) {
+        return builder(props.timeout());
+    }
+
+    @Bean
+    @Qualifier("supabaseStorage")
+    @Scope("prototype")
+    RestClient.Builder supabaseStorageRestClientBuilder(SupabaseStorageProperties props) {
         return builder(props.timeout());
     }
 

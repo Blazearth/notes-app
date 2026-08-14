@@ -6,16 +6,17 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * @param secret HMAC key signing artifact references. Blank generates a
- *               random key at startup — fine, since the store itself is
- *               in-memory-and-local-disk and does not survive a restart
- *               either, so a ref minted before a restart is unusable
- *               regardless of the key. Set explicitly only if refs must
- *               remain valid across a rolling deploy with more than one
- *               instance sharing a signing key — not the case yet
- *               (Phase 4 replaces this whole class with Supabase Storage).
- * @param ttl    how long an artifact and its ref stay valid. Short on
- *               purpose — an artifact exists only to cross the one HTTP hop
- *               back to the backend for the current save
+ *               random key at startup — fine for a single instance, but as
+ *               of Phase 4 the underlying bytes live in Supabase Storage and
+ *               genuinely survive a restart, so an ephemeral key is now the
+ *               one thing standing between "restart-safe" and "not": set
+ *               this explicitly once more than one instance is deployed, or
+ *               once redeploys should not silently orphan in-flight refs.
+ * @param ttl    how long an artifact and its ref stay valid, and the window
+ *               {@link ArtifactStore#sweep()} uses to judge an object
+ *               orphaned. Short on purpose — an artifact exists only to
+ *               cross the one HTTP hop back to the backend for the current
+ *               save.
  */
 @ConfigurationProperties(prefix = "weavr.extraction.artifact")
 public record ArtifactProperties(

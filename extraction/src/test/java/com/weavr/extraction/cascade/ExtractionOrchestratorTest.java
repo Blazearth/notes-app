@@ -60,6 +60,8 @@ class ExtractionOrchestratorTest {
     @Mock VisualExtractor visual;
     @Mock ArtifactStore artifacts;
 
+    private static final String PREFIX = "save-123";
+
     private ExtractionOrchestrator orchestrator;
 
     @BeforeEach
@@ -80,7 +82,7 @@ class ExtractionOrchestratorTest {
         when(ytDlp.fetchCaptions(anyString(), any(Path.class)))
                 .thenReturn(Optional.of("x".repeat(80)));
 
-        ExtractionResult result = orchestrator.extract("https://example.com/reel", ExtractionOptions.defaults());
+        ExtractionResult result = orchestrator.extract("https://example.com/reel", ExtractionOptions.defaults(), PREFIX);
 
         assertThat(result.source()).isEqualTo("captions");
         assertThat(result.text()).contains("A great recipe").contains("x".repeat(80));
@@ -93,7 +95,7 @@ class ExtractionOrchestratorTest {
         when(ytDlp.probe(anyString())).thenReturn(
                 metadata("A great recipe", "d".repeat(60), false));
 
-        ExtractionResult result = orchestrator.extract("https://example.com/reel", ExtractionOptions.defaults());
+        ExtractionResult result = orchestrator.extract("https://example.com/reel", ExtractionOptions.defaults(), PREFIX);
 
         assertThat(result.source()).isEqualTo("metadata");
         assertThat(result.text()).contains("d".repeat(60));
@@ -108,7 +110,7 @@ class ExtractionOrchestratorTest {
                 .thenReturn(Optional.of(new RapidYtClient.ProbeResult(meta, Optional.of("n".repeat(80)))));
 
         ExtractionResult result = orchestrator.extract(
-                "https://www.youtube.com/watch?v=dQw4w9WgXcQ", ExtractionOptions.defaults());
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ", ExtractionOptions.defaults(), PREFIX);
 
         assertThat(result.source()).isEqualTo("captions");
         assertThat(result.metadata().platform()).isEqualTo("youtube");
@@ -122,7 +124,7 @@ class ExtractionOrchestratorTest {
                 .thenReturn(Optional.of(new RapidYtClient.ProbeResult(meta, Optional.empty())));
 
         assertThatThrownBy(() -> orchestrator.extract(
-                "https://www.youtube.com/watch?v=dQw4w9WgXcQ", ExtractionOptions.defaults()))
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ", ExtractionOptions.defaults(), PREFIX))
                 .isInstanceOf(ExtractionException.class)
                 .satisfies(e -> assertThat(((ExtractionException) e).code()).isEqualTo(ErrorCode.CONTENT_UNAVAILABLE));
 
@@ -136,7 +138,7 @@ class ExtractionOrchestratorTest {
         when(ytDlp.probe(anyString())).thenReturn(metadata("Title", "d".repeat(60), false));
 
         ExtractionResult result = orchestrator.extract(
-                "https://www.youtube.com/watch?v=dQw4w9WgXcQ", ExtractionOptions.defaults());
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ", ExtractionOptions.defaults(), PREFIX);
 
         assertThat(result.source()).isEqualTo("metadata");
     }
@@ -150,7 +152,7 @@ class ExtractionOrchestratorTest {
         when(linkExtractor.extract(anyString()))
                 .thenReturn(Optional.of(new LinkExtractor.LinkExtraction("An Article", "p".repeat(80))));
 
-        ExtractionResult result = orchestrator.extract("https://example.com/article", ExtractionOptions.defaults());
+        ExtractionResult result = orchestrator.extract("https://example.com/article", ExtractionOptions.defaults(), PREFIX);
 
         assertThat(result.source()).isEqualTo("link");
         assertThat(result.text()).isEqualTo("p".repeat(80));
@@ -162,7 +164,7 @@ class ExtractionOrchestratorTest {
                 .thenThrow(new YtDlpFailedException("yt-dlp exited 1", "ERROR: Unsupported URL: https://example.com/article"));
         when(linkExtractor.extract(anyString())).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> orchestrator.extract("https://example.com/article", ExtractionOptions.defaults()))
+        assertThatThrownBy(() -> orchestrator.extract("https://example.com/article", ExtractionOptions.defaults(), PREFIX))
                 .isInstanceOf(ExtractionException.class)
                 .satisfies(e -> assertThat(((ExtractionException) e).code()).isEqualTo(ErrorCode.UNSUPPORTED_URL));
     }
@@ -172,7 +174,7 @@ class ExtractionOrchestratorTest {
         when(ytDlp.probe(anyString()))
                 .thenThrow(new YtDlpFailedException("yt-dlp exited 1", "ERROR: Video unavailable"));
 
-        assertThatThrownBy(() -> orchestrator.extract("https://example.com/gone", ExtractionOptions.defaults()))
+        assertThatThrownBy(() -> orchestrator.extract("https://example.com/gone", ExtractionOptions.defaults(), PREFIX))
                 .isInstanceOf(ExtractionException.class)
                 .satisfies(e -> {
                     assertThat(((ExtractionException) e).code()).isEqualTo(ErrorCode.CONTENT_UNAVAILABLE);
@@ -186,7 +188,7 @@ class ExtractionOrchestratorTest {
     void pdfWithReadableTextSucceeds() {
         when(pdfExtractor.extract(anyString())).thenReturn(Optional.of("p".repeat(80)));
 
-        ExtractionResult result = orchestrator.extract("https://example.com/doc.pdf", ExtractionOptions.defaults());
+        ExtractionResult result = orchestrator.extract("https://example.com/doc.pdf", ExtractionOptions.defaults(), PREFIX);
 
         assertThat(result.source()).isEqualTo("pdf");
         verifyNoInteractions(ytDlp, rapidYt);
@@ -196,7 +198,7 @@ class ExtractionOrchestratorTest {
     void pdfWithNoTextIsContentUnavailable() {
         when(pdfExtractor.extract(anyString())).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> orchestrator.extract("https://example.com/doc.pdf", ExtractionOptions.defaults()))
+        assertThatThrownBy(() -> orchestrator.extract("https://example.com/doc.pdf", ExtractionOptions.defaults(), PREFIX))
                 .isInstanceOf(ExtractionException.class)
                 .satisfies(e -> assertThat(((ExtractionException) e).code()).isEqualTo(ErrorCode.CONTENT_UNAVAILABLE));
     }
@@ -207,7 +209,7 @@ class ExtractionOrchestratorTest {
     void thinContentWithNoOptionsRequestedIsNeverReportedAsSuccess() {
         when(ytDlp.probe(anyString())).thenReturn(metadata("x", "y", false)); // under threshold
 
-        assertThatThrownBy(() -> orchestrator.extract("https://example.com/thin", ExtractionOptions.defaults()))
+        assertThatThrownBy(() -> orchestrator.extract("https://example.com/thin", ExtractionOptions.defaults(), PREFIX))
                 .isInstanceOf(ExtractionException.class)
                 .satisfies(e -> assertThat(((ExtractionException) e).code()).isEqualTo(ErrorCode.CONTENT_UNAVAILABLE));
     }
@@ -222,10 +224,10 @@ class ExtractionOrchestratorTest {
         when(ytDlp.downloadAudio(anyString(), any(Path.class), anyInt())).thenReturn(Optional.of(audioFile));
         ArtifactStore.StoredArtifact stored = new ArtifactStore.StoredArtifact(
                 "audio", "sig:abc.123.def", 17, Instant.now().plusSeconds(600));
-        when(artifacts.put(eq("audio"), any(byte[].class))).thenReturn(stored);
+        when(artifacts.put(eq(PREFIX), eq("audio"), any(byte[].class))).thenReturn(stored);
 
         ExtractionResult result = orchestrator.extract("https://example.com/reel",
-                new ExtractionOptions(true, false, null));
+                new ExtractionOptions(true, false, null), PREFIX);
 
         assertThat(result.needsTranscription()).isTrue();
         assertThat(result.needsVisionEscalation()).isFalse();
@@ -239,10 +241,10 @@ class ExtractionOrchestratorTest {
         when(ytDlp.downloadAudio(anyString(), any(Path.class), anyInt())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> orchestrator.extract("https://example.com/reel",
-                new ExtractionOptions(true, false, null)))
+                new ExtractionOptions(true, false, null), PREFIX))
                 .isInstanceOf(ExtractionException.class)
                 .satisfies(e -> assertThat(((ExtractionException) e).code()).isEqualTo(ErrorCode.CONTENT_UNAVAILABLE));
-        verify(artifacts, never()).put(anyString(), any(byte[].class));
+        verify(artifacts, never()).put(anyString(), anyString(), any(byte[].class));
     }
 
     // --- visual tier ---------------------------------------------------------------
@@ -250,12 +252,12 @@ class ExtractionOrchestratorTest {
     @Test
     void framesPassingTheGateReturnTextDirectly() {
         when(ytDlp.probe(anyString())).thenReturn(metadata("x", "y", false));
-        when(visual.extract(anyString(), anyInt())).thenReturn(Optional.of(
+        when(visual.extract(anyString(), anyInt(), anyString())).thenReturn(Optional.of(
                 new VisualExtractor.VisualText("1 cup flour\n2 eggs", "ocr", 4, 91.2,
                         "8 words at mean confidence 91.2 across 4 frames", false, List.of())));
 
         ExtractionResult result = orchestrator.extract("https://example.com/reel",
-                new ExtractionOptions(false, true, null));
+                new ExtractionOptions(false, true, null), PREFIX);
 
         assertThat(result.source()).isEqualTo("ocr");
         assertThat(result.text()).isEqualTo("1 cup flour\n2 eggs");
@@ -267,12 +269,12 @@ class ExtractionOrchestratorTest {
         when(ytDlp.probe(anyString())).thenReturn(metadata("x", "y", false));
         ArtifactStore.StoredArtifact frame = new ArtifactStore.StoredArtifact(
                 "frame", "sig:frame.123.abc", 4096, Instant.now().plusSeconds(600));
-        when(visual.extract(anyString(), anyInt())).thenReturn(Optional.of(
+        when(visual.extract(anyString(), anyInt(), anyString())).thenReturn(Optional.of(
                 new VisualExtractor.VisualText("garbled |][ soup", "ocr-below-floor", 3, 22.0,
                         "only 40% of tokens contain a letter, floor is 50%", true, List.of(frame))));
 
         ExtractionResult result = orchestrator.extract("https://example.com/reel",
-                new ExtractionOptions(false, true, null));
+                new ExtractionOptions(false, true, null), PREFIX);
 
         assertThat(result.needsVisionEscalation()).isTrue();
         assertThat(result.artifacts()).containsExactly(frame);
@@ -281,10 +283,10 @@ class ExtractionOrchestratorTest {
     @Test
     void framesRequestedButNothingUsableFallsThroughToContentUnavailable() {
         when(ytDlp.probe(anyString())).thenReturn(metadata("x", "y", false));
-        when(visual.extract(anyString(), anyInt())).thenReturn(Optional.empty());
+        when(visual.extract(anyString(), anyInt(), anyString())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> orchestrator.extract("https://example.com/reel",
-                new ExtractionOptions(false, true, null)))
+                new ExtractionOptions(false, true, null), PREFIX))
                 .isInstanceOf(ExtractionException.class)
                 .satisfies(e -> assertThat(((ExtractionException) e).code()).isEqualTo(ErrorCode.CONTENT_UNAVAILABLE));
     }

@@ -26,19 +26,28 @@ weavr:
       shared-secret: ${WEAVR_EXTRACTION_SHARED_SECRET:}
 
     # --------------------------------------------------------------------------
-    # Artifacts — a stand-in for Phase 4's real Supabase Storage integration.
+    # Artifacts — Phase 4: the shared Supabase Storage bucket, under a
+    # per-save prefix, behind an opaque signed HMAC ref. The bucket must
+    # already exist and be PRIVATE (created out-of-band, same as api's own
+    # screenshots bucket) — this service does not create it.
     # --------------------------------------------------------------------------
-    # Local disk, in-memory registry: does not survive a restart and does not
-    # work across more than one running instance. That is fine for standing
-    # Phase 3 up on its own; Phase 4 replaces this whole thing.
     artifact:
       secret: ${WEAVR_EXTRACTION_ARTIFACT_SECRET:}
       ttl: 10m
 
-    # In-memory Idempotency-Key cache. Same non-durability caveat as artifacts
-    # above — the backend's own idempotency (saves.idempotency_key) is the
-    # real guarantee; this only avoids re-extracting inside one instance's
-    # uptime.
+    # Same Supabase project api/ already talks to — WEAVR_SUPABASE_URL and
+    # WEAVR_SUPABASE_SERVICE_KEY are deliberately the same env var names as
+    # api's own config, so one secret value configures both deployables.
+    supabase:
+      url: ${WEAVR_SUPABASE_URL:}
+      service-key: ${WEAVR_SUPABASE_SERVICE_KEY:}
+      bucket: ${WEAVR_EXTRACTION_ARTIFACT_BUCKET:extraction-artifacts}
+      timeout: 20s
+
+    # In-memory Idempotency-Key cache. Non-durable, unlike the artifact store
+    # above as of Phase 4 — the backend's own idempotency (saves.idempotency_key)
+    # is the real guarantee; this only avoids re-extracting inside one
+    # instance's uptime.
     idempotency:
       ttl: 10m
 

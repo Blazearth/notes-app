@@ -14,8 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
  * signed {@code ref} an {@code /extract} result returned. Not part of the
  * doc's own worked example (which shows only the reference being minted),
  * but a service that hands back a reference has to have somewhere for it to
- * be redeemed — this is that endpoint, and it is a stand-in for reading the
- * same bytes back out of Supabase Storage once Phase 4 lands.
+ * be redeemed — this is that endpoint. As of Phase 4 the bytes it returns
+ * come from the real Supabase Storage bucket, not local disk, and a
+ * successful read deletes the object — see {@link ArtifactStore#read}.
  *
  * <p>{@code ref} rides as a query parameter rather than a path segment: it
  * contains {@code .} characters (the store's own signing format), and a path
