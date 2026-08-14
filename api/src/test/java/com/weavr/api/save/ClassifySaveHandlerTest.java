@@ -43,7 +43,8 @@ import static org.mockito.Mockito.when;
 /**
  * The model-routing and idempotency logic that sits between a queued save and
  * the Gemini call: skip-if-already-classified, primary-then-fallback on low
- * confidence, and "unusable" landing as a gentle failure rather than success.
+ * confidence, and "unusable" landing as ready (not failed) so the user sees a
+ * neutral "nothing to extract" explanation rather than a red error badge.
  * This is the branching logic flagged as untested after tonight's encoding
  * fix — {@link com.weavr.api.gemini.GeminiClientTest} covers the call itself.
  */
@@ -280,7 +281,10 @@ class ClassifySaveHandlerTest {
     }
 
     @Test
-    void unusableKnowledgeTypeMarksTheSaveFailedNotReady() {
+    void unusableKnowledgeTypeMarksTheSaveReadyNotFailed() {
+        // "unusable" means the pipeline ran fine but found nothing extractable
+        // (login wall, 404, empty transcript). The save is complete — mark it
+        // ready so the user sees a neutral explanation, not a red Failed badge.
         UUID saveId = UUID.randomUUID();
         when(saves.findById(saveId)).thenReturn(Optional.of(textSave("404 Not Found")));
         BudgetApproved primary = budget("gemini-2.5-flash-lite", 500);
@@ -290,8 +294,8 @@ class ClassifySaveHandlerTest {
 
         handler.handle(classifyJob(saveId));
 
-        assertThat(updateParams).contains("failed", "unusable");
-        assertThat(updateParams).doesNotContain("ready");
+        assertThat(updateParams).contains("ready", "unusable");
+        assertThat(updateParams).doesNotContain("failed");
     }
 
     @Test

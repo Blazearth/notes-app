@@ -27,7 +27,7 @@ class RecommendationListEnricherTest {
 
     private static final ObjectMapper MAPPER = JsonMapper.builder().build();
     private static final EnrichmentProperties PROPS = new EnrichmentProperties(
-            true, "tmdb-token", "places-key", Duration.ofSeconds(10));
+            true, "tmdb-token", "places-key", null, Duration.ofSeconds(10));
 
     private MockRestServiceServer server;
     private RecommendationListEnricher enricher;
@@ -151,7 +151,7 @@ class RecommendationListEnricherTest {
     @Test
     void withoutAKeyItDoesNothing() {
         RecommendationListEnricher unconfigured = new RecommendationListEnricher(
-                new EnrichmentProperties(true, "  ", null, Duration.ofSeconds(10)),
+                new EnrichmentProperties(true, "  ", null, null, Duration.ofSeconds(10)),
                 MAPPER, RestClient.builder());
 
         assertThat(unconfigured.enrich(Map.of(

@@ -31,7 +31,7 @@ class GooglePlacesEnricherTest {
 
     private static final ObjectMapper MAPPER = JsonMapper.builder().build();
     private static final EnrichmentProperties PROPS = new EnrichmentProperties(
-            true, "tmdb-token", "places-key", Duration.ofSeconds(10));
+            true, "tmdb-token", "places-key", null, Duration.ofSeconds(10));
 
     private MockRestServiceServer server;
     private GooglePlacesEnricher enricher;
@@ -134,7 +134,7 @@ class GooglePlacesEnricherTest {
     @Test
     void withoutAKeyItDoesNothing() {
         GooglePlacesEnricher unconfigured = new GooglePlacesEnricher(
-                new EnrichmentProperties(true, "tmdb", null, Duration.ofSeconds(10)),
+                new EnrichmentProperties(true, "tmdb", null, null, Duration.ofSeconds(10)),
                 MAPPER, RestClient.builder());
 
         assertThat(unconfigured.enrich(Map.of("name", "Noma"))).isEmpty();
@@ -143,7 +143,7 @@ class GooglePlacesEnricherTest {
     @Test
     void theEnabledFlagTurnsEverythingOff() {
         GooglePlacesEnricher disabled = new GooglePlacesEnricher(
-                new EnrichmentProperties(false, "tmdb", "places-key", Duration.ofSeconds(10)),
+                new EnrichmentProperties(false, "tmdb", "places-key", null, Duration.ofSeconds(10)),
                 MAPPER, RestClient.builder());
 
         assertThat(disabled.enrich(Map.of("name", "Noma"))).isEmpty();
