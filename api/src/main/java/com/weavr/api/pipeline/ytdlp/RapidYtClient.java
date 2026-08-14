@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -14,6 +15,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -28,10 +30,20 @@ import org.xml.sax.InputSource;
  * Primary YouTube metadata + transcript source that does NOT hit YouTube
  * directly, bypassing the datacenter-IP bot check that kills yt-dlp on Render.
  *
- * <p>Two HTTP calls per YouTube video:
+ * <p>Two HTTP calls per YouTube video in the common case, more when the metadata
+ * probe needs a retry or several caption tracks have to be tried:
  * <ol>
- *   <li>RapidAPI {@code /dl?id=<videoId>} → metadata JSON + caption track URLs</li>
- *   <li>First available caption {@code baseUrl} → timestamped XML transcript</li>
+ *   <li>RapidAPI {@code /dl?id=<videoId>} → metadata JSON + caption track URLs.
+ *       Bounded retry with full jitter on a connection failure, a 429 or a 5xx
+ *       (F4, docs/extraction-architecture.md) — a 404-shaped "not found" is not
+ *       retried, since trying again will not make a deleted video reappear.</li>
+ *   <li>Up to {@value #MAX_CAPTION_TRACKS_TO_TRY} caption {@code baseUrl}s →
+ *       timestamped XML transcripts, keeping whichever parses to the longest
+ *       prose (F6) — RapidAPI's response carries no manual-vs-auto flag to rank
+ *       by, and "first track listed" is not a ranking, mirroring the same
+ *       auto-generated-tracks-are-bigger-but-carry-less-text lesson
+ *       {@code YtDlpClient.bestCaptions} already learned from yt-dlp's own
+ *       captions.</li>
  * </ol>
  *
  * <p>The transcript is attached to the returned {@link SourceMetadata} via the
@@ -49,9 +61,19 @@ public class RapidYtClient {
 
     private static final Logger log = LoggerFactory.getLogger(RapidYtClient.class);
 
-    // Matches youtube.com/watch?v=ID, youtu.be/ID, youtube.com/shorts/ID
+    // Matches youtube.com/watch?v=ID, youtu.be/ID, youtube.com/shorts/ID,
+    // youtube.com/live/ID (also covers m.youtube.com and music.youtube.com,
+    // since the match isn't anchored to the start of the string — F8).
     private static final Pattern YT_ID = Pattern.compile(
-            "(?:youtube\\.com/(?:watch\\?v=|shorts/|embed/)|youtu\\.be/)([A-Za-z0-9_-]{11})");
+            "(?:youtube\\.com/(?:watch\\?v=|shorts/|embed/|live/)|youtu\\.be/)([A-Za-z0-9_-]{11})");
+
+    /** 1 initial attempt + at most 2 retries, matching the doc's own retry bound for this call. */
+    private static final int MAX_ATTEMPTS = 3;
+    private static final Duration RETRY_BASE_DELAY = Duration.ofMillis(200);
+    private static final Duration RETRY_MAX_DELAY = Duration.ofSeconds(2);
+
+    /** A safety bound, not a measured typical count — RapidAPI's track list size is unverified. */
+    private static final int MAX_CAPTION_TRACKS_TO_TRY = 5;
 
     private final RapidYtProperties props;
     private final RestClient http;
@@ -71,19 +93,29 @@ public class RapidYtClient {
         this.captionHttp = builder.clone().build();
     }
 
-    /** @return empty if disabled, video not found, or any network/parse error */
+    /** @return empty if disabled, video not found, or every retry attempt failed */
     public Optional<ProbeResult> probe(String url) {
         if (!props.enabled()) return Optional.empty();
 
         String videoId = extractVideoId(url);
         if (videoId == null) return Optional.empty();
 
-        try {
-            return doProbe(videoId);
-        } catch (Exception e) {
-            log.warn("RapidAPI YouTube probe failed for {}: {}", videoId, e.getMessage());
-            return Optional.empty();
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                return doProbe(videoId);
+            } catch (Exception e) {
+                boolean lastAttempt = attempt == MAX_ATTEMPTS;
+                if (!isRetryable(e) || lastAttempt) {
+                    log.warn("RapidAPI YouTube probe failed for {} (attempt {}/{}): {}",
+                            videoId, attempt, MAX_ATTEMPTS, e.getMessage());
+                    return Optional.empty();
+                }
+                log.debug("RapidAPI YouTube probe attempt {}/{} failed for {}, retrying: {}",
+                        attempt, MAX_ATTEMPTS, videoId, e.getMessage());
+                sleepWithJitter(attempt);
+            }
         }
+        return Optional.empty();
     }
 
     private Optional<ProbeResult> doProbe(String videoId) {
@@ -91,7 +123,7 @@ public class RapidYtClient {
                 .uri("/dl?id={id}", videoId)
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, (req, res) -> {
-                    throw new RuntimeException("RapidAPI returned HTTP " + res.getStatusCode());
+                    throw new RapidApiStatusException(res.getStatusCode().value());
                 })
                 .body(String.class);
 
@@ -112,16 +144,15 @@ public class RapidYtClient {
 
         // --- caption tracks ---
         List<String> langCodes = new ArrayList<>();
-        String firstCaptionUrl = null;
+        List<String> candidateUrls = new ArrayList<>();
 
         JsonNode tracks = root.path("captions").path("captionTracks");
         if (tracks.isArray()) {
             for (JsonNode track : tracks) {
                 String lang = track.path("languageCode").asText(null);
                 if (lang != null) langCodes.add(lang);
-                if (firstCaptionUrl == null) {
-                    firstCaptionUrl = track.path("baseUrl").asText(null);
-                }
+                String baseUrl = track.path("baseUrl").asText(null);
+                if (baseUrl != null) candidateUrls.add(baseUrl);
             }
         }
 
@@ -134,12 +165,29 @@ public class RapidYtClient {
                 List.copyOf(langCodes), List.of(), null);
 
         // --- transcript ---
-        Optional<String> transcript = Optional.empty();
-        if (firstCaptionUrl != null) {
-            transcript = fetchTranscript(firstCaptionUrl);
-        }
+        Optional<String> transcript = bestTranscript(candidateUrls);
 
         return Optional.of(new ProbeResult(metadata, transcript));
+    }
+
+    /**
+     * Tries up to {@link #MAX_CAPTION_TRACKS_TO_TRY} tracks and keeps whichever
+     * parses to the longest prose, rather than whichever RapidAPI happened to
+     * list first (F6) — the same "rank by parsed output, not by which file is
+     * listed or sized first" rule {@code YtDlpClient.bestCaptions} applies to
+     * yt-dlp's own subtitle files, and for the identical reason: nothing here
+     * tells us which track is manually authored versus auto-generated, so size
+     * or position are not a proxy for quality.
+     */
+    private Optional<String> bestTranscript(List<String> candidateUrls) {
+        String best = null;
+        for (String url : candidateUrls.stream().limit(MAX_CAPTION_TRACKS_TO_TRY).toList()) {
+            Optional<String> text = fetchTranscript(url);
+            if (text.isPresent() && (best == null || text.get().length() > best.length())) {
+                best = text.get();
+            }
+        }
+        return Optional.ofNullable(best);
     }
 
     /**
@@ -209,6 +257,50 @@ public class RapidYtClient {
     private static String text(JsonNode node, String field) {
         JsonNode v = node.path(field);
         return v.isTextual() ? v.asText() : null;
+    }
+
+    /**
+     * A connection failure, a 429 or a 5xx is worth one more attempt; a 404 or
+     * any other 4xx is not (F4) — retrying will not make RapidAPI find a video
+     * that does not exist, and a malformed/unparseable response is equally not
+     * worth retrying, which is why this only matches these two specific cases
+     * rather than defaulting every exception to retryable.
+     */
+    private static boolean isRetryable(Exception e) {
+        if (e instanceof RapidApiStatusException status) {
+            return status.retryable();
+        }
+        return e instanceof ResourceAccessException;
+    }
+
+    /**
+     * Full jitter (sleep a random duration between zero and the capped
+     * exponential delay) rather than a fixed backoff — avoids every retrying
+     * caller waking up at the same instant and re-hitting RapidAPI in lockstep.
+     */
+    private static void sleepWithJitter(int attempt) {
+        Duration exponential = RETRY_BASE_DELAY.multipliedBy(1L << (attempt - 1));
+        Duration capped = exponential.compareTo(RETRY_MAX_DELAY) > 0 ? RETRY_MAX_DELAY : exponential;
+        long jitterMillis = ThreadLocalRandom.current().nextLong(capped.toMillis() + 1);
+        try {
+            Thread.sleep(jitterMillis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Carries the HTTP status code {@code onStatus} would otherwise discard, so F4 can act on it. */
+    private static final class RapidApiStatusException extends RuntimeException {
+        private final int status;
+
+        RapidApiStatusException(int status) {
+            super("RapidAPI returned HTTP " + status);
+            this.status = status;
+        }
+
+        boolean retryable() {
+            return status == 429 || status >= 500;
+        }
     }
 
     /**

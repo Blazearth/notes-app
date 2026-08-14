@@ -2,7 +2,7 @@
 
 Investigation of three reference YouTube extractors against our own cascade, the failure points it surfaced in our code, a recommended service split, and a hosting verdict.
 
-**Status: investigation, plus Phase 1 of Part F below.** Dated 2026-08-14; Phase 1 landed 2026-08-15 — see [CLAUDE.md](../CLAUDE.md) for the verified details. Phases 2 onward, and the dedicated extraction service in Part D, remain investigation only.
+**Status: investigation, plus Phases 1 and 2 of Part F below.** Dated 2026-08-14; Phases 1 and 2 landed 2026-08-15 — see [CLAUDE.md](../CLAUDE.md) for the verified details. Phase 3 onward, and the dedicated extraction service in Part D, remain investigation only.
 
 ---
 
@@ -153,21 +153,31 @@ Both `LinkExtractor.fetch` (`:72`) and `ProcessSaveHandler.downloadAndStoreImage
 
 `RapidYtClient.probe` (`:81`) wraps everything in `catch (Exception) → Optional.empty()`. A transient 429, a 503 and a genuinely missing video are indistinguishable, and all three fall through to `yt-dlp` — which on Render fails every YouTube URL with the bot check. One rate-limit blip therefore becomes a permanently failed save rather than a retry thirty seconds later.
 
+**Fixed 2026-08-15** — see [CLAUDE.md](../CLAUDE.md). `probe` now retries up to twice (full jitter, exponential) on a connection failure, a 429 or a 5xx, carried by a new `RapidApiStatusException` that preserves the status code `onStatus` previously discarded; a 404 or any other 4xx returns empty immediately, no retry.
+
 ### F5 — The provider path only covers captions and metadata
 
 When the provider returns thin metadata, `ExtractionCascade` calls `continueFromMetadata` (`:125`), whose ASR and visual tiers invoke `ytDlp.downloadAudio` (`AsrTranscriber.java:52`) and `ytDlp.downloadVideo` (`VisualTextExtractor.java:155`) against YouTube directly. Those are the blocked path. A captionless YouTube video with a thin description still fails on Render, which reads as "the provider fix did not work" when in fact it was never wired to cover those tiers.
+
+**Decided 2026-08-15, fail-fast chosen over routing ASR/OCR through the provider** — see [CLAUDE.md](../CLAUDE.md) for the full reasoning. The RapidAPI response as consumed by `RapidYtClient` carries no audio/video download URL (only metadata + caption tracks), so "route ASR/OCR through the provider" would need unverified assumptions about fields nothing in this codebase reads today. When RapidAPI's own metadata and every caption track it offers are both too thin, the cascade now fails immediately with `youtube_no_usable_text` instead of falling through to a yt-dlp download that is confirmed dead on Render regardless.
 
 ### F6 — Provider caption selection is first-wins
 
 `firstCaptionUrl` (`RapidYtClient.java:120`) takes whichever track the provider lists first, with no language preference and no manual-over-automatic preference. The `yt-dlp` path already learned this the hard way and ranks candidates by parsed prose length, precisely because an auto-generated track is several times larger while carrying less text. The provider path discards that knowledge.
 
+**Fixed 2026-08-15** — `RapidYtClient` now tries up to 5 caption tracks and keeps whichever parses to the longest prose, mirroring `YtDlpClient.bestCaptions`.
+
 ### F7 — yt-dlp is frozen, despite the configuration saying otherwise
 
 `application.yml` reasons explicitly that "for a two-month hackathon, update-on-start is usually right." The Dockerfile implements update-at-first-build-then-never: the `pipx install "yt-dlp>=2026.7.4"` layer (`Dockerfile:27`) sits above any `COPY` that changes, so it is cached indefinitely. Extractors rot on a one-to-three-month cadence — the YoutubeExplode issue history is direct evidence of the interval.
 
+*(Not part of Phase 2 — Phase 2's own bullet list doesn't name F7; still open.)*
+
 ### F8 — URL coverage misses three real YouTube shapes
 
 The `YT_ID` pattern (`RapidYtClient.java:52`) handles `watch?v=`, `youtu.be`, `/shorts/` and `/embed/`, but not `/live/`, `m.youtube.com` or `music.youtube.com`. Both maintained repositories cover `/live/`. A miss here silently routes the URL to the blocked path.
+
+**Fixed 2026-08-15** — `/live/` added to the pattern. `m.youtube.com`/`music.youtube.com` needed no change: the match was never anchored to the string's start, so `youtube.com/watch?v=` already matched inside either subdomain's URL.
 
 ### F9 — No probe caching
 
@@ -393,11 +403,13 @@ Ordered so each phase is independently shippable and the riskiest work is de-ris
 
 ### Phase 2 — Extractor refactor (behaviour first, boundary second)
 
-- Bounded retry with jitter inside the provider probe, distinguishing 429 and 5xx from 404 (F4); rank caption tracks by parsed prose (F6); widen the URL pattern (F8).
-- Decide F5 explicitly: either fail captionless YouTube saves with an accurate message, or route the ASR and OCR tiers through the provider too. Both are defensible; the current silent attempt at a never-successful path is not.
-- Extract a `SourceExtractor` interface inside the monolith, with the current cascade as its only implementation. This is the seam the service later slots into, and it costs nothing to introduce now.
+**Landed 2026-08-15 — see [CLAUDE.md](../CLAUDE.md) for the verified writeup.**
 
-*Gate: the cascade is reachable only through the interface; no caller references `YtDlpClient` or `RapidYtClient` directly.*
+- ~~Bounded retry with jitter inside the provider probe, distinguishing 429 and 5xx from 404 (F4); rank caption tracks by parsed prose (F6); widen the URL pattern (F8).~~ Done — see F4/F6/F8 above.
+- ~~Decide F5 explicitly: either fail captionless YouTube saves with an accurate message, or route the ASR and OCR tiers through the provider too. Both are defensible; the current silent attempt at a never-successful path is not.~~ Decided: fail fast. See F5 above.
+- ~~Extract a `SourceExtractor` interface inside the monolith, with the current cascade as its only implementation. This is the seam the service later slots into, and it costs nothing to introduce now.~~ Done — new `SourceExtractor.java`, `ExtractionCascade implements SourceExtractor`, `ProcessSaveHandler` now depends on the interface.
+
+*Gate: the cascade is reachable only through the interface; no caller references `YtDlpClient` or `RapidYtClient` directly. Met — `ProcessSaveHandler` (the only external caller) already depended solely on `ExtractionCascade` before this phase; it now depends on `SourceExtractor`. `AsrTranscriber`/`VisualTextExtractor` still hold `YtDlpClient` directly, which is intentional: they are internal collaborators of the one `SourceExtractor` implementation, not external callers reaching around it.*
 
 ### Phase 3 — Extraction API (the service itself)
 

@@ -52,7 +52,7 @@ import org.springframework.stereotype.Component;
  * because a small instance's ephemeral disk is what fills first.
  */
 @Component
-public class ExtractionCascade {
+public class ExtractionCascade implements SourceExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(ExtractionCascade.class);
 
@@ -98,6 +98,7 @@ public class ExtractionCascade {
      * @param saveId needed only so a vision escalation inside the visual tier
      *               can attribute its request in {@code gemini_calls}
      */
+    @Override
     public Extraction extractFromUrl(String url, UUID saveId) {
         if (looksLikePdf(url)) {
             return extractPdf(url);
@@ -120,9 +121,21 @@ public class ExtractionCascade {
                 if (metaText.length() >= USABLE_TEXT_THRESHOLD) {
                     return new Extraction(metaText, "metadata", r.metadata());
                 }
-                // Metadata too thin — fall through to ASR/visual using RapidAPI metadata
-                log.debug("RapidAPI metadata too thin for {}, continuing cascade", url);
-                return continueFromMetadata(url, saveId, r.metadata());
+                // Metadata and every caption track RapidAPI offered are both too
+                // thin (F5, docs/extraction-architecture.md). Falling through to
+                // continueFromMetadata here would mean ASR/visual downloading
+                // audio or video straight from YouTube via yt-dlp — exactly the
+                // datacenter-IP-blocked path RapidAPI exists to avoid, confirmed
+                // dead on this deployment (CLAUDE.md: 8/8 real YouTube URLs hit
+                // the identical bot-check error from Render's IP, with or without
+                // cookies or a player-client override). Even setting the block
+                // aside, spending a full video download on a platform whose fast
+                // metadata path already came up empty contradicts the reason that
+                // path exists. Fail fast and honestly instead of a silent,
+                // multi-minute attempt at a path that cannot succeed.
+                log.info("RapidAPI metadata and every caption track were too thin for {}", url);
+                throw new PermanentJobException("youtube_no_usable_text",
+                        "Weavr couldn't find enough text in that YouTube video to work with.");
             }
             log.warn("RapidAPI probe returned empty for {}, falling back to yt-dlp", url);
         }

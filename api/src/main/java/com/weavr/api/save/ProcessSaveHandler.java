@@ -12,6 +12,7 @@ import com.weavr.api.job.JobType;
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.pipeline.ExtractionCascade;
 import com.weavr.api.pipeline.SafeUrlFetcher;
+import com.weavr.api.pipeline.SourceExtractor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -45,13 +46,13 @@ class ProcessSaveHandler implements JobHandler {
 
     private final SaveRepository saves;
     private final SaveStageWriter stages;
-    private final ExtractionCascade cascade;
+    private final SourceExtractor cascade;
     private final JobQueue jobQueue;
     private final JdbcClient jdbc;
     private final SafeUrlFetcher fetcher;
 
     ProcessSaveHandler(SaveRepository saves, SaveStageWriter stages,
-                       ExtractionCascade cascade, JobQueue jobQueue, JdbcClient jdbc,
+                       SourceExtractor cascade, JobQueue jobQueue, JdbcClient jdbc,
                        SafeUrlFetcher fetcher) {
         this.saves = saves;
         this.stages = stages;

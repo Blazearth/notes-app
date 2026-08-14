@@ -315,4 +315,74 @@ class ExtractionCascadeTest {
 
         assertThat(extraction.source()).isEqualTo("metadata");
     }
+
+    // --- The RapidAPI branch (docs/extraction-architecture.md Phase 2) ---
+    // None of the tests above touch it: every URL used so far is
+    // https://example.com/..., which RapidYtClient.extractVideoId never
+    // matches, so extractFromUrl's "if (RapidYtClient.extractVideoId(url) !=
+    // null)" branch is never entered above. A YouTube-shaped URL is required.
+
+    private static final String YOUTUBE_URL = "https://youtube.com/watch?v=dQw4w9WgXcQ";
+
+    @Test
+    void usesRapidApiTranscriptWhenPresentAndLongEnough() {
+        SourceMetadata meta = metadata("Never Gonna Give You Up", "The official video", List.of("en"));
+        when(rapidYt.probe(anyString())).thenReturn(Optional.of(new RapidYtClient.ProbeResult(
+                meta, Optional.of("we're no strangers to love you know the rules and so do i"))));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("captions");
+        assertThat(extraction.text()).contains("strangers to love");
+        verify(ytDlp, never()).probe(anyString());
+    }
+
+    @Test
+    void usesRapidApiMetadataWhenTranscriptIsMissingButMetadataIsRich() {
+        SourceMetadata meta = metadata("Kyoto travel guide",
+                "Twelve cafes worth the detour, with addresses and opening hours.", List.of());
+        when(rapidYt.probe(anyString())).thenReturn(Optional.of(
+                new RapidYtClient.ProbeResult(meta, Optional.empty())));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("metadata");
+        verify(ytDlp, never()).probe(anyString());
+    }
+
+    /**
+     * F5's decision: when RapidAPI succeeds but both its transcript and its
+     * metadata are too thin, fail fast rather than let ASR/visual attempt a
+     * yt-dlp-against-YouTube download that RapidAPI exists specifically to
+     * avoid (and that is confirmed dead on Render — see CLAUDE.md).
+     */
+    @Test
+    void failsFastWhenRapidApiSucceedsButEverythingIsTooThin() {
+        SourceMetadata meta = metadata("Reel", "", List.of());
+        when(rapidYt.probe(anyString())).thenReturn(Optional.of(
+                new RapidYtClient.ProbeResult(meta, Optional.empty())));
+
+        assertThatThrownBy(() -> cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID))
+                .isInstanceOf(PermanentJobException.class)
+                .hasMessageContaining("youtube_no_usable_text");
+
+        verify(asr, never()).transcribe(anyString());
+        verify(visual, never()).extract(anyString(), any(UUID.class));
+        verify(ytDlp, never()).probe(anyString());
+        verify(ytDlp, never()).fetchCaptions(anyString(), any(Path.class));
+    }
+
+    @Test
+    void fallsBackToYtDlpWhenRapidApiProbeIsEmpty() {
+        when(rapidYt.probe(anyString())).thenReturn(Optional.empty());
+        when(ytDlp.probe(anyString()))
+                .thenReturn(metadata("Miso ramen", "A quick weeknight bowl", List.of("en")));
+        when(ytDlp.fetchCaptions(anyString(), any(Path.class)))
+                .thenReturn(Optional.of("first brown the onions then add the stock and simmer"));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("captions");
+        verify(ytDlp).probe(anyString());
+    }
 }
