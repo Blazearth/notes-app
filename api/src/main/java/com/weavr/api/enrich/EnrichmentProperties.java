@@ -26,6 +26,13 @@ public record EnrichmentProperties(
         /** Google Places API key. Enriches {@code place}. */
         String googlePlacesApiKey,
 
+        /**
+         * Google Books API key (server key, no referrer restriction needed).
+         * Free tier: ~1,000 requests/day. Enriches {@code book}.
+         * https://console.cloud.google.com → Library → Books API → Credentials
+         */
+        String googleBooksApiKey,
+
         Duration timeout
 ) {
 
@@ -35,5 +42,9 @@ public record EnrichmentProperties(
 
     public boolean placesConfigured() {
         return enabled && googlePlacesApiKey != null && !googlePlacesApiKey.isBlank();
+    }
+
+    public boolean booksConfigured() {
+        return enabled && googleBooksApiKey != null && !googleBooksApiKey.isBlank();
     }
 }
