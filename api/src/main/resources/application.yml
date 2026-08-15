@@ -137,11 +137,17 @@ weavr:
   # --------------------------------------------------------------------------
   # Retention — the only scheduled work in the service.
   # --------------------------------------------------------------------------
-  # `save_stages` and `jobs` were never pruned and grow without bound. That is a
-  # hard wall rather than untidiness: Supabase free is a 500 MB database, and
-  # ProcessSaveHandler base64-encodes an uploaded screenshot (up to 10 MB) into
-  # save_stages.payload — roughly 45 image saves fill the database on their own.
-  # See docs/parallel-processing.md §2.
+  # `save_stages` and `jobs` were never pruned and grow without bound against a
+  # 500 MB Supabase free database. Measured 2026-08-15: 18 MB used, and an
+  # image_ready row averages 223 kB (max 420 kB) — so ~2,200 image saves of
+  # runway, not the ~45 a naive reading of the 10 MB upload cap suggests, because
+  # pg_column_size reports the TOAST-compressed size and base64 compresses back
+  # near the original binary. Months away rather than weeks, but unbounded either
+  # way. See docs/parallel-processing.md §2.
+  #
+  # (Image bytes are no longer written here at all as of the same date —
+  # ProcessSaveHandler records a URL breadcrumb and classify re-fetches. This
+  # still prunes the rows written before that change.)
   #
   # stage-after only ever applies to saves that are already `ready` or `failed`.
   # A `pending` save — parked because the daily Gemini budget was spent — keeps
