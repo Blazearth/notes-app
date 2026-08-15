@@ -1,6 +1,9 @@
 package com.weavr.api.job;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -12,10 +15,14 @@ import org.springframework.validation.annotation.Validated;
  *
  * @param enabled       lets a deployment run API-only, and keeps the runner out
  *                      of tests that have no database
- * @param concurrency   how many jobs run at once. Capped at 4 on purpose:
- *                      ffmpeg, yt-dlp and OCR are CPU- and memory-hungry, and on
- *                      a free-tier instance parallel jobs OOM rather than queue
- * @param pollInterval  how long the poller sleeps when it finds no work
+ * @param concurrency   legacy single-pool size. Used only when {@code lanes} is
+ *                      empty, which reproduces the pre-lane behaviour exactly —
+ *                      one pool serving every job type
+ * @param lanes         the worker lanes, keyed by name. See
+ *                      {@link JobLaneProperties}: a lane is a cost class, and
+ *                      splitting them is what stops a nine-minute OCR job from
+ *                      blocking a three-second Gemini call
+ * @param pollInterval  how long a lane's poller sleeps when it finds no work
  * @param claimedBy     identifies this instance in {@code jobs.claimed_by}
  * @param retryBaseDelay first retry delay; grows exponentially per attempt
  * @param retryMaxDelay  ceiling for the exponential backoff
@@ -29,7 +36,9 @@ public record JobProperties(
 
         boolean enabled,
 
-        @Min(1) @Max(4) int concurrency,
+        @Min(1) @Max(8) int concurrency,
+
+        Map<String, JobLaneProperties> lanes,
 
         Duration pollInterval,
 
@@ -42,12 +51,32 @@ public record JobProperties(
         Duration staleAfter
 ) {
 
+    /** Name of the lane synthesised when nothing is configured. */
+    static final String DEFAULT_LANE = "default";
+
     public JobProperties {
         if (pollInterval == null) pollInterval = Duration.ofSeconds(2);
         if (retryBaseDelay == null) retryBaseDelay = Duration.ofSeconds(30);
         if (retryMaxDelay == null) retryMaxDelay = Duration.ofHours(1);
         if (staleAfter == null) staleAfter = Duration.ofMinutes(15);
         if (claimedBy == null || claimedBy.isBlank()) claimedBy = defaultClaimedBy();
+        lanes = lanes == null ? Map.of() : Map.copyOf(lanes);
+    }
+
+    /**
+     * The lanes to actually run.
+     *
+     * <p>An unconfigured deployment gets one fallback lane at {@code
+     * concurrency}, which is byte-for-byte the old behaviour — worth preserving
+     * because {@code render.yaml} has been setting {@code
+     * WEAVR_JOBS_CONCURRENCY} since before lanes existed, and a config file that
+     * silently stopped taking effect would be a bad way to find that out.
+     */
+    public Map<String, JobLaneProperties> resolvedLanes() {
+        if (lanes.isEmpty()) {
+            return Map.of(DEFAULT_LANE, new JobLaneProperties(concurrency, List.of(), true));
+        }
+        return new LinkedHashMap<>(lanes);
     }
 
     private static String defaultClaimedBy() {

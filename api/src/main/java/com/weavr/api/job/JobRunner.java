@@ -2,16 +2,21 @@ package com.weavr.api.job;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -25,12 +30,18 @@ import org.springframework.stereotype.Component;
  * Everything downstream — the extraction cascade, the Gemini call, enrichment,
  * embedding — is a {@link JobHandler}, not a change to this class.
  *
- * <p>Runs a single poller thread feeding a small fixed pool. The pool is
- * deliberately platform threads rather than virtual ones even though the
- * application enables virtual threads globally: the work is ffmpeg, yt-dlp and
- * OCR, which are CPU- and memory-bound external processes. Virtual threads would
- * happily start fifty of them and OOM a free-tier instance — the bound *is* the
- * feature.
+ * <p>Runs <b>one poller thread and one bounded pool per lane</b> (see
+ * {@link JobLaneProperties}). A lane is a cost class: the fast lane is
+ * network-bound work several slots wide, the heavy lane is ffmpeg/yt-dlp/OCR
+ * pinned at one. Before lanes existed a single pool served both, so a
+ * three-second Gemini call could sit behind a nine-minute OCR job — the actual
+ * cause of degradation under concurrent saves
+ * ({@code docs/parallel-processing.md} §1).
+ *
+ * <p>The pools are deliberately platform threads rather than virtual ones even
+ * though the application enables virtual threads globally: the heavy lane's work
+ * is CPU- and memory-bound external processes, and virtual threads would happily
+ * start fifty of them and OOM a free-tier instance. The bound *is* the feature.
  */
 @Component
 public class JobRunner {
@@ -42,16 +53,109 @@ public class JobRunner {
     private final Map<String, JobHandler> handlers;
 
     private volatile boolean running;
-    private ExecutorService workers;
-    private Thread poller;
-    private Semaphore slots;
-    private Instant nextReap = Instant.EPOCH;
+    private final List<Lane> lanes = new ArrayList<>();
+    /**
+     * Shared across lanes on purpose: the sweep is global, and running it once
+     * per lane would multiply an identical write by the number of lanes.
+     */
+    private final AtomicReference<Instant> nextReap = new AtomicReference<>(Instant.EPOCH);
 
     JobRunner(JobStore store, JobProperties properties, List<JobHandler> handlerList) {
         this.store = store;
         this.properties = properties;
         this.handlers = handlerList.stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(JobHandler::type, Function.identity()));
+    }
+
+    /** One lane's poller, pool and slot budget. */
+    private final class Lane {
+        private final String name;
+        private final List<String> types;
+        private final Semaphore slots;
+        private final ExecutorService workers;
+        private Thread poller;
+
+        Lane(String name, List<String> types, int concurrency) {
+            this.name = name;
+            this.types = types;
+            this.slots = new Semaphore(concurrency);
+            this.workers = Executors.newFixedThreadPool(concurrency, namedFactory(name));
+        }
+
+        void start() {
+            poller = new Thread(this::pollLoop, "weavr-job-poller-" + name);
+            poller.setDaemon(true);
+            poller.start();
+        }
+
+        private void pollLoop() {
+            while (running) {
+                try {
+                    reapIfDue();
+
+                    // Block until a worker is free, so we never claim a job we
+                    // cannot start — a claimed job is invisible to other
+                    // instances until the stale reaper releases it.
+                    slots.acquire();
+
+                    Optional<JobRecord> claimed;
+                    try {
+                        claimed = store.claim(types);
+                    } catch (RuntimeException e) {
+                        slots.release();
+                        log.error("Claim failed in lane {} — backing off", name, e);
+                        sleep(properties.pollInterval());
+                        continue;
+                    }
+
+                    if (claimed.isEmpty()) {
+                        slots.release();
+                        sleep(properties.pollInterval());
+                        continue;
+                    }
+
+                    JobRecord job = claimed.get();
+                    workers.execute(() -> {
+                        try {
+                            run(job);
+                        } finally {
+                            slots.release();
+                        }
+                    });
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                } catch (RuntimeException e) {
+                    // A poller must never die: it is the only thing feeding its
+                    // pool, and a dead poller is a silently stalled lane.
+                    log.error("Unexpected error in job poller for lane {}", name, e);
+                    sleep(properties.pollInterval());
+                }
+            }
+        }
+
+        void stop() {
+            if (poller != null) {
+                poller.interrupt();
+            }
+            workers.shutdown();
+        }
+
+        void awaitTermination() {
+            try {
+                // In-flight jobs get a grace period. Whatever is still running
+                // when it expires keeps its `running` row, and the stale-claim
+                // sweep hands it to the next instance — which is why handlers
+                // have to be safe to run twice.
+                if (!workers.awaitTermination(30, TimeUnit.SECONDS)) {
+                    log.warn("Lane {}: in-flight jobs did not finish in 30s; they will be requeued as stale", name);
+                    workers.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                workers.shutdownNow();
+            }
+        }
     }
 
     /**
@@ -68,72 +172,79 @@ public class JobRunner {
             log.warn("Job runner enabled but no handlers are registered — every job will fail");
         }
 
-        int concurrency = properties.concurrency();
-        slots = new Semaphore(concurrency);
-        workers = Executors.newFixedThreadPool(concurrency, namedFactory());
         running = true;
+        for (Map.Entry<String, JobLaneProperties> entry : assignLanes().entrySet()) {
+            JobLaneProperties config = entry.getValue();
+            Lane lane = new Lane(entry.getKey(), config.types(), config.concurrency());
+            lanes.add(lane);
+            lane.start();
+            log.info("Job lane '{}' started: concurrency={} types={}",
+                    entry.getKey(), config.concurrency(),
+                    config.types().isEmpty() ? "<all>" : config.types());
+        }
 
-        poller = new Thread(this::pollLoop, "weavr-job-poller");
-        poller.setDaemon(true);
-        poller.start();
-
-        log.info("Job runner started: concurrency={} claimedBy={} types={}",
-                concurrency, properties.claimedBy(), handlers.keySet());
+        log.info("Job runner started: {} lane(s) claimedBy={} handlers={}",
+                lanes.size(), properties.claimedBy(), handlers.keySet());
     }
 
-    private void pollLoop() {
-        while (running) {
-            try {
-                reapIfDue();
+    /**
+     * Resolves configured lanes against the handlers actually registered.
+     *
+     * <p>The failure this exists to prevent is silent and total: a job type with
+     * a handler but no lane is never claimed by anybody, so those saves sit
+     * {@code queued} forever with nothing in the logs. Rather than let that
+     * happen, unclaimed types are swept into the fallback lane and named in a
+     * warning.
+     */
+    Map<String, JobLaneProperties> assignLanes() {
+        Map<String, JobLaneProperties> configured = properties.resolvedLanes();
 
-                // Block until a worker is free, so we never claim a job we
-                // cannot start — a claimed job is invisible to other instances.
-                slots.acquire();
+        Set<String> claimed = configured.values().stream()
+                .flatMap(lane -> lane.types().stream())
+                .collect(Collectors.toSet());
 
-                Optional<JobRecord> claimed;
-                try {
-                    claimed = store.claim();
-                } catch (RuntimeException e) {
-                    slots.release();
-                    log.error("Claim failed — backing off", e);
-                    sleep(properties.pollInterval());
-                    continue;
-                }
+        // A lane with no declared types already claims everything, so nothing
+        // can be orphaned in that shape.
+        boolean someLaneTakesEverything = configured.values().stream().anyMatch(l -> l.types().isEmpty());
+        List<String> orphaned = someLaneTakesEverything ? List.of() : handlers.keySet().stream()
+                .filter(type -> !claimed.contains(type))
+                .sorted()
+                .toList();
 
-                if (claimed.isEmpty()) {
-                    slots.release();
-                    sleep(properties.pollInterval());
-                    continue;
-                }
-
-                JobRecord job = claimed.get();
-                workers.execute(() -> {
-                    try {
-                        run(job);
-                    } finally {
-                        slots.release();
-                    }
-                });
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            } catch (RuntimeException e) {
-                // The poller must never die: it is the only thing feeding the
-                // pool, and a dead poller is a silently stalled pipeline.
-                log.error("Unexpected error in job poller", e);
-                sleep(properties.pollInterval());
-            }
+        if (orphaned.isEmpty()) {
+            return configured;
         }
+
+        String fallbackName = configured.entrySet().stream()
+                .filter(e -> e.getValue().fallback())
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElseGet(() -> configured.keySet().iterator().next());
+
+        log.warn("Job type(s) {} are not assigned to any lane — adding them to the '{}' lane. "
+                        + "Left unassigned they would never be claimed at all.",
+                orphaned, fallbackName);
+
+        Map<String, JobLaneProperties> resolved = new LinkedHashMap<>(configured);
+        JobLaneProperties fallback = resolved.get(fallbackName);
+        List<String> merged = new ArrayList<>(fallback.types());
+        merged.addAll(orphaned);
+        resolved.put(fallbackName, new JobLaneProperties(fallback.concurrency(), merged, fallback.fallback()));
+        return resolved;
     }
 
     private void reapIfDue() {
         Instant now = Instant.now();
-        if (now.isBefore(nextReap)) {
+        Instant due = nextReap.get();
+        if (now.isBefore(due)) {
             return;
         }
         // Twice per stale window, so a dead worker's jobs come back promptly
-        // without hammering the database.
-        nextReap = now.plus(properties.staleAfter().dividedBy(2));
+        // without hammering the database. CAS so two lanes' pollers arriving
+        // together run the sweep once between them, not once each.
+        if (!nextReap.compareAndSet(due, now.plus(properties.staleAfter().dividedBy(2)))) {
+            return;
+        }
         try {
             store.requeueStale();
         } catch (RuntimeException e) {
@@ -202,33 +313,18 @@ public class JobRunner {
             return;
         }
         running = false;
-        log.info("Job runner stopping — waiting for in-flight jobs");
+        log.info("Job runner stopping — waiting for in-flight jobs across {} lane(s)", lanes.size());
 
-        if (poller != null) {
-            poller.interrupt();
-        }
-        if (workers != null) {
-            workers.shutdown();
-            try {
-                // In-flight jobs get a grace period. Whatever is still running
-                // when it expires keeps its `running` row, and the stale-claim
-                // sweep hands it to the next instance — which is why handlers
-                // have to be safe to run twice.
-                if (!workers.awaitTermination(30, TimeUnit.SECONDS)) {
-                    log.warn("In-flight jobs did not finish in 30s; they will be requeued as stale");
-                    workers.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                workers.shutdownNow();
-            }
-        }
+        // Signal every lane before waiting on any of them, or the last lane's
+        // grace period only starts once the first one's has elapsed.
+        lanes.forEach(Lane::stop);
+        lanes.forEach(Lane::awaitTermination);
     }
 
-    private static ThreadFactory namedFactory() {
+    private static ThreadFactory namedFactory(String lane) {
         AtomicInteger counter = new AtomicInteger();
         return runnable -> {
-            Thread thread = new Thread(runnable, "weavr-job-" + counter.incrementAndGet());
+            Thread thread = new Thread(runnable, "weavr-job-" + lane + "-" + counter.incrementAndGet());
             thread.setDaemon(true);
             return thread;
         };

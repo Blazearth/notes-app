@@ -57,9 +57,22 @@ public class JobQueue {
         return inserted > 0;
     }
 
-    /** Convenience for the common case: normal priority, grouped by user. */
+    /**
+     * Convenience for the common case: interactive priority, grouped by user.
+     *
+     * <p>The default moved from {@code 0} to {@link JobPriority#INTERACTIVE} so
+     * that work which is genuinely deferrable has somewhere to go <em>below</em>
+     * the default. Leaving the default at the bottom of the range would have
+     * meant expressing "this can wait" with a negative number, and every
+     * existing row in the table sitting at the same level as a user's live save.
+     */
     public boolean enqueueForUser(String type, Object payload, String idempotencyKey, UUID userId) {
-        return enqueue(type, payload, idempotencyKey, userId.toString(), 0);
+        return enqueueForUser(type, payload, idempotencyKey, userId, JobPriority.INTERACTIVE);
+    }
+
+    /** As above, with an explicit {@link JobPriority} tier. */
+    public boolean enqueueForUser(String type, Object payload, String idempotencyKey, UUID userId, int priority) {
+        return enqueue(type, payload, idempotencyKey, userId.toString(), priority);
     }
 
     private String toJson(Object payload) {

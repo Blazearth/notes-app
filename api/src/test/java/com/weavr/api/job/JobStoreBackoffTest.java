@@ -15,7 +15,7 @@ class JobStoreBackoffTest {
 
     private static JobStore storeWith(Duration base, Duration max) {
         JobProperties properties = new JobProperties(
-                true, 2, Duration.ofSeconds(2), "test", base, max, Duration.ofMinutes(15));
+                true, 2, java.util.Map.of(), Duration.ofSeconds(2), "test", base, max, Duration.ofMinutes(15));
         // Only backoffFor is under test; it touches nothing but the properties.
         return new JobStore(null, null, properties);
     }

@@ -24,7 +24,7 @@ class GeminiBudgetServiceTest {
 
     private static final GeminiProperties PROPS = new GeminiProperties(
             "test-key", "gemini-2.5-flash-lite", "gemini-2.5-flash",
-            500, 20, 0.8, Duration.ofSeconds(30));
+            500, 20, 1000, 1000, Duration.ofSeconds(1), 0.8, Duration.ofSeconds(30));
 
     /**
      * Stubs the insert-then-conditional-update pair that backs
@@ -55,7 +55,7 @@ class GeminiBudgetServiceTest {
 
     @Test
     void approvesThePrimaryModelWhenUnderBudget() {
-        GeminiBudgetService service = new GeminiBudgetService(stubbedJdbc(1), PROPS);
+        GeminiBudgetService service = new GeminiBudgetService(stubbedJdbc(1), PROPS, new ModelRateLimiter());
 
         BudgetApproved approved = service.acquire();
 
@@ -66,7 +66,7 @@ class GeminiBudgetServiceTest {
     @Test
     void fallsBackToTheSecondaryModelWhenPrimaryIsExhausted() {
         JdbcClient jdbc = stubbedJdbc(0, 1);
-        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS);
+        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS, new ModelRateLimiter());
 
         BudgetApproved approved = service.acquire();
 
@@ -77,7 +77,7 @@ class GeminiBudgetServiceTest {
     @Test
     void parksTheSaveWhenBothPoolsAreExhausted() {
         JdbcClient jdbc = stubbedJdbc(0, 0);
-        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS);
+        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS, new ModelRateLimiter());
 
         assertThatThrownBy(service::acquire)
                 .isInstanceOf(RetryAfterException.class)
@@ -93,7 +93,7 @@ class GeminiBudgetServiceTest {
     @Test
     void acquireForApprovesASpecificModelWhenUnderBudget() {
         JdbcClient jdbc = stubbedJdbc(1);
-        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS);
+        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS, new ModelRateLimiter());
 
         BudgetApproved approved = service.acquireFor("gemini-2.5-flash", 20);
 
@@ -104,7 +104,7 @@ class GeminiBudgetServiceTest {
     @Test
     void acquireForThrowsWhenThatModelsPoolIsExhausted() {
         JdbcClient jdbc = stubbedJdbc(0);
-        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS);
+        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS, new ModelRateLimiter());
 
         assertThatThrownBy(() -> service.acquireFor("gemini-2.5-flash", 20))
                 .isInstanceOf(RetryAfterException.class);
@@ -113,7 +113,7 @@ class GeminiBudgetServiceTest {
     @Test
     void everyAttemptFirstEnsuresARowExistsForTodayBeforeIncrementing() {
         JdbcClient jdbc = stubbedJdbc(1);
-        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS);
+        GeminiBudgetService service = new GeminiBudgetService(jdbc, PROPS, new ModelRateLimiter());
 
         service.acquire();
 

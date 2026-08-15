@@ -39,7 +39,7 @@ class EmbeddingClientTest {
     private static final EmbeddingProperties PROPS = new EmbeddingProperties(
             "gemini-embedding-001", 1536, Duration.ofSeconds(30), 8000, 25);
     private static final GeminiProperties GEMINI = new GeminiProperties(
-            "test-key", "flash-lite", "flash", 500, 20, 0.7, Duration.ofSeconds(30));
+            "test-key", "flash-lite", "flash", 500, 20, 1000, 1000, Duration.ofSeconds(1), 0.7, Duration.ofSeconds(30));
 
     private MockRestServiceServer server;
     private EmbeddingClient client;

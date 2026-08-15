@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Guards the Gemini daily-request budget and mints {@link BudgetApproved}
@@ -40,10 +39,32 @@ public class GeminiBudgetService {
 
     private final JdbcClient jdbc;
     private final GeminiProperties props;
+    private final ModelRateLimiter rateLimiter;
 
-    GeminiBudgetService(JdbcClient jdbc, GeminiProperties props) {
+    GeminiBudgetService(JdbcClient jdbc, GeminiProperties props, ModelRateLimiter rateLimiter) {
         this.jdbc = jdbc;
         this.props = props;
+        this.rateLimiter = rateLimiter;
+    }
+
+    /**
+     * Per-minute gate, applied after the daily counter has been claimed.
+     *
+     * <p>Order matters and this way round is the safe one. The daily increment
+     * is the scarce, durable resource and it is transactional; the minute wait
+     * is in-process and free. Waiting first would mean holding a worker for
+     * seconds only to discover the day's budget was gone — and waiting inside
+     * the surrounding {@code @Transactional} keeps a pooled connection open for
+     * the duration, which a five-connection pool cannot afford.
+     *
+     * <p>Note the consequence, stated rather than hidden: if the wait exceeds
+     * the cap and this throws, the day's counter has <em>already</em> been
+     * incremented for a request that was never sent. That over-counts by at
+     * most the number of in-flight callers and errs toward under-spending the
+     * quota, which is the right direction to be wrong in.
+     */
+    private void awaitSlot(String model, int rpm) {
+        rateLimiter.acquire(model, rpm, props.rateLimitMaxWait());
     }
 
     /**
@@ -55,13 +76,27 @@ public class GeminiBudgetService {
      *         runner will re-schedule the save for tomorrow without spending
      *         an attempt
      */
-    @Transactional
+    /**
+     * Deliberately <b>not</b> {@code @Transactional} any more.
+     *
+     * <p>It never needed to be: the guard is entirely inside the single
+     * {@code UPDATE ... WHERE requests_used < limit}, which is atomic on its
+     * own, and the {@code INSERT ... ON CONFLICT DO NOTHING} before it is
+     * atomic too. Two autocommitted statements are exactly as correct here as
+     * one transaction.
+     *
+     * <p>What the change buys is that {@link #awaitSlot} can sleep without
+     * holding a pooled connection — with a five-connection pool shared between
+     * HTTP and jobs, sleeping inside a transaction is how a rate limiter turns
+     * into an outage.
+     */
     public BudgetApproved acquire() {
         LocalDate today = LocalDate.now(GOOGLE_RESET_TZ);
 
         // Try primary first.
         if (tryIncrement(today, props.primaryModel(), props.primaryRpd())) {
             log.debug("Budget approved: primary model {} for {}", props.primaryModel(), today);
+            awaitSlot(props.primaryModel(), props.primaryRpm());
             return new BudgetApproved(props.primaryModel(), props.primaryRpd());
         }
 
@@ -69,6 +104,7 @@ public class GeminiBudgetService {
         if (tryIncrement(today, props.fallbackModel(), props.fallbackRpd())) {
             log.warn("Primary model {} exhausted for {}, falling back to {}",
                     props.primaryModel(), today, props.fallbackModel());
+            awaitSlot(props.fallbackModel(), props.fallbackRpm());
             return new BudgetApproved(props.fallbackModel(), props.fallbackRpd());
         }
 
@@ -89,10 +125,14 @@ public class GeminiBudgetService {
      * @param rpd   its daily ceiling
      * @return a {@link BudgetApproved} token, or empty if exhausted
      */
-    @Transactional
+    /** Not transactional, for the same reason as {@link #acquire()}. */
     public BudgetApproved acquireFor(String model, int rpd) {
         LocalDate today = LocalDate.now(GOOGLE_RESET_TZ);
         if (tryIncrement(today, model, rpd)) {
+            // The caller names a specific model, so pick its matching per-minute
+            // ceiling rather than assuming the primary's — the fallback's is a
+            // third of it, and both consumers of `acquireFor` use the fallback.
+            awaitSlot(model, model.equals(props.primaryModel()) ? props.primaryRpm() : props.fallbackRpm());
             return new BudgetApproved(model, rpd);
         }
         Duration untilReset = durationUntilReset(today);

@@ -2,6 +2,8 @@ package com.weavr.api.job;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -36,28 +38,37 @@ public class JobStore {
     }
 
     /**
-     * Claims one job, or returns empty if there is nothing runnable.
+     * Claims one job of the given types, or returns empty if there is nothing
+     * runnable in that lane.
      *
-     * <p>Three things are load-bearing in this query:
+     * <p>Four things are load-bearing in this query:
      *
      * <p><b>{@code FOR UPDATE SKIP LOCKED}</b> in the subquery is what lets two
      * workers claim concurrently without blocking on each other — the second one
      * steps over the locked row instead of waiting for it.
      *
      * <p><b>The {@code group_id} exclusion</b> is the anti-monopoly rule: a group
-     * that already has a job running will not get a second worker. With a pool
-     * capped at 1–2 that is what stops one user's backlog from occupying every
-     * slot. It is honestly a weaker guarantee than round-robin — a single user
-     * whose jobs are all older still gets them served in order when nobody else
-     * is queued, which is the behaviour you want anyway.
+     * that already has a job running will not get a second worker. This matters
+     * <em>more</em> now than it did at concurrency 1, where nothing could run in
+     * parallel anyway — with a fast lane several slots wide it is what stops one
+     * user's backlog from occupying all of them while another user's single save
+     * waits. Note it is global rather than per-lane on purpose: a user should not
+     * get a heavy slot and a fast slot at once.
+     *
+     * <p><b>The type filter</b> is the lane split. Without it every poller
+     * competes for every job and the lanes are decorative.
      *
      * <p><b>No window function.</b> A true per-group {@code row_number()} ranking
      * would be fairer, but Postgres rejects {@code FOR UPDATE} in a query with
      * window functions, and the workarounds cost the skip-locked property. That
      * trade is not worth it at this pool size.
+     *
+     * @param types job types this lane serves; empty means every type, which is
+     *              what the single default lane uses
      */
     @Transactional
-    public Optional<JobRecord> claim() {
+    public Optional<JobRecord> claim(Collection<String> types) {
+        boolean allTypes = types == null || types.isEmpty();
         return jdbc.sql("""
                         update jobs
                         set status     = 'running',
@@ -69,6 +80,7 @@ public class JobStore {
                             from jobs
                             where status = 'queued'
                               and run_after <= now()
+                              and (:allTypes = true or type in (:types))
                               and (
                                   group_id is null
                                   or group_id not in (
@@ -83,6 +95,10 @@ public class JobStore {
                         returning id, type, payload::text as payload, attempts, max_attempts, group_id
                         """)
                 .param("claimedBy", properties.claimedBy())
+                .param("allTypes", allTypes)
+                // An empty IN list is a syntax error even when the guard above
+                // short-circuits it, so feed the placeholder something harmless.
+                .param("types", allTypes ? List.of("") : List.copyOf(types))
                 .query((rs, rowNum) -> new JobRecord(
                         rs.getObject("id", UUID.class),
                         rs.getString("type"),

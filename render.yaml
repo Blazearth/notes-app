@@ -20,13 +20,23 @@ services:
       - key: WEAVR_DB_PASSWORD
         sync: false
       - key: WEAVR_DB_POOL_MAX
-        # Was 3. Measured saturating under ordinary manual test traffic on
-        # 2026-08-05: "Connection is not available, request timed out after
-        # 12502ms (total=3, active=3, idle=0, waiting=1)" from a couple of
-        # concurrent requests, not a load test. CLAUDE.md's own guidance for
-        # Supabase free tier is ~5-10; 3 undershot that. Still conservative,
-        # not re-measured against real concurrent-save load yet.
-        value: "5"
+        # 3 → 5 (2026-08-05) → 10 (2026-08-15).
+        #
+        # 3 was measured saturating under ordinary manual test traffic:
+        # "Connection is not available, request timed out after 12502ms
+        # (total=3, active=3, idle=0, waiting=1)" from a couple of concurrent
+        # requests, not a load test.
+        #
+        # 10 is sized against the job LANES rather than picked. At peak the
+        # runner holds one connection per running job — fast(4) + heavy(1) = 5 —
+        # plus brief claim queries from two pollers. Leaving 5 undersized would
+        # mean job work could consume the entire pool and starve HTTP, which is
+        # precisely the failure above. 10 is the top of CLAUDE.md's own ~5-10
+        # guidance for Supabase free tier.
+        #
+        # Raising the fast lane means re-checking this: keep
+        # fast_concurrency <= pool_max - 5.
+        value: "10"
       - key: WEAVR_FLYWAY_URL
         sync: false
       - key: WEAVR_FLYWAY_USER
@@ -57,8 +67,22 @@ services:
         value: "8080"
       - key: WEAVR_LOG_LEVEL
         value: "INFO"
+      # Job LANES. A lane is a cost class — see docs/parallel-processing.md §3.
+      # `WEAVR_JOBS_CONCURRENCY` is now the legacy single-pool size and applies
+      # only if lanes are unconfigured; the two below are what actually take
+      # effect.
       - key: WEAVR_JOBS_CONCURRENCY
-        value: "1"              # free tier: 1 parallel job to avoid OOM
+        value: "1"
+      # Network-bound (Gemini, TMDB, embeddings). Bounded by the DB pool, not
+      # the CPU. Requires the Gemini RPM limiter, which is now in place.
+      - key: WEAVR_JOBS_FAST_CONCURRENCY
+        value: "4"
+      # CPU/memory-bound (yt-dlp, ffmpeg, tesseract). STAYS AT 1 on a 512 MB /
+      # 0.1 CPU free instance — parallel media jobs OOM rather than queue. Do
+      # not raise this to "use up" spare fast-lane capacity: the two are sized
+      # against different resources.
+      - key: WEAVR_JOBS_HEAVY_CONCURRENCY
+        value: "1"
       # ── yt-dlp cookies — required on Render IPs (YouTube bot check) ─────────
       - key: WEAVR_YTDLP_COOKIES_BASE64
         sync: false

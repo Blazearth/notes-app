@@ -53,7 +53,7 @@ class ClassifySaveHandlerTest {
     private static final ObjectMapper MAPPER = JsonMapper.builder().build();
     private static final GeminiProperties PROPS = new GeminiProperties(
             "test-key", "gemini-2.5-flash-lite", "gemini-2.5-flash",
-            500, 20, /* confidenceThreshold */ 0.8, Duration.ofSeconds(30));
+            500, 20, 1000, 1000, Duration.ofSeconds(1), /* confidenceThreshold */ 0.8, Duration.ofSeconds(30));
 
     private SaveRepository saves;
     private SaveStageWriter stages;
@@ -87,7 +87,7 @@ class ClassifySaveHandlerTest {
         stubSavesUpdate();
 
         handler = new ClassifySaveHandler(saves, stages, geminiClient, budgetService, PROPS,
-                jobQueue, jdbc, MAPPER, usage);
+                jobQueue, jdbc, MAPPER, usage, mock(com.weavr.api.pipeline.SafeUrlFetcher.class));
     }
 
     /**

@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.weavr.api.job.JobHandler;
+import com.weavr.api.job.JobPriority;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobRecord;
 import com.weavr.api.job.JobType;
@@ -135,11 +136,14 @@ class EmbedSaveHandler implements JobHandler {
     @Transactional
     void enqueueDuplicateDetection(UUID saveId, UUID userId) {
         try {
+            // BACKGROUND: a merge suggestion in a shared Space. Nobody is
+            // waiting on it, and it must never delay a save that someone is.
             jobQueue.enqueueForUser(
                     JobType.DETECT_DUPLICATES,
                     Map.of("saveId", saveId.toString()),
                     JobType.DETECT_DUPLICATES + ":" + saveId,
-                    userId);
+                    userId,
+                    JobPriority.BACKGROUND);
         } catch (RuntimeException e) {
             log.warn("Could not enqueue duplicate detection for save {}: {}", saveId, e.toString());
         }

@@ -162,13 +162,27 @@ class ProcessSaveHandler implements JobHandler {
     static final String STAGE_IMAGE_READY = "image_ready";
 
     /**
-     * Downloads the image from Supabase Storage and writes its bytes (base64)
-     * to {@code save_stages} so {@link ClassifySaveHandler} can send them
-     * directly to Gemini Vision without a second download.
+     * Verifies the uploaded image is fetchable and records a breadcrumb.
      *
-     * <p>Returns a minimal placeholder text because the pipeline expects a
-     * non-null, non-blank string here; {@code ClassifySaveHandler} ignores it
-     * for IMAGE saves and reads the stage payload instead.
+     * <p><b>The bytes are deliberately no longer stored.</b> This used to
+     * base64-encode the whole image into {@code save_stages.payload}, a JSONB
+     * column, so {@link ClassifySaveHandler} could read it back — which meant
+     * every screenshot save left a multi-hundred-kilobyte row behind forever
+     * (measured: 223 kB average, 420 kB max) against a 500 MB free-tier
+     * database, for a value used exactly once, seconds later.
+     *
+     * <p>It was never necessary: {@code SaveController.createFromImage} has
+     * already uploaded the image to Supabase Storage and put its URL on the
+     * save, so the bytes were being copied <em>from</em> durable storage
+     * <em>into</em> the database beside it. The classify step now fetches from
+     * that same URL when it needs them.
+     *
+     * <p>The fetch here still happens, and that is the point of the method: it
+     * fails a broken upload now — while the job can still retry — rather than
+     * one stage later, and it keeps the SSRF and size guards on the path.
+     *
+     * <p>Returns a placeholder because the pipeline expects a non-null,
+     * non-blank string; {@code ClassifySaveHandler} ignores it for IMAGE saves.
      */
     private String downloadAndStoreImage(UUID saveId, Save save) {
         String url = save.getSourceUrl() != null ? save.getSourceUrl() : save.getMediaStoragePath();
@@ -176,7 +190,7 @@ class ProcessSaveHandler implements JobHandler {
             throw new PermanentJobException("no_image_url", "Image save has no storage URL.");
         }
 
-        log.info("Downloading image for save={} from {}", saveId, url);
+        log.info("Verifying image for save={} from {}", saveId, url);
 
         byte[] imageBytes = fetcher.fetch(url, MAX_IMAGE_BYTES);
 
@@ -184,15 +198,15 @@ class ProcessSaveHandler implements JobHandler {
             throw new PermanentJobException("empty_image", "Downloaded image is empty.");
         }
 
-        String b64 = Base64.getEncoder().encodeToString(imageBytes);
+        // Metadata only — small, bounded, and enough to trace what happened.
         stages.record(saveId, STAGE_IMAGE_READY, Map.of(
-                "image_b64", b64,
+                "image_url", url,
                 "mime_type", "image/jpeg",
                 "size_bytes", imageBytes.length
         ));
 
-        log.info("Save {} image stored in stages: {} bytes", saveId, imageBytes.length);
-        return "[image]";  // non-blank placeholder; classify_save uses stage data instead
+        log.info("Save {} image verified: {} bytes (not copied into save_stages)", saveId, imageBytes.length);
+        return "[image]";  // non-blank placeholder; classify_save re-fetches the bytes
     }
 
     private static String truncate(String text) {

@@ -61,8 +61,8 @@ class VisualTextExtractorTest {
     }
 
     private static GeminiProperties geminiProperties() {
-        return new GeminiProperties("key", "flash-lite", "flash", 500, 20, 0.7,
-                Duration.ofSeconds(30));
+        return new GeminiProperties("key", "flash-lite", "flash", 500, 20, 1000, 1000,
+                Duration.ofSeconds(1), 0.7, Duration.ofSeconds(30));
     }
 
     private VisualTextExtractor build(OcrProperties props) {

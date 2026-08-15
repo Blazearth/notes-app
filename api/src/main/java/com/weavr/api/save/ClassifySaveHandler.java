@@ -56,6 +56,9 @@ class ClassifySaveHandler implements JobHandler {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
+    /** Matches the Supabase bucket's own 10 MB upload limit, as in {@link ProcessSaveHandler}. */
+    private static final long MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
     private final SaveRepository saves;
     private final SaveStageWriter stages;
     private final GeminiClient geminiClient;
@@ -65,11 +68,13 @@ class ClassifySaveHandler implements JobHandler {
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
     private final UsageService usage;
+    private final com.weavr.api.pipeline.SafeUrlFetcher fetcher;
 
     ClassifySaveHandler(SaveRepository saves, SaveStageWriter stages,
                         GeminiClient geminiClient, GeminiBudgetService budgetService,
                         GeminiProperties geminiProps, JobQueue jobQueue, JdbcClient jdbc,
-                        ObjectMapper objectMapper, UsageService usage) {
+                        ObjectMapper objectMapper, UsageService usage,
+                        com.weavr.api.pipeline.SafeUrlFetcher fetcher) {
         this.saves = saves;
         this.stages = stages;
         this.geminiClient = geminiClient;
@@ -79,6 +84,7 @@ class ClassifySaveHandler implements JobHandler {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
         this.usage = usage;
+        this.fetcher = fetcher;
     }
 
     @Override
@@ -110,8 +116,8 @@ class ClassifySaveHandler implements JobHandler {
         Map<String, Object> imageStage = save.getSourceType() == SourceType.IMAGE
                 ? readStage(saveId, ProcessSaveHandler.STAGE_IMAGE_READY)
                 : null;
-        boolean hasImage = imageStage != null
-                && imageStage.get("image_b64") instanceof String b64 && !b64.isBlank();
+        byte[] imageBytes = imageStage == null ? null : resolveImageBytes(saveId, save, imageStage);
+        boolean hasImage = imageBytes != null && imageBytes.length > 0;
 
         // Read the extracted text from stage 1 — text path only.
         String text = hasImage ? null : extractText(saveId, save);
@@ -135,10 +141,10 @@ class ClassifySaveHandler implements JobHandler {
         // save_stages, so Gemini sees full visual context: UI, overlay text,
         // layout, rather than a lossy OCR intermediate), text path otherwise.
         GeminiResponse response;
+        String mimeType = hasImage
+                ? imageStage.getOrDefault("mime_type", "image/jpeg").toString()
+                : null;
         if (hasImage) {
-            String b64 = imageStage.get("image_b64").toString();
-            byte[] imageBytes = java.util.Base64.getDecoder().decode(b64);
-            String mimeType = imageStage.getOrDefault("mime_type", "image/jpeg").toString();
             log.info("Save {} routing to Gemini image classify ({} bytes)", saveId, imageBytes.length);
             response = geminiClient.classifyImage(saveId, imageBytes, mimeType, budget);
         } else {
@@ -154,11 +160,11 @@ class ClassifySaveHandler implements JobHandler {
             try {
                 BudgetApproved fallbackBudget = budgetService.acquireFor(
                         geminiProps.fallbackModel(), geminiProps.fallbackRpd());
+                // Reuses the bytes already in hand — the old code decoded the
+                // base64 a second time here, which on the storage path would
+                // have meant a second network fetch for no reason.
                 GeminiResponse fallback = hasImage
-                        ? geminiClient.classifyImage(saveId,
-                            java.util.Base64.getDecoder().decode(imageStage.get("image_b64").toString()),
-                            imageStage.getOrDefault("mime_type", "image/jpeg").toString(),
-                            fallbackBudget)
+                        ? geminiClient.classifyImage(saveId, imageBytes, mimeType, fallbackBudget)
                         : geminiClient.classify(saveId, text, fallbackBudget);
                 // Use fallback result if it's more confident.
                 if (fallback.confidence() >= response.confidence()) {
@@ -298,6 +304,51 @@ class ClassifySaveHandler implements JobHandler {
                 .param(errorMessage)
                 .param(saveId)
                 .update();
+    }
+
+    /**
+     * The image bytes for a screenshot save, from whichever shape its stage row
+     * uses.
+     *
+     * <p><b>Both shapes are permanent.</b> Saves processed before 2026-08-15
+     * carry the bytes inline as {@code image_b64}; newer ones carry only
+     * {@code image_url} and the bytes are re-fetched from Supabase Storage. This
+     * codebase has no reprocess path, so the old shape never ages out — the same
+     * permanent-dual-shape situation as flat-string recipe ingredients.
+     *
+     * <p>Returns {@code null} rather than throwing when neither shape yields
+     * anything: an IMAGE save whose bytes are unreachable can still fall through
+     * to the text path, which is what legacy on-device-OCR saves rely on.
+     */
+    private byte[] resolveImageBytes(UUID saveId, Save save, Map<String, Object> imageStage) {
+        // Legacy shape first — if the bytes are already here, never pay for a
+        // network round trip to fetch what we are holding.
+        if (imageStage.get("image_b64") instanceof String b64 && !b64.isBlank()) {
+            try {
+                return java.util.Base64.getDecoder().decode(b64);
+            } catch (IllegalArgumentException e) {
+                log.warn("Save {} has an unreadable inline image payload: {}", saveId, e.toString());
+            }
+        }
+
+        Object stagedUrl = imageStage.get("image_url");
+        String url = stagedUrl instanceof String s && !s.isBlank()
+                ? s
+                : save.getSourceUrl() != null ? save.getSourceUrl() : save.getMediaStoragePath();
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+
+        try {
+            byte[] bytes = fetcher.fetch(url, MAX_IMAGE_BYTES);
+            return bytes.length == 0 ? null : bytes;
+        } catch (RuntimeException e) {
+            // Retryable by omission: throwing here would be reasonable too, but
+            // returning null lets an IMAGE save with usable raw_caption still
+            // classify from text rather than failing outright.
+            log.warn("Save {} could not re-fetch its image from {}: {}", saveId, url, e.toString());
+            return null;
+        }
     }
 
     /**

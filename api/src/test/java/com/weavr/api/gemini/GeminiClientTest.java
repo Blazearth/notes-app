@@ -48,7 +48,7 @@ class GeminiClientTest {
     private static final ObjectMapper MAPPER = JsonMapper.builder().build();
     private static final GeminiProperties PROPS = new GeminiProperties(
             "test-key", "gemini-2.5-flash-lite", "gemini-2.5-flash",
-            500, 20, 0.8, Duration.ofSeconds(30));
+            500, 20, 1000, 1000, Duration.ofSeconds(1), 0.8, Duration.ofSeconds(30));
 
     private MockRestServiceServer server;
     private GeminiClient client;

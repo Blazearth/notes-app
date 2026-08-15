@@ -82,13 +82,50 @@ weavr:
   # --------------------------------------------------------------------------
   # Job runner — the pipeline backbone.
   # --------------------------------------------------------------------------
-  # concurrency stays at 1-2 on a free-tier instance. The work is yt-dlp, ffmpeg
-  # and OCR as external processes: they are CPU- and memory-hungry, and parallel
-  # jobs OOM rather than queue. The property is capped at 4 to make raising it
-  # a deliberate act.
+  # LANES. A lane is a cost class, not a job type, and splitting them is what
+  # fixes head-of-line blocking: before this, one semaphore served everything, so
+  # a classify_save (one HTTPS call idling on a socket, ~3s) queued behind a
+  # process_save that can legitimately run up to nine minutes of ffmpeg and
+  # twelve sequential tesseract processes. See docs/parallel-processing.md §1.
+  #
+  # The two lanes are sized against DIFFERENT resources and their numbers are not
+  # interchangeable:
+  #   fast  — network-bound. Ceiling is the DB pool, not the CPU. Kept at
+  #           pool_max - 2 so HTTP always has connections left.
+  #   heavy — CPU/memory-bound. Stays at 1: parallel ffmpeg/tesseract OOM a
+  #           512 MB instance rather than queueing. This is the original
+  #           reasoning, still correct for this class of work.
+  #
+  # Do NOT raise heavy to "use up" spare fast capacity.
+  #
+  # ⚠ Raising `fast` REQUIRES the Gemini RPM limiter below. At 4 wide and ~8s a
+  # call the classify rate is ~30/min against a 15 RPM limit — without the
+  # limiter this trades queue delay for 429s that burn retry attempts.
+  #
+  # `concurrency` is the legacy single-pool size, used only if `lanes` is empty.
+  # It is left here so WEAVR_JOBS_CONCURRENCY (set in render.yaml since before
+  # lanes existed) still means something rather than silently doing nothing.
   jobs:
     enabled: ${WEAVR_JOBS_ENABLED:true}
     concurrency: ${WEAVR_JOBS_CONCURRENCY:2}
+    lanes:
+      fast:
+        concurrency: ${WEAVR_JOBS_FAST_CONCURRENCY:4}
+        types:
+          - classify_save
+          - enrich_save
+          - embed_save
+          - detect_duplicates
+          - convert_to_shopping_list
+          - generate_digest
+      heavy:
+        concurrency: ${WEAVR_JOBS_HEAVY_CONCURRENCY:1}
+        types:
+          - process_save
+        # Unclaimed job types land here. An unrecognised job's cost is unknown,
+        # and assuming it is expensive is the safe error — a new type added
+        # without a lane gets processed slowly rather than never.
+        fallback: true
     poll-interval: 2s
     # Exponential from here: 30s, 2m, 8m, 32m, then capped.
     retry-base-delay: 30s
@@ -96,6 +133,34 @@ weavr:
     # A job still `running` after this is assumed to belong to a dead process
     # and is returned to the queue.
     stale-after: 15m
+
+  # --------------------------------------------------------------------------
+  # Retention — the only scheduled work in the service.
+  # --------------------------------------------------------------------------
+  # `save_stages` and `jobs` were never pruned and grow without bound. That is a
+  # hard wall rather than untidiness: Supabase free is a 500 MB database, and
+  # ProcessSaveHandler base64-encodes an uploaded screenshot (up to 10 MB) into
+  # save_stages.payload — roughly 45 image saves fill the database on their own.
+  # See docs/parallel-processing.md §2.
+  #
+  # stage-after only ever applies to saves that are already `ready` or `failed`.
+  # A `pending` save — parked because the daily Gemini budget was spent — keeps
+  # its stage rows however old it gets, because those rows are the input it is
+  # still waiting to be classified from. ClassifySaveHandler also reads
+  # stage='classified' to avoid re-spending a Gemini request on a retry, so
+  # deleting early costs real money rather than just context.
+  #
+  # Durations are ISO-8601 because @Scheduled parses these two directly.
+  retention:
+    enabled: ${WEAVR_RETENTION_ENABLED:true}
+    stage-after: ${WEAVR_RETENTION_STAGE_AFTER:P7D}
+    succeeded-job-after: ${WEAVR_RETENTION_SUCCEEDED_JOB_AFTER:P7D}
+    # Longer than a succeeded job on purpose: a failure is the only record of
+    # why a save did not work, and it is what an operator goes looking for.
+    failed-job-after: ${WEAVR_RETENTION_FAILED_JOB_AFTER:P30D}
+    batch-size: ${WEAVR_RETENTION_BATCH_SIZE:500}
+    initial-delay: ${WEAVR_RETENTION_INITIAL_DELAY:PT5M}
+    interval: ${WEAVR_RETENTION_INTERVAL:PT6H}
 
   # --------------------------------------------------------------------------
   # yt-dlp — the free half of the extraction cascade.
@@ -253,6 +318,19 @@ weavr:
     fallback-model: gemini-3.6-flash
     primary-rpd: ${WEAVR_GEMINI_PRIMARY_RPD:500}
     fallback-rpd: ${WEAVR_GEMINI_FALLBACK_RPD:20}
+    # Requests per MINUTE. Verified against this project's own AI Studio
+    # rate-limit dashboard on 2026-08-05, same table as the RPD figures.
+    #
+    # Only RPD was ever enforced, which was harmless at job concurrency 1 — one
+    # classify call at a time cannot exceed 15/min. With the fast lane 4 wide it
+    # can: ~4 workers × a ~8s call is ~30/min. Exceeding the limit does not
+    # queue, it 429s, and a 429 spends a retry attempt and backs off 30s — so
+    # without this, raising concurrency trades queue delay for something worse.
+    primary-rpm: ${WEAVR_GEMINI_PRIMARY_RPM:15}
+    fallback-rpm: ${WEAVR_GEMINI_FALLBACK_RPM:5}
+    # Past this, the job is handed back to the queue (costing no attempt)
+    # instead of holding one of a small number of worker slots on a sleep.
+    rate-limit-max-wait: ${WEAVR_GEMINI_RATE_LIMIT_MAX_WAIT:20s}
     confidence-threshold: ${WEAVR_GEMINI_CONFIDENCE_THRESHOLD:0.7}
     timeout: 30s
 

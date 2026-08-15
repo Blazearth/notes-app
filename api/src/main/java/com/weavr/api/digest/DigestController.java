@@ -7,6 +7,7 @@ import java.util.UUID;
 
 import com.weavr.api.auth.CurrentUser;
 import com.weavr.api.billing.UsageService;
+import com.weavr.api.job.JobPriority;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobType;
 import org.springframework.http.ResponseEntity;
@@ -75,11 +76,16 @@ class DigestController {
 
         // Keyed by (user, week): a second GET before the first job finishes
         // enqueues nothing new rather than a duplicate call.
+        // BACKGROUND: the caller gets `202 pending` and reads the result minutes
+        // to hours later, so a digest must never sit ahead of a save someone
+        // just shared. This is the inversion the priority column existed to fix
+        // and never did — see JobPriority.
         jobQueue.enqueueForUser(
                 JobType.GENERATE_DIGEST,
                 Map.of("userId", userId.toString(), "weekStart", weekStart.toString()),
                 JobType.GENERATE_DIGEST + ":" + userId + ":" + weekStart,
-                userId);
+                userId,
+                JobPriority.BACKGROUND);
         return ResponseEntity.accepted().body(DigestResponse.pending(weekStart));
     }
 

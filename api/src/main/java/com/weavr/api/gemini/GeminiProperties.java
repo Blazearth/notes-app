@@ -32,6 +32,26 @@ public record GeminiProperties(
         int fallbackRpd,
 
         /**
+         * Per-minute request ceiling for the primary model.
+         *
+         * <p>Separate from the daily one and enforced separately (see
+         * {@link ModelRateLimiter}). Daily protects the quota; this protects
+         * against 429s, which cost a retry attempt rather than merely a wait.
+         */
+        int primaryRpm,
+
+        /** Per-minute request ceiling for the fallback model. */
+        int fallbackRpm,
+
+        /**
+         * How long a caller will wait for a rate-limit slot before the job is
+         * handed back to the queue instead. Kept short: holding one of a small
+         * number of worker slots on a sleep is worse than requeueing, which
+         * costs no attempt.
+         */
+        Duration rateLimitMaxWait,
+
+        /**
          * Confidence below this value triggers a retry with the fallback model.
          * Range 0.0–1.0.
          */
@@ -40,4 +60,14 @@ public record GeminiProperties(
         /** Per-request HTTP timeout. */
         Duration timeout
 ) {
+
+    public GeminiProperties {
+        // Verified against this project's own AI Studio dashboard on
+        // 2026-08-05 (CLAUDE.md): 15 RPM primary, 5 RPM fallback. Defaulted
+        // here so a config file predating the limiter still gets protection
+        // rather than an unbounded rate.
+        if (primaryRpm <= 0) primaryRpm = 15;
+        if (fallbackRpm <= 0) fallbackRpm = 5;
+        if (rateLimitMaxWait == null) rateLimitMaxWait = Duration.ofSeconds(20);
+    }
 }

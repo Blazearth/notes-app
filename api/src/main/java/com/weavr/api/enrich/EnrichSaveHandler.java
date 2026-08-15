@@ -10,6 +10,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import com.weavr.api.job.JobHandler;
+import com.weavr.api.job.JobPriority;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobRecord;
 import com.weavr.api.job.JobType;
@@ -268,11 +269,15 @@ public class EnrichSaveHandler implements JobHandler {
     @Transactional
     void enqueueEmbed(UUID saveId, UUID userId) {
         try {
+            // ENHANCEMENT: the save is already `ready` and readable by now.
+            // Being findable by similarity is an improvement on something that
+            // works, so it yields to a save that has not got there yet.
             jobQueue.enqueueForUser(
                     JobType.EMBED_SAVE,
                     Map.of("saveId", saveId.toString()),
                     JobType.EMBED_SAVE + ":" + saveId,
-                    userId);
+                    userId,
+                    JobPriority.ENHANCEMENT);
         } catch (RuntimeException e) {
             log.warn("Could not enqueue embedding for save {}: {}", saveId, e.toString());
         }

@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
 class JobRunnerTest {
 
     private static final JobProperties PROPERTIES = new JobProperties(
-            true, 2, Duration.ofSeconds(2), "test",
+            true, 2, Map.of(), Duration.ofSeconds(2), "test",
             Duration.ofSeconds(30), Duration.ofHours(1), Duration.ofMinutes(15));
 
     private static JobRecord job(int attempts, int maxAttempts) {
