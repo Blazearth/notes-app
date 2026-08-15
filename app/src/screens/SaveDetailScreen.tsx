@@ -26,7 +26,13 @@ import { Touchable } from '@/components/Touchable';
 import { Discussion } from '@/components/Discussion';
 import { LifecycleStrip } from '@/components/LifecycleStrip';
 import { buildCardModel } from '@/saves/cardModel';
-import { buildDetailModel, type DetailField, type DetailObject, type EntityStates } from '@/saves/detailModel';
+import {
+  buildDetailModel,
+  type DetailField,
+  type DetailObject,
+  type DetailObjectRow,
+  type EntityStates,
+} from '@/saves/detailModel';
 import { STATUS_LABELS, saveTitle } from '@/saves/format';
 import { baseServings, scaleQuantity } from '@/saves/scaling';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
@@ -313,10 +319,24 @@ function MapsButton({ url }: { url: string }) {
 }
 
 /**
- * One entry of a nested object array — an exercise card, a structured item.
- * The same surface treatment as a chip, scaled up to hold a title, a compact
- * meta line, and labelled rows — plus whichever Phase 4 control the object
- * carries (`docs/next-phases.md` §4.2).
+ * Rows without a chip list collapse into one compact secondary line —
+ * "feel-good movie · Netflix" rather than a labelled block per row. The label
+ * ("Why", "Where") is dropped: the value alone reads fine in sequence, and
+ * keeping the label per row is what made the old card tall.
+ */
+function compactRowLine(rows: DetailObjectRow[]): string | undefined {
+  const parts = rows.filter((r): r is DetailObjectRow & { text: string } => !!r.text);
+  return parts.length ? parts.map((r) => r.text).join(' · ') : undefined;
+}
+
+/**
+ * One entry of a nested object array — an exercise, a watchlist item, a
+ * checklist row. Thumbnail (when the object has one) and content sit side by
+ * side rather than stacked, and every plain-text row folds into one compact
+ * line under the title — a chip-list row (genre, cues, tips) is the only kind
+ * that still gets its own line, since a wrapped array needs room a joined
+ * string doesn't. Whichever Phase 4 control the object carries
+ * (`docs/next-phases.md` §4.2) sits directly under that, still on the card.
  */
 function ObjectCards({
   objects,
@@ -333,7 +353,7 @@ function ObjectCards({
 }) {
   const { palette, radius, spacing } = useTheme();
   return (
-    <View style={{ gap: spacing.smd }}>
+    <View style={{ gap: spacing.sm }}>
       {objects.map((object: DetailObject, i) => {
         // K2 dual-read: entity state wins over item state when an object
         // carries an entityKey (recommendation_list items only) — mirrors
@@ -347,50 +367,75 @@ function ObjectCards({
           if (object.entityKey) onSetEntityState(object.entityKey, next);
           else if (object.statePath) onSetItemState(object.statePath, next);
         };
+        const chipRows = object.rows.filter((r) => r.items && r.items.length > 0);
+        const line = compactRowLine(object.rows);
+        const hasControl =
+          (object.control === 'check' || object.control === 'watch') && (object.statePath || object.entityKey);
+        const hasActionRow = hasControl || object.restLabel || object.mapsUrl;
+
         return (
           <View
             key={`${object.title ?? 'item'}-${i}`}
             style={{
-              padding: spacing.md,
+              flexDirection: 'row',
+              padding: spacing.smd,
               borderRadius: radius.md,
               backgroundColor: palette.surfaceVariant,
               borderWidth: 1,
               borderColor: palette.border,
-              gap: spacing.xs,
+              gap: spacing.smd,
             }}
           >
             {object.imageUrl ? (
               <Image
                 source={{ uri: object.imageUrl }}
-                style={{ width: 56, height: 84, borderRadius: radius.sm, marginBottom: spacing.xs }}
+                style={{ width: 40, height: 58, borderRadius: radius.sm }}
                 resizeMode="cover"
               />
             ) : null}
-            {object.title ? <AppText variant="cardTitle">{object.title}</AppText> : null}
-            {object.meta ? (
-              <AppText variant="bodySmall" tone="muted">
-                {object.meta}
-              </AppText>
-            ) : null}
-            {object.rows.map((row) => (
-              <View key={row.label} style={{ gap: 4 }}>
-                <AppText variant="caption" tone="muted">
-                  {row.label}
+            <View style={{ flex: 1, gap: 1 }}>
+              {object.title ? (
+                <AppText variant="cardTitle" numberOfLines={1}>
+                  {object.title}
                 </AppText>
-                {row.items ? <Chips items={row.items} /> : <AppText variant="bodySmall">{row.text}</AppText>}
-              </View>
-            ))}
-            {object.control === 'check' && (object.statePath || object.entityKey) ? (
-              <CheckControl
-                done={state?.done === true}
-                onToggle={() => applyChange({ ...state, done: state?.done !== true })}
-              />
-            ) : null}
-            {object.control === 'watch' && (object.statePath || object.entityKey) ? (
-              <WatchControl state={state} onChange={applyChange} />
-            ) : null}
-            {object.restLabel ? <RestTimer label={object.restLabel} /> : null}
-            {object.mapsUrl ? <MapsButton url={object.mapsUrl} /> : null}
+              ) : null}
+              {object.meta ? (
+                <AppText variant="caption" tone="muted" numberOfLines={1}>
+                  {object.meta}
+                </AppText>
+              ) : null}
+              {line ? (
+                <AppText variant="bodySmall" tone="muted" numberOfLines={2} style={{ marginTop: 1 }}>
+                  {line}
+                </AppText>
+              ) : null}
+              {chipRows.map((row) => (
+                <View
+                  key={row.label}
+                  style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, marginTop: 4 }}
+                >
+                  <AppText variant="caption" tone="faint">
+                    {row.label}
+                  </AppText>
+                  <Chips items={row.items ?? []} />
+                </View>
+              ))}
+              {hasActionRow ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.md }}>
+                  {object.control === 'check' && hasControl ? (
+                    <CheckControl
+                      done={state?.done === true}
+                      onToggle={() => applyChange({ ...state, done: state?.done !== true })}
+                    />
+                  ) : null}
+                  {object.control === 'watch' && hasControl ? (
+                    <WatchControl state={state} onChange={applyChange} />
+                  ) : null}
+                  {object.restLabel ? <RestTimer label={object.restLabel} /> : null}
+                  {object.mapsUrl ? <MapsButton url={object.mapsUrl} /> : null}
+                </View>
+              ) : null}
+            </View>
           </View>
         );
       })}
