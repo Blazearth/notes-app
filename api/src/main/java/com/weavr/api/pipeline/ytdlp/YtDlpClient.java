@@ -101,14 +101,35 @@ public class YtDlpClient {
      * {@code automatic_captions}).
      */
     public SourceMetadata probe(String url) {
-        // --write-comments piggybacks on the same single call rather than a
-        // second request. Capped at 20 top-level comments (max_comments,
-        // max_parents,max_replies,max_replies_per_thread) — pinned comments are
-        // always returned first regardless of sort, so a small cap still finds
-        // one reliably while bounding cost on a viral video's thousands of
-        // comments. Measured against a real video: +1.1s over the bare probe,
-        // and the capped call is indistinguishable in time from no comments at
-        // all (~4.4s either way).
+        JsonNode json = runProbe(url);
+        return new SourceMetadata(
+                text(json, "id"),
+                text(json, "title"),
+                text(json, "description"),
+                text(json, "uploader"),
+                json.path("duration").isNumber() ? json.path("duration").asDouble() : null,
+                text(json, "thumbnail"),
+                languageKeys(json.path("subtitles")),
+                languageKeys(json.path("automatic_captions")),
+                pinnedComment(json));
+    }
+
+    /**
+     * Runs the {@code --dump-single-json --write-comments} probe and returns
+     * the raw tree. Shared by {@link #probe(String)} (which lets a failure
+     * propagate — the cascade's only source when yt-dlp is the primary path)
+     * and {@link #fetchPinnedComment(String)} (which never lets one escape —
+     * a best-effort supplement to a source that already succeeded some other
+     * way). Same single call either way: {@code --write-comments} piggybacks
+     * on the metadata probe rather than costing a second request. Capped at
+     * 20 top-level comments (max_comments,max_parents,max_replies,
+     * max_replies_per_thread) — pinned comments are always returned first
+     * regardless of sort, so a small cap still finds one reliably while
+     * bounding cost on a viral video's thousands of comments. Measured
+     * against a real video: +1.1s over the bare probe, and the capped call
+     * is indistinguishable in time from no comments at all (~4.4s either way).
+     */
+    private JsonNode runProbe(String url) {
         List<String> cmd = withCookies(List.of(
                 properties.binary(),
                 "--dump-single-json",
@@ -125,17 +146,32 @@ public class YtDlpClient {
             throw new YtDlpFailedException(describe(result), result.stderr());
         }
 
-        JsonNode json = objectMapper.readTree(result.stdout());
-        return new SourceMetadata(
-                text(json, "id"),
-                text(json, "title"),
-                text(json, "description"),
-                text(json, "uploader"),
-                json.path("duration").isNumber() ? json.path("duration").asDouble() : null,
-                text(json, "thumbnail"),
-                languageKeys(json.path("subtitles")),
-                languageKeys(json.path("automatic_captions")),
-                pinnedComment(json));
+        return objectMapper.readTree(result.stdout());
+    }
+
+    /**
+     * Best-effort only, and the only method on this class that never throws.
+     * Exists for a source (currently RapidAPI, {@code RapidYtClient}) whose
+     * response carries no comment data at all — confirmed live, not assumed:
+     * a real {@code /dl} response has no comment field and no continuation
+     * token anywhere in it. This issues the identical probe {@link #probe}
+     * does, which means on Render it is expected to fail: plain yt-dlp
+     * against YouTube is confirmed bot-blocked from Render's datacenter IP
+     * (CLAUDE.md — 8/8 real URLs, cookies and a player-client override both
+     * tried, both failed). That failure must never cost the save anything it
+     * already had, so every exception here is swallowed and logged rather
+     * than propagated — a caller that already has a usable extraction from
+     * another source is never disturbed by this one failing.
+     */
+    public Optional<String> fetchPinnedComment(String url) {
+        try {
+            String comment = pinnedComment(runProbe(url));
+            return (comment == null || comment.isBlank()) ? Optional.empty() : Optional.of(comment);
+        } catch (Exception e) {
+            log.debug("Supplemental pinned-comment fetch failed for {} (non-fatal): {}",
+                    url, e.getMessage());
+            return Optional.empty();
+        }
     }
 
     /**

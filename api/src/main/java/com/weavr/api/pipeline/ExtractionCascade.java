@@ -131,17 +131,23 @@ public class ExtractionCascade implements SourceExtractor {
             if (rapid.isPresent()) {
                 RapidYtClient.ProbeResult r = rapid.get();
                 log.info("RapidAPI probe succeeded for {}", url);
+                // RapidAPI's own response never carries a pinned comment (see
+                // YtDlpClient.fetchPinnedComment's javadoc) — this is the only
+                // way a YouTube save gets one. Best-effort: it never throws,
+                // so a failure here (the common case on Render) leaves
+                // everything below exactly as it was without it.
+                SourceMetadata metadata = withPinnedComment(r.metadata(), url);
                 // Transcript available — best case, no further calls needed
                 if (r.transcript().isPresent()
                         && r.transcript().get().length() >= USABLE_TEXT_THRESHOLD) {
-                    return new Extraction(combine(r.transcript().get(), r.metadata()),
-                            "captions", r.metadata());
+                    return new Extraction(combine(r.transcript().get(), metadata),
+                            "captions", metadata);
                 }
                 // No transcript but metadata may be enough
-                String metaText = r.metadata().asText();
+                String metaText = metadata.asText();
                 if (metaText.length() >= USABLE_TEXT_THRESHOLD
-                        && hasSubstantiveDescription(r.metadata())) {
-                    return new Extraction(metaText, "metadata", r.metadata());
+                        && hasSubstantiveDescription(metadata)) {
+                    return new Extraction(metaText, "metadata", metadata);
                 }
                 // Metadata and every caption track RapidAPI offered are both too
                 // thin (F5, docs/extraction-architecture.md). Falling through to
@@ -291,6 +297,23 @@ public class ExtractionCascade implements SourceExtractor {
         }
         String comment = metadata.pinnedComment();
         return comment != null && comment.strip().length() >= DESCRIPTION_SUBSTANTIVE_THRESHOLD;
+    }
+
+    /**
+     * Swaps in a fetched pinned comment when {@link YtDlpClient#fetchPinnedComment}
+     * found one; returns {@code metadata} unchanged otherwise (empty result or a
+     * swallowed failure look identical from here, by design — see that method's
+     * javadoc). {@link SourceMetadata#asText()} already appends the pinned
+     * comment when present, so every caller below benefits without a second
+     * threshold check.
+     */
+    private SourceMetadata withPinnedComment(SourceMetadata metadata, String url) {
+        return ytDlp.fetchPinnedComment(url)
+                .filter(comment -> !comment.isBlank())
+                .map(comment -> new SourceMetadata(metadata.id(), metadata.title(), metadata.description(),
+                        metadata.uploader(), metadata.durationSeconds(), metadata.thumbnailUrl(),
+                        metadata.captionLanguages(), metadata.autoCaptionLanguages(), comment))
+                .orElse(metadata);
     }
 
     /** Captions carry the speech; the title and uploader give the model context. */

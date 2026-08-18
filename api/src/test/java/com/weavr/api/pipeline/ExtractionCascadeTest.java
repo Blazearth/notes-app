@@ -372,6 +372,71 @@ class ExtractionCascadeTest {
         verify(ytDlp, never()).fetchCaptions(anyString(), any(Path.class));
     }
 
+    /**
+     * The bug this covers: a real YouTube Short's transcript narrated
+     * substitutions ("honey, used instead of maple syrup") with no
+     * quantities, while its pinned comment carried the exact recipe card —
+     * confirmed against a real video. RapidAPI's own response never carries
+     * that comment, so before this, a YouTube save never saw it at all.
+     */
+    @Test
+    void mergesASupplementalPinnedCommentIntoTheRapidApiTranscript() {
+        SourceMetadata meta = metadata("Homemade Snickers Bar", "Try it or trash it", List.of("en"));
+        when(rapidYt.probe(anyString())).thenReturn(Optional.of(new RapidYtClient.ProbeResult(
+                meta, Optional.of("today we're making a snickers bar with honey instead of maple syrup"))));
+        when(ytDlp.fetchPinnedComment(anyString()))
+                .thenReturn(Optional.of("Recipe: 1/2 cup cashews, 2 tbsp honey, a pinch of salt"));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("captions");
+        assertThat(extraction.text())
+                .contains("honey instead of maple syrup")
+                .contains("Pinned comment:", "1/2 cup cashews, 2 tbsp honey");
+        assertThat(extraction.metadata().pinnedComment())
+                .isEqualTo("Recipe: 1/2 cup cashews, 2 tbsp honey, a pinch of salt");
+        verify(ytDlp, never()).probe(anyString());
+    }
+
+    /**
+     * The common case on Render: RapidAPI succeeds, the supplemental yt-dlp
+     * fetch fails (bot-blocked), and the save must still complete on
+     * whatever RapidAPI already produced — no exception, no different
+     * outcome from before this change existed.
+     */
+    @Test
+    void rapidApiExtractionSurvivesAFailedSupplementalCommentFetch() {
+        SourceMetadata meta = metadata("Never Gonna Give You Up", "The official video", List.of("en"));
+        when(rapidYt.probe(anyString())).thenReturn(Optional.of(new RapidYtClient.ProbeResult(
+                meta, Optional.of("we're no strangers to love you know the rules and so do i"))));
+        when(ytDlp.fetchPinnedComment(anyString())).thenReturn(Optional.empty());
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("captions");
+        assertThat(extraction.text()).contains("strangers to love");
+        assertThat(extraction.metadata().pinnedComment()).isNull();
+    }
+
+    /**
+     * A pinned comment can rescue a save that RapidAPI's transcript and
+     * description alone left too thin — the same merge point feeds both the
+     * transcript branch above and this metadata-only branch.
+     */
+    @Test
+    void aPinnedCommentCanRescueAnOtherwiseTooThinRapidApiResult() {
+        SourceMetadata meta = metadata("Reel", "", List.of());
+        when(rapidYt.probe(anyString())).thenReturn(Optional.of(
+                new RapidYtClient.ProbeResult(meta, Optional.empty())));
+        when(ytDlp.fetchPinnedComment(anyString())).thenReturn(Optional.of(
+                "Full recipe: two cups flour, one cup sugar, three eggs, bake at 350F for 25 minutes"));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("metadata");
+        assertThat(extraction.text()).contains("Full recipe:", "bake at 350F");
+    }
+
     @Test
     void fallsBackToYtDlpWhenRapidApiProbeIsEmpty() {
         when(rapidYt.probe(anyString())).thenReturn(Optional.empty());

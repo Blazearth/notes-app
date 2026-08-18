@@ -257,6 +257,53 @@ class YtDlpClientTest {
         assertThat(metadata.asText()).contains("Pinned comment:", "180C for 15-20 minutes");
     }
 
+    /** The best-effort supplement (used by ExtractionCascade when RapidAPI already succeeded) returns the same comment. */
+    @Test
+    void fetchPinnedCommentReturnsTheSameCommentProbeWould() {
+        String json = """
+                {
+                  "id": "x",
+                  "subtitles": {},
+                  "automatic_captions": {},
+                  "comments": [
+                    { "text": "1½ cups maida, bake at 180C for 15-20 minutes", "is_pinned": true }
+                  ]
+                }
+                """;
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(
+                new ExternalProcess.Result(0, json, "", false, false));
+
+        assertThat(client.fetchPinnedComment("https://example.com/v"))
+                .contains("1½ cups maida, bake at 180C for 15-20 minutes");
+    }
+
+    /** Unlike every other method here, a yt-dlp failure must not escape — it's the common case on Render. */
+    @Test
+    void fetchPinnedCommentSwallowsAYtDlpFailureAndReturnsEmpty() {
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(
+                new ExternalProcess.Result(1, "", "ERROR: Sign in to confirm you're not a bot", false, false));
+
+        assertThat(client.fetchPinnedComment("https://example.com/v")).isEmpty();
+    }
+
+    /** A malformed response is swallowed the same way a process failure is — never thrown. */
+    @Test
+    void fetchPinnedCommentSwallowsAMalformedResponseAndReturnsEmpty() {
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(
+                new ExternalProcess.Result(0, "not json", "", false, false));
+
+        assertThat(client.fetchPinnedComment("https://example.com/v")).isEmpty();
+    }
+
+    @Test
+    void fetchPinnedCommentReturnsEmptyWhenNoneIsPinned() {
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(new ExternalProcess.Result(
+                0, "{\"id\":\"x\",\"subtitles\":{},\"automatic_captions\":{},\"comments\":[{\"text\":\"hi\",\"is_pinned\":false}]}",
+                "", false, false));
+
+        assertThat(client.fetchPinnedComment("https://example.com/v")).isEmpty();
+    }
+
     /** No comment is pinned, comments are off, or the field is absent entirely — all the same to the caller. */
     @Test
     void probeReturnsNullPinnedCommentWhenNoneIsPinned() {
