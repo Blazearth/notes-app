@@ -9,6 +9,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
 import com.weavr.api.pipeline.audio.AsrTranscriber;
@@ -58,6 +59,26 @@ public class ExtractionCascade implements SourceExtractor {
 
     /** Below this, metadata alone is not worth calling an extraction. */
     private static final int USABLE_TEXT_THRESHOLD = 40;
+
+    /**
+     * Below this, a title/uploader/hashtag blob is treated the same as no
+     * description at all, and the cascade keeps going rather than stopping.
+     *
+     * <p>{@code USABLE_TEXT_THRESHOLD} alone let a save through on title and
+     * uploader-name length, which pad the count without carrying a single
+     * fact — measured against a real Instagram Reel ("FULL BODY, no equipment
+     * needed, hashtags only") that classified as a
+     * workout at 0.9+ confidence three separate times with {@code exercises: []}
+     * every time, because the actual routine only exists as a visual
+     * demonstration and the cascade never got past "some text was present" to
+     * try ASR or the visual/OCR tier built for exactly this case. Checked
+     * against the description (and pinned comment, when the yt-dlp path
+     * fetched one) alone, with hashtags and @mentions stripped first, so a
+     * caption that is only tags never counts as an explanation.
+     */
+    private static final int DESCRIPTION_SUBSTANTIVE_THRESHOLD = 50;
+
+    private static final Pattern SOCIAL_NOISE = Pattern.compile("[#@][\\w.]+");
 
     private final YtDlpClient ytDlp;
     private final RapidYtClient rapidYt;
@@ -118,7 +139,8 @@ public class ExtractionCascade implements SourceExtractor {
                 }
                 // No transcript but metadata may be enough
                 String metaText = r.metadata().asText();
-                if (metaText.length() >= USABLE_TEXT_THRESHOLD) {
+                if (metaText.length() >= USABLE_TEXT_THRESHOLD
+                        && hasSubstantiveDescription(r.metadata())) {
                     return new Extraction(metaText, "metadata", r.metadata());
                 }
                 // Metadata and every caption track RapidAPI offered are both too
@@ -165,7 +187,7 @@ public class ExtractionCascade implements SourceExtractor {
         }
 
         String metadataText = metadata.asText();
-        if (metadataText.length() >= USABLE_TEXT_THRESHOLD) {
+        if (metadataText.length() >= USABLE_TEXT_THRESHOLD && hasSubstantiveDescription(metadata)) {
             return new Extraction(metadataText, "metadata", metadata);
         }
 
@@ -252,6 +274,23 @@ public class ExtractionCascade implements SourceExtractor {
             path = path.substring(0, fragment);
         }
         return path.toLowerCase(Locale.ROOT).endsWith(".pdf");
+    }
+
+    /**
+     * A title and an uploader name are boilerplate the model already gets for
+     * free from every save; they must not count toward "is this text worth
+     * stopping on." Only the description and a fetched pinned comment can,
+     * and hashtags/@mentions inside them are stripped first so a caption that
+     * is purely tags scores as empty rather than as a paragraph.
+     */
+    private static boolean hasSubstantiveDescription(SourceMetadata metadata) {
+        String description = metadata.description() == null ? "" : metadata.description();
+        String stripped = SOCIAL_NOISE.matcher(description).replaceAll("").strip();
+        if (stripped.length() >= DESCRIPTION_SUBSTANTIVE_THRESHOLD) {
+            return true;
+        }
+        String comment = metadata.pinnedComment();
+        return comment != null && comment.strip().length() >= DESCRIPTION_SUBSTANTIVE_THRESHOLD;
     }
 
     /** Captions carry the speech; the title and uploader give the model context. */

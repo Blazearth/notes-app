@@ -135,23 +135,38 @@ public class YtDlpClient {
                 text(json, "thumbnail"),
                 languageKeys(json.path("subtitles")),
                 languageKeys(json.path("automatic_captions")),
-                pinnedComment(json.path("comments")));
+                pinnedComment(json));
     }
 
     /**
-     * yt-dlp exposes at most one pinned comment per video (YouTube's own
-     * limit), flagged {@code is_pinned: true} in the {@code comments} array —
-     * confirmed against a real video, field name and shape both. Not every
-     * source has one; comments can be off, or nothing pinned.
+     * YouTube flags exactly one comment {@code is_pinned: true} — confirmed
+     * against a real video, field name and shape both. Instagram (and every
+     * other non-YouTube extractor yt-dlp has been checked against) never sets
+     * {@code is_pinned} at all, even though the same {@code --write-comments}
+     * call already fetches its comments — confirmed against a real Reel: 14
+     * real comments came back, all with {@code is_pinned} simply absent.
+     * Instagram creators commonly put a recipe/routine's exact detail in
+     * their own top-level comment instead of the caption, so falling back to
+     * "the comment whose author is the video's own uploader" recovers that
+     * without inventing anything — {@code author_id == uploader_id} is a
+     * fact already in the same response, not a guess. Every non-YouTube
+     * comment is already being downloaded and discarded without this.
      */
-    private static String pinnedComment(JsonNode comments) {
+    private static String pinnedComment(JsonNode json) {
+        JsonNode comments = json.path("comments");
         if (!comments.isArray()) return null;
+        String uploaderId = text(json, "uploader_id");
+        String byUploader = null;
         for (JsonNode comment : comments) {
             if (comment.path("is_pinned").asBoolean(false)) {
                 return text(comment, "text");
             }
+            if (byUploader == null && uploaderId != null
+                    && uploaderId.equals(text(comment, "author_id"))) {
+                byUploader = text(comment, "text");
+            }
         }
-        return null;
+        return byUploader;
     }
 
     /**

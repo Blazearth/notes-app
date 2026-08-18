@@ -8,15 +8,18 @@ import java.util.List;
  *
  * @param captionLanguages languages with *uploaded* subtitles
  * @param autoCaptionLanguages languages with machine-generated captions
- * @param pinnedComment the creator's pinned comment, if any — often carries the
- *                       real recipe/instructions in full where the caption or
- *                       description only summarises it (confirmed against a
- *                       real video: description said "garlic, butter, chili
- *                       flakes...", the pinned comment had exact quantities and
- *                       a numbered method). Null when the source has no pinned
- *                       comment, comments are disabled, or the probe path
- *                       (currently only plain yt-dlp, not the RapidAPI
- *                       fast path) doesn't fetch comments.
+ * @param pinnedComment the creator's pinned comment on YouTube, or — when the
+ *                       platform never flags one, as Instagram never does —
+ *                       the top comment authored by the video's own uploader.
+ *                       Often carries the real recipe/instructions in full
+ *                       where the caption or description only summarises it
+ *                       (confirmed against a real video: description said
+ *                       "garlic, butter, chili flakes...", the pinned comment
+ *                       had exact quantities and a numbered method). Null
+ *                       when the source has no such comment, comments are
+ *                       disabled, or the probe path (currently only plain
+ *                       yt-dlp, not the RapidAPI fast path) doesn't fetch
+ *                       comments.
  */
 public record SourceMetadata(
         String id,

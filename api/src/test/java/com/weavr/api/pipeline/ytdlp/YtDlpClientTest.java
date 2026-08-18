@@ -267,6 +267,58 @@ class YtDlpClientTest {
         assertThat(client.probe("https://example.com/v").pinnedComment()).isNull();
     }
 
+    /**
+     * Instagram never sets {@code is_pinned} at all — confirmed against a
+     * real Reel's real {@code --write-comments} dump: 14 comments, all with
+     * the field simply absent. The uploader's own comment is the fallback,
+     * matched on {@code author_id == uploader_id}, a fact already in the
+     * response rather than a guess.
+     */
+    @Test
+    void fallsBackToTheUploaderSOwnCommentWhenNothingIsFlaggedPinned() {
+        String json = """
+                {
+                  "id": "x",
+                  "uploader_id": "creator123",
+                  "subtitles": {},
+                  "automatic_captions": {},
+                  "comments": [
+                    { "text": "nice video!", "author_id": "randomfan1" },
+                    { "text": "Recipe: 2 cups flour, 1 tsp salt, bake 20 min", "author_id": "creator123" },
+                    { "text": "love this", "author_id": "randomfan2" }
+                  ]
+                }
+                """;
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(
+                new ExternalProcess.Result(0, json, "", false, false));
+
+        SourceMetadata metadata = client.probe("https://example.com/v");
+
+        assertThat(metadata.pinnedComment()).isEqualTo("Recipe: 2 cups flour, 1 tsp salt, bake 20 min");
+    }
+
+    /** A YouTube-style {@code is_pinned} flag still wins even when an uploader-authored comment also exists. */
+    @Test
+    void preferstisPinnedOverUploaderMatchWhenBothArePresent() {
+        String json = """
+                {
+                  "id": "x",
+                  "uploader_id": "creator123",
+                  "subtitles": {},
+                  "automatic_captions": {},
+                  "comments": [
+                    { "text": "just a reply from me", "author_id": "creator123", "is_pinned": false },
+                    { "text": "the actual pinned recipe", "author_id": "randomfan1", "is_pinned": true }
+                  ]
+                }
+                """;
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(
+                new ExternalProcess.Result(0, json, "", false, false));
+
+        assertThat(client.probe("https://example.com/v").pinnedComment())
+                .isEqualTo("the actual pinned recipe");
+    }
+
     /** The probe call is one process invocation, not two — comments piggyback on the same dump. */
     @Test
     void probeFetchesCommentsInTheSameCallBoundedToTwenty() {

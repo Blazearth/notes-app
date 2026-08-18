@@ -215,8 +215,17 @@ public class RapidYtClient {
     }
 
     /**
-     * Parses YouTube timedtext XML (both srv3 and ttml-ish formats):
-     * {@code <p t="320" d="6240">text</p>} → plain text lines.
+     * Parses YouTube timedtext XML. Two real, distinct formats come back from
+     * the same {@code /api/timedtext} endpoint depending on the query string,
+     * and RapidAPI's {@code baseUrl} carries neither an {@code fmt=srv3} nor
+     * any other {@code fmt} parameter — confirmed by fetching a real baseUrl
+     * from a real RapidAPI response: it comes back as 24 {@code <text start=
+     * "..." dur="...">} elements, zero {@code <p>} elements. The original
+     * parser only ever collected {@code <p>}, so it silently returned an
+     * empty string for every RapidAPI transcript fetch since this client was
+     * written — a real, narrated, on-topic transcript existed and was thrown
+     * away on every single request, not a RapidAPI limitation. Both tag
+     * names are collected here; a real document only ever populates one.
      */
     static String parseTimedText(String xml) {
         try {
@@ -230,11 +239,13 @@ public class RapidYtClient {
             DocumentBuilder builder = factory.newDocumentBuilder();
             Document doc = builder.parse(new InputSource(new StringReader(xml)));
 
-            // Collect all <p> element text content
-            NodeList paragraphs = doc.getElementsByTagName("p");
+            NodeList cues = doc.getElementsByTagName("p");
+            if (cues.getLength() == 0) {
+                cues = doc.getElementsByTagName("text");
+            }
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < paragraphs.getLength(); i++) {
-                String line = paragraphs.item(i).getTextContent().strip();
+            for (int i = 0; i < cues.getLength(); i++) {
+                String line = cues.item(i).getTextContent().strip();
                 // Skip music/sound annotations like "(gentle music)"
                 if (!line.isBlank() && !line.startsWith("(") && !line.endsWith(")")) {
                     if (!sb.isEmpty()) sb.append(' ');

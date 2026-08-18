@@ -67,6 +67,50 @@ class RapidYtClientTest {
         return "<transcript><p t=\"0\" d=\"1000\">" + text + "</p></transcript>";
     }
 
+    /**
+     * The real shape. A live {@code baseUrl} taken from a real RapidAPI
+     * response, fetched for real, came back exactly like this — {@code
+     * <text start dur>}, never {@code <p>} — because RapidAPI's baseUrl
+     * carries no {@code fmt=srv3} parameter. The old parser only collected
+     * {@code <p>} and returned "" for every real transcript this client ever
+     * fetched; every test above used the wrong shape and could not have
+     * caught it.
+     */
+    private static final String REAL_RAPIDAPI_TIMEDTEXT = """
+            <?xml version="1.0" encoding="utf-8" ?><transcript>\
+            <text start="0.12" dur="4.08">this is the easiest laziest and most</text>\
+            <text start="2.28" dur="4.32">delicious homemade bread recipe which</text>\
+            <text start="4.2" dur="4.76">requires absolutely no needing and only</text>\
+            </transcript>""";
+
+    @Test
+    void parsesTheRealNonSrv3TimedTextShapeRapidApiActuallyReturns() {
+        String parsed = RapidYtClient.parseTimedText(REAL_RAPIDAPI_TIMEDTEXT);
+
+        assertThat(parsed).isEqualTo("this is the easiest laziest and most "
+                + "delicious homemade bread recipe which "
+                + "requires absolutely no needing and only");
+    }
+
+    @Test
+    void probeReturnsARealTranscriptFromTheRealTimedTextShape() {
+        String trackUrl = "https://youtube.com/timedtext?lang=en";
+        String tracks = """
+                [{"languageCode": "en", "baseUrl": "%s"}]
+                """.formatted(trackUrl);
+
+        server.expect(requestTo(METADATA_URL)).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(metadataJson(tracks), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(trackUrl)).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(REAL_RAPIDAPI_TIMEDTEXT, MediaType.TEXT_XML));
+
+        Optional<RapidYtClient.ProbeResult> result = client.probe("https://youtube.com/watch?v=" + VIDEO_ID);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().transcript()).isPresent();
+        assertThat(result.get().transcript().get()).contains("easiest laziest", "homemade bread recipe");
+    }
+
     // --- gating, no network at all ---
 
     @Test
