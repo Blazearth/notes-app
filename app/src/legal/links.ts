@@ -16,7 +16,7 @@
  */
 
 /** The published privacy policy. Replace before release. */
-export const PRIVACY_POLICY_URL = '';
+export const PRIVACY_POLICY_URL = 'https://privacy.ryonkai-devs.workers.dev/';
 
 /**
  * Play's App content → Data deletion field also wants a URL. The policy's own

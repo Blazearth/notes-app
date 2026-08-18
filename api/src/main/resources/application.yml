@@ -338,7 +338,7 @@ weavr:
     # instead of holding one of a small number of worker slots on a sleep.
     rate-limit-max-wait: ${WEAVR_GEMINI_RATE_LIMIT_MAX_WAIT:20s}
     confidence-threshold: ${WEAVR_GEMINI_CONFIDENCE_THRESHOLD:0.7}
-    timeout: 30s
+    timeout: ${WEAVR_GEMINI_TIMEOUT:90s}
 
   # --------------------------------------------------------------------------
   # Embeddings — semantic search. A SEPARATE rate-limit pool from generation.
