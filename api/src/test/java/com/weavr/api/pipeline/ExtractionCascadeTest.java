@@ -1,9 +1,12 @@
 package com.weavr.api.pipeline;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
@@ -435,6 +438,42 @@ class ExtractionCascadeTest {
 
         assertThat(extraction.source()).isEqualTo("metadata");
         assertThat(extraction.text()).contains("Full recipe:", "bake at 350F");
+    }
+
+    /**
+     * "wait 3s or whatever, otherwise forward the pipeline" — a slow
+     * supplemental fetch (the expected shape of a bot-check response on
+     * Render, which doesn't fail instantly) must not hold up a save that
+     * RapidAPI's transcript already made usable. The wait bound is
+     * overridden to keep this test fast; the mechanism under test — give
+     * up and move on rather than block — is the same either way.
+     */
+    @Test
+    void givesUpOnASlowSupplementalCommentFetchAndForwardsThePipeline() throws Exception {
+        SourceMetadata meta = metadata("Never Gonna Give You Up", "The official video", List.of("en"));
+        when(rapidYt.probe(anyString())).thenReturn(Optional.of(new RapidYtClient.ProbeResult(
+                meta, Optional.of("we're no strangers to love you know the rules and so do i"))));
+        CountDownLatch fetchStarted = new CountDownLatch(1);
+        when(ytDlp.fetchPinnedComment(anyString())).thenAnswer(invocation -> {
+            fetchStarted.countDown();
+            Thread.sleep(5000);
+            return Optional.of("arrived too late to matter");
+        });
+        // Comfortably above thread-start scheduling jitter (so the fetch has
+        // reliably begun and is genuinely mid-sleep when the wait expires)
+        // and comfortably below the mock's 5s sleep (so the assertion below
+        // is only satisfiable by giving up early, not by coincidence).
+        cascade.setPinnedCommentWaitForTesting(Duration.ofMillis(300));
+
+        long start = System.nanoTime();
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+        long elapsedMs = Duration.ofNanos(System.nanoTime() - start).toMillis();
+
+        assertThat(fetchStarted.await(2, TimeUnit.SECONDS)).isTrue();
+        assertThat(extraction.source()).isEqualTo("captions");
+        assertThat(extraction.text()).contains("strangers to love");
+        assertThat(extraction.metadata().pinnedComment()).isNull();
+        assertThat(elapsedMs).isLessThan(2000);
     }
 
     @Test

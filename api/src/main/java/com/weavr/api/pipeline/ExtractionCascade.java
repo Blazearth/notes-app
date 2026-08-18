@@ -3,12 +3,18 @@ package com.weavr.api.pipeline;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
@@ -80,12 +86,38 @@ public class ExtractionCascade implements SourceExtractor {
 
     private static final Pattern SOCIAL_NOISE = Pattern.compile("[#@][\\w.]+");
 
+    /**
+     * How long {@link #withPinnedComment} waits for the supplemental yt-dlp
+     * fetch before giving up and forwarding the pipeline without it. The
+     * fetch itself is bounded by {@code probeTimeout} (60s default) and is
+     * expected to fail slowly on Render (a bot-check response, not an
+     * instant one) — this is a separate, much shorter budget so a save that
+     * already has everything it needs from RapidAPI is never held up
+     * waiting on a best-effort extra that usually won't arrive there.
+     */
+    private static final Duration DEFAULT_PINNED_COMMENT_WAIT = Duration.ofSeconds(3);
+
     private final YtDlpClient ytDlp;
     private final RapidYtClient rapidYt;
     private final AsrTranscriber asr;
     private final VisualTextExtractor visual;
     private final LinkExtractor linkExtractor;
     private final PdfExtractor pdfExtractor;
+
+    /** Test-only seam: real callers always get {@link #DEFAULT_PINNED_COMMENT_WAIT}. */
+    private Duration pinnedCommentWait = DEFAULT_PINNED_COMMENT_WAIT;
+
+    // Named, daemon threads: exists only so the supplemental pinned-comment
+    // fetch can keep running past its wait window without blocking the
+    // cascade, and so giving up on it (Future#cancel(true)) actually
+    // interrupts the worker thread — which ExternalProcess.run treats
+    // exactly like its own timeout, destroying the yt-dlp process rather
+    // than leaving it running unattended in the background.
+    private final ExecutorService pinnedCommentExecutor = Executors.newCachedThreadPool(runnable -> {
+        Thread thread = new Thread(runnable, "weavr-pinned-comment");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     ExtractionCascade(YtDlpClient ytDlp, RapidYtClient rapidYt, AsrTranscriber asr,
                       VisualTextExtractor visual, LinkExtractor linkExtractor,
@@ -96,6 +128,11 @@ public class ExtractionCascade implements SourceExtractor {
         this.visual = visual;
         this.linkExtractor = linkExtractor;
         this.pdfExtractor = pdfExtractor;
+    }
+
+    /** Test-only: overrides how long {@link #withPinnedComment} waits, so a deliberately slow mock doesn't cost the suite the real 3s. */
+    void setPinnedCommentWaitForTesting(Duration wait) {
+        this.pinnedCommentWait = wait;
     }
 
     /**
@@ -301,18 +338,38 @@ public class ExtractionCascade implements SourceExtractor {
 
     /**
      * Swaps in a fetched pinned comment when {@link YtDlpClient#fetchPinnedComment}
-     * found one; returns {@code metadata} unchanged otherwise (empty result or a
-     * swallowed failure look identical from here, by design — see that method's
-     * javadoc). {@link SourceMetadata#asText()} already appends the pinned
-     * comment when present, so every caller below benefits without a second
-     * threshold check.
+     * found one within {@link #pinnedCommentWait}; returns {@code metadata}
+     * unchanged in every other case — an empty result, a swallowed yt-dlp
+     * failure (see that method's javadoc), and a wait that ran out all look
+     * identical from here, by design. {@link SourceMetadata#asText()} already
+     * appends the pinned comment when present, so every caller below benefits
+     * without a second threshold check.
      */
     private SourceMetadata withPinnedComment(SourceMetadata metadata, String url) {
-        return ytDlp.fetchPinnedComment(url)
-                .filter(comment -> !comment.isBlank())
-                .map(comment -> new SourceMetadata(metadata.id(), metadata.title(), metadata.description(),
+        Future<Optional<String>> future = pinnedCommentExecutor.submit(() -> ytDlp.fetchPinnedComment(url));
+        Optional<String> comment;
+        try {
+            comment = future.get(pinnedCommentWait.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            // cancel(true) interrupts the worker thread. That worker is
+            // blocked inside ExternalProcess.run's process.waitFor(...),
+            // which treats an InterruptedException exactly like its own
+            // timeout: destroyForcibly() then return, so the yt-dlp process
+            // doesn't keep running unattended after the cascade moves on.
+            future.cancel(true);
+            log.debug("Supplemental pinned-comment fetch for {} exceeded {}, forwarding without it",
+                    url, pinnedCommentWait);
+            return metadata;
+        } catch (Exception e) {
+            // fetchPinnedComment itself never throws, but this path must
+            // never cost the save regardless — defend anyway.
+            log.debug("Supplemental pinned-comment fetch for {} failed unexpectedly: {}", url, e.getMessage());
+            return metadata;
+        }
+        return comment.filter(c -> !c.isBlank())
+                .map(c -> new SourceMetadata(metadata.id(), metadata.title(), metadata.description(),
                         metadata.uploader(), metadata.durationSeconds(), metadata.thumbnailUrl(),
-                        metadata.captionLanguages(), metadata.autoCaptionLanguages(), comment))
+                        metadata.captionLanguages(), metadata.autoCaptionLanguages(), c))
                 .orElse(metadata);
     }
 
