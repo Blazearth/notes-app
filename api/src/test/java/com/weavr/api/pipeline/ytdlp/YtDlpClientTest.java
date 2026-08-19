@@ -366,19 +366,57 @@ class YtDlpClientTest {
                 .isEqualTo("the actual pinned recipe");
     }
 
-    /** The probe call is one process invocation, not two — comments piggyback on the same dump. */
+    /** The probe call is one process invocation, not two — comments piggyback on the same dump. YouTube only. */
     @Test
-    void probeFetchesCommentsInTheSameCallBoundedToTwenty() {
+    void probeFetchesCommentsForYouTubeInTheSameCallBoundedToTwenty() {
         when(processes.run(anyList(), any(Duration.class))).thenReturn(new ExternalProcess.Result(
                 0, "{\"id\":\"x\",\"subtitles\":{},\"automatic_captions\":{}}", "", false, false));
 
-        client.probe("https://example.com/v");
+        client.probe("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
 
         org.mockito.ArgumentCaptor<List<String>> command =
                 org.mockito.ArgumentCaptor.forClass(List.class);
         org.mockito.Mockito.verify(processes).run(command.capture(), any(Duration.class));
         assertThat(command.getValue())
                 .contains("--write-comments", "--extractor-args", "youtube:max_comments=20,20,0,0");
+    }
+
+    /**
+     * Instagram (and every non-YouTube source) must NOT get {@code --write-comments}.
+     * The Instagram extractor fires paginated comment requests for each Reel when
+     * the flag is present, multiplying the per-Reel request count 3–4×. Render's
+     * datacenter IP sits on Instagram's rate-limit block list; the multiplied
+     * request count tips every window into a 429 and the retry extends the ban.
+     */
+    @Test
+    void probeDoesNotFetchCommentsForInstagram() {
+        when(processes.run(anyList(), any(Duration.class))).thenReturn(new ExternalProcess.Result(
+                0, "{\"id\":\"x\",\"subtitles\":{},\"automatic_captions\":{}}", "", false, false));
+
+        client.probe("https://www.instagram.com/reel/DcEbWBdRGk5/");
+
+        org.mockito.ArgumentCaptor<List<String>> command =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(processes).run(command.capture(), any(Duration.class));
+        assertThat(command.getValue())
+                .doesNotContain("--write-comments")
+                .doesNotContain("youtube:max_comments=20,20,0,0");
+    }
+
+    /** Covers the URL shapes isYoutubeUrl must recognise (and must NOT recognise). */
+    @Test
+    void isYoutubeUrlRecognisesYouTubeShapesOnly() {
+        assertThat(YtDlpClient.isYoutubeUrl("https://www.youtube.com/watch?v=abc")).isTrue();
+        assertThat(YtDlpClient.isYoutubeUrl("https://youtu.be/abc")).isTrue();
+        assertThat(YtDlpClient.isYoutubeUrl("https://youtube.com/shorts/abc")).isTrue();
+        assertThat(YtDlpClient.isYoutubeUrl("https://music.youtube.com/watch?v=abc")).isTrue();
+        assertThat(YtDlpClient.isYoutubeUrl("https://m.youtube.com/watch?v=abc")).isTrue();
+        assertThat(YtDlpClient.isYoutubeUrl("https://YOUTUBE.COM/watch?v=abc")).isTrue(); // case-insensitive
+
+        assertThat(YtDlpClient.isYoutubeUrl("https://www.instagram.com/reel/abc/")).isFalse();
+        assertThat(YtDlpClient.isYoutubeUrl("https://www.tiktok.com/@user/video/1")).isFalse();
+        assertThat(YtDlpClient.isYoutubeUrl("https://example.com/v")).isFalse();
+        assertThat(YtDlpClient.isYoutubeUrl(null)).isFalse();
     }
 
     /** A post with neither kind of track: the cascade must not attempt a fetch. */

@@ -114,31 +114,43 @@ public class YtDlpClient {
                 pinnedComment(json));
     }
 
-    /**
-     * Runs the {@code --dump-single-json --write-comments} probe and returns
-     * the raw tree. Shared by {@link #probe(String)} (which lets a failure
-     * propagate — the cascade's only source when yt-dlp is the primary path)
-     * and {@link #fetchPinnedComment(String)} (which never lets one escape —
-     * a best-effort supplement to a source that already succeeded some other
-     * way). Same single call either way: {@code --write-comments} piggybacks
-     * on the metadata probe rather than costing a second request. Capped at
-     * 20 top-level comments (max_comments,max_parents,max_replies,
-     * max_replies_per_thread) — pinned comments are always returned first
-     * regardless of sort, so a small cap still finds one reliably while
-     * bounding cost on a viral video's thousands of comments. Measured
-     * against a real video: +1.1s over the bare probe, and the capped call
-     * is indistinguishable in time from no comments at all (~4.4s either way).
+/**
+     * Runs the metadata probe and returns the raw yt-dlp JSON tree.
+     *
+     * <p><b>Comment fetching is YouTube-only.</b> {@code --write-comments} is
+     * only included when the URL is a YouTube URL. For Instagram, TikTok, and
+     * every other extractor, it is omitted entirely.
+     *
+     * <p>Why this matters for Instagram: yt-dlp's Instagram extractor makes
+     * one request for the video page and then one or more paginated comment
+     * requests when {@code --write-comments} is present. Render's datacenter
+     * IP sits on Instagram's shared-block list; the single metadata request
+     * already works (or fails with a 429 on a bad day), but adding comment
+     * pages multiplies the request count 3–4× per Reel and reliably tips
+     * Instagram into returning 429 for every subsequent call in that window —
+     * including the retry, which extends the block. Dropping {@code
+     * --write-comments} for non-YouTube URLs halves (or better) the per-Reel
+     * request count and keeps Reels processing at all.
+     *
+     * <p>For YouTube the flag is retained: YouTube is not rate-limiting our
+     * server's IP, pinned-comment data is genuinely useful there, and the
+     * cost was measured at +1.1s on the probe with no meaningful rate impact.
      */
     private JsonNode runProbe(String url) {
-        List<String> cmd = withCookies(List.of(
+        boolean youtube = isYoutubeUrl(url);
+        List<String> base = new ArrayList<>(List.of(
                 properties.binary(),
                 "--dump-single-json",
-                "--skip-download",
-                "--write-comments",
-                "--extractor-args", "youtube:max_comments=20,20,0,0",
-                "--no-playlist",
-                "--no-warnings",
-                url));
+                "--skip-download"));
+        if (youtube) {
+            base.add("--write-comments");
+            base.add("--extractor-args");
+            base.add("youtube:max_comments=20,20,0,0");
+        }
+        base.add("--no-playlist");
+        base.add("--no-warnings");
+        base.add(url);
+        List<String> cmd = withCookies(base);
         log.info("yt-dlp probe command: {}", cmd);
         ExternalProcess.Result result = processes.run(cmd, properties.probeTimeout());
 
@@ -147,6 +159,20 @@ public class YtDlpClient {
         }
 
         return objectMapper.readTree(result.stdout());
+    }
+
+    /**
+     * Returns true for all YouTube URL shapes yt-dlp handles: {@code
+     * youtube.com/watch}, {@code youtube.com/shorts}, {@code youtube.com/live},
+     * {@code youtu.be}, {@code music.youtube.com}, and {@code m.youtube.com}.
+     * Used solely to gate comment fetching — false-negatives (a new YouTube
+     * URL shape we haven't seen) lose the pinned-comment feature for that
+     * video, but never break extraction.
+     */
+    static boolean isYoutubeUrl(String url) {
+        if (url == null) return false;
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("youtube.com/") || lower.contains("youtu.be/");
     }
 
     /**
