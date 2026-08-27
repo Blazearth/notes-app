@@ -66,6 +66,14 @@ export interface DetailField {
    * item states at render time, never stored itself.
    */
   progress?: { done: number; total: number };
+  /**
+   * True for a field that reached the screen only because `leftovers()`
+   * didn't recognise it — a genuine extracted or enriched value, just not one
+   * curated for this type. The screen renders these behind a "More details"
+   * disclosure rather than at the same priority as the fields a type's own
+   * bespoke branch chose deliberately. Never set on a bespoke field.
+   */
+  secondary?: boolean;
 }
 
 export interface SaveDetailModel {
@@ -434,17 +442,23 @@ function objectListField(label: string, value: unknown): DetailField | null {
 
 /**
  * Fields the detail view must never render as content — they are either shown
- * elsewhere (the title, the meta line) or they are bookkeeping.
+ * elsewhere (the title, the meta line), they are bookkeeping, or (`tmdbId`,
+ * `tmdbUrl`, `posterUrl`, `thumbnailUrl`, `latitude`, `longitude`) they are
+ * enrichment's own internal plumbing: a numeric TMDB id or a raw storage URL
+ * has no value to a reader even disclosed, where `openingHours` or a page
+ * count does — so those fall through to `leftovers()` and the "More
+ * details" disclosure instead of being suppressed outright.
  */
 const HANDLED_ELSEWHERE: Record<string, ReadonlySet<string>> = {
   recipe: new Set(['title', 'servings', 'prepTime', 'cookTime', 'cuisine', 'ingredients', 'steps', 'dietaryNotes']),
-  movie: new Set(['title', 'year', 'director', 'genre', 'rating', 'synopsis', 'whereTo']),
-  place: new Set(['name', 'type', 'address', 'cuisine', 'priceRange', 'highlights', 'rating']),
+  movie: new Set(['title', 'year', 'director', 'genre', 'rating', 'synopsis', 'whereTo', 'tmdbId', 'tmdbUrl', 'posterUrl']),
+  place: new Set(['name', 'type', 'address', 'cuisine', 'priceRange', 'highlights', 'rating', 'latitude', 'longitude']),
   workout: new Set([
     'title', 'summary', 'category', 'goal', 'muscleGroups', 'duration', 'difficulty',
     'equipment', 'warmup', 'exercises', 'cooldown', 'progression', 'warnings',
     'estimatedDurationMin', 'estimatedDifficulty',
   ]),
+  book: new Set(['title', 'thumbnailUrl']),
   other: new Set(['title', 'summary', 'tags']),
   unusable: new Set(['reason']),
   recommendation_list: new Set(['title', 'medium', 'summary', 'items', 'orderMatters', 'suggestedOrder']),
@@ -461,6 +475,12 @@ const HANDLED_ELSEWHERE: Record<string, ReadonlySet<string>> = {
  * server-side by design (CLAUDE.md), so the client must not require a matching
  * code change to show what it produces; it just shows the extra fields
  * generically until someone gives them a nicer home.
+ *
+ * Every result is `secondary: true` — a field reaching the screen only
+ * because nothing claimed it is, by definition, not one a type's own bespoke
+ * branch considered essential. The screen renders these behind a "More
+ * details" disclosure rather than at the same priority as Ingredients or
+ * Genre.
  */
 function leftovers(data: Record<string, unknown>, knowledgeType: string): DetailField[] {
   const claimed = HANDLED_ELSEWHERE[knowledgeType] ?? new Set<string>();
@@ -474,7 +494,7 @@ function leftovers(data: Record<string, unknown>, knowledgeType: string): Detail
             ? listField(humanise(key), value)
             : textField(humanise(key), value),
       ),
-  );
+  ).map((field) => ({ ...field, secondary: true }));
 }
 
 /**

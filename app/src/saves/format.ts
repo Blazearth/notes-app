@@ -52,6 +52,32 @@ export function saveSubtitle(save: SaveResponse): string {
   return parts.join(' · ');
 }
 
+/**
+ * "youtube.com" → "YouTube" for the save-detail Source row — a platform name
+ * reads as provenance, where the raw URL reads as a technical field nobody
+ * asked to see. Falls back to the bare hostname for anything unrecognised,
+ * never to the full URL.
+ */
+const PLATFORM_HOSTS: Array<[RegExp, string]> = [
+  [/(^|\.)youtube\.com$|^youtu\.be$/, 'YouTube'],
+  [/(^|\.)instagram\.com$/, 'Instagram'],
+  [/(^|\.)tiktok\.com$/, 'TikTok'],
+  [/(^|\.)reddit\.com$/, 'Reddit'],
+  [/(^|\.)(twitter\.com|x\.com)$/, 'X'],
+  [/(^|\.)pinterest\.[a-z.]+$/, 'Pinterest'],
+  [/(^|\.)facebook\.com$/, 'Facebook'],
+];
+
+export function sourcePlatformName(url: string): string {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, '');
+    const match = PLATFORM_HOSTS.find(([pattern]) => pattern.test(hostname));
+    return match ? match[1] : hostname;
+  } catch {
+    return url;
+  }
+}
+
 const SOURCE_LABELS: Record<SaveResponse['sourceType'], string> = {
   url: 'Link',
   text: 'Note',

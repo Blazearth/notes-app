@@ -1,10 +1,10 @@
 import { useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Linking, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
-import type { SaveResponse } from '@/api/types';
+import type { SaveResponse, Space } from '@/api/types';
 import { useLive, useLiveValue } from '@/local';
 import { sync } from '@/local/sync';
 import {
@@ -33,9 +33,11 @@ import {
   type DetailObjectRow,
   type EntityStates,
 } from '@/saves/detailModel';
-import { STATUS_LABELS, saveTitle } from '@/saves/format';
+import { STATUS_LABELS, saveTitle, sourcePlatformName } from '@/saves/format';
 import { baseServings, scaleQuantity } from '@/saves/scaling';
-import { saveTypeMeta } from '@/saves/saveTypeMeta';
+import { groupItemNoun, saveTypeMeta } from '@/saves/saveTypeMeta';
+import { FACETS, isUsableFacetValue } from '@/knowledge/facets';
+import { spaceIdentity } from '@/spaces/spaceMeta';
 import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AddToSpaceSheet } from './AddToSpaceSheet';
@@ -223,23 +225,23 @@ function Rail({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** One tile in the "You also saved" rail — thumbnail, title, meta, nothing else. */
+/** One tile in the "You might also like" rail — thumbnail, title, meta, nothing else. */
 function RelatedCard({ save, onPress }: { save: SaveResponse; onPress: () => void }) {
   const { radius, spacing } = useTheme();
   const typeMeta = save.knowledgeType ? saveTypeMeta(save.knowledgeType) : undefined;
   const model = buildCardModel(save);
   return (
-    <Card padding={0} radius={radius.lg} style={{ width: 156, overflow: 'hidden' }}>
+    <Card padding={0} radius={radius.lg} style={{ width: 132, overflow: 'hidden' }}>
       <Touchable accessibilityRole="button" onPress={onPress} haptic="selection">
         <SaveThumb
           thumbnailUrl={save.thumbnailUrl}
-          width={156}
-          height={90}
+          width={132}
+          height={68}
           radius={0}
           tint={typeMeta?.color}
           glyph={typeMeta?.glyph}
         />
-        <View style={{ padding: spacing.smd }}>
+        <View style={{ padding: spacing.sm }}>
           <AppText variant="cardTitle" numberOfLines={1}>
             {model?.title ?? saveTitle(save)}
           </AppText>
@@ -255,20 +257,50 @@ function RelatedCard({ save, onPress }: { save: SaveResponse; onPress: () => voi
 }
 
 /**
- * "You also saved…" — Phase 5 §5.3. Fetches lazily, only once the save is
- * `ready` (an unclassified save has no embedding to compare against), and
+ * The one line under the rail explaining *why* these showed up — grounded in
+ * what was actually fetched, never a generated claim. When the current save's
+ * own facet value (genre, cuisine, …) is shared by at least one of the
+ * results, name it and count how many results share the save's own knowledge
+ * type; otherwise fall back to a plain type-level line rather than inventing
+ * a reason the data doesn't support.
+ */
+function relatedReason(save: SaveResponse, related: SaveResponse[]): string {
+  const type = save.knowledgeType;
+  if (!type) return 'Similar to what you’ve saved';
+
+  const sameType = related.filter((r) => r.knowledgeType === type);
+  if (sameType.length === 0) return `Similar to what you’ve saved`;
+
+  const facetField = FACETS[type];
+  const rawFacet = facetField ? save.structuredData?.[facetField] : undefined;
+  const facetValue = Array.isArray(rawFacet)
+    ? rawFacet.find(isUsableFacetValue)
+    : isUsableFacetValue(rawFacet)
+      ? rawFacet
+      : undefined;
+
+  const noun = groupItemNoun(type, sameType.length);
+  return facetValue
+    ? `Because you saved ${sameType.length} ${facetValue.toLowerCase()} ${noun}`
+    : `Because you saved ${sameType.length} similar ${noun}`;
+}
+
+/**
+ * "You might also like…" — Phase 5 §5.3. Fetches lazily, only once the save
+ * is `ready` (an unclassified save has no embedding to compare against), and
  * renders nothing on an empty result: the server's distance cutoff means an
  * empty array is "nothing genuinely similar," the same honest-empty-state
  * rule the search screen already follows, not a loading or error state.
  */
-function RelatedRail({ saveId }: { saveId: string }) {
+function RelatedRail({ save }: { save: SaveResponse }) {
+  const { spacing } = useTheme();
   const router = useRouter();
   const [related, setRelated] = useState<SaveResponse[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     repo
-      .getRelatedSaves(saveId)
+      .getRelatedSaves(save.id)
       .then((saves) => {
         if (!cancelled) setRelated(saves);
       })
@@ -279,22 +311,25 @@ function RelatedRail({ saveId }: { saveId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [saveId]);
+  }, [save.id]);
 
   if (related.length === 0) return null;
 
   return (
     <View style={{ marginBottom: 24 }}>
-      <SectionLabel>You also saved</SectionLabel>
+      <SectionLabel>You might also like</SectionLabel>
       <Rail>
-        {related.map((save) => (
+        {related.map((r) => (
           <RelatedCard
-            key={save.id}
-            save={save}
-            onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
+            key={r.id}
+            save={r}
+            onPress={() => router.push({ pathname: '/save/[id]', params: { id: r.id } })}
           />
         ))}
       </Rail>
+      <AppText variant="caption" tone="muted" style={{ marginTop: spacing.sm }}>
+        {relatedReason(save, related)}
+      </AppText>
     </View>
   );
 }
@@ -793,8 +828,147 @@ function AddToShoppingList({ saveId, spaceId }: { saveId: string; spaceId?: stri
   );
 }
 
+/**
+ * The original screenshot, as a compact media card rather than a near-full-
+ * screen image. It's real context for why Weavr filed this the way it did —
+ * worth keeping — but it isn't the reason the user opened this save, so it
+ * shouldn't outweigh the extracted content. Tapping it (or "View original")
+ * opens a full-screen lightbox for the one case that does need the whole
+ * picture.
+ */
+function SourcePreviewCard({ uri }: { uri: string }) {
+  const { palette, radius, spacing } = useTheme();
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <View style={{ marginBottom: spacing.lg }}>
+      <SectionLabel>Source context</SectionLabel>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel="View original screenshot"
+        onPress={() => setExpanded(true)}
+        haptic="light"
+        weight="card"
+        style={{ borderRadius: radius.lg, overflow: 'hidden', backgroundColor: palette.surface }}
+      >
+        <Image
+          source={{ uri }}
+          style={{ width: '100%', height: 180 }}
+          resizeMode="cover"
+        />
+      </Touchable>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel="View original screenshot"
+        onPress={() => setExpanded(true)}
+        haptic="light"
+        style={{ alignSelf: 'flex-start', marginTop: spacing.xs }}
+      >
+        <AppText variant="bodySmall" tone="accent">
+          View original ↗
+        </AppText>
+      </Touchable>
+
+      <Modal visible={expanded} transparent animationType="fade" onRequestClose={() => setExpanded(false)}>
+        <Pressable
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', alignItems: 'center', justifyContent: 'center' }}
+          onPress={() => setExpanded(false)}
+        >
+          <Image
+            source={{ uri }}
+            style={{ width: '92%', height: '80%' }}
+            resizeMode="contain"
+          />
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            onPress={() => setExpanded(false)}
+            haptic="light"
+            style={{
+              position: 'absolute',
+              top: 48,
+              right: 20,
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: 'rgba(255,255,255,0.15)',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Glyph name="close" size={16} color="#fff" />
+          </Touchable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+/**
+ * Everything the model or an enricher produced that no bespoke layout claimed
+ * — real data, just not curated for this type — collapsed behind a toggle
+ * rather than shown at the same priority as Ingredients or Genre. Renders
+ * nothing when there's nothing to disclose.
+ */
+function MoreDetails({
+  fields,
+  itemStates,
+  entityStates,
+  onSetItemState,
+  onSetEntityState,
+}: {
+  fields: DetailField[];
+  itemStates: ItemStates;
+  entityStates: EntityStates;
+  onSetItemState: SetItemState;
+  onSetEntityState: SetEntityState;
+}) {
+  const { palette, spacing } = useTheme();
+  const [open, setOpen] = useState(false);
+
+  if (fields.length === 0) return null;
+
+  return (
+    <View style={{ marginBottom: spacing.xl }}>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={open ? 'Hide more details' : 'Show more details'}
+        onPress={() => setOpen((v) => !v)}
+        haptic="light"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.xs }}
+      >
+        <AppText variant="sectionLabel" tone="muted">
+          More details
+        </AppText>
+        <Glyph
+          name="chevron"
+          size={10}
+          weight={2}
+          color={palette.textFaint}
+          style={{ transform: [{ rotate: open ? '90deg' : '-90deg' }] }}
+        />
+      </Touchable>
+      {open ? (
+        <View style={{ marginTop: spacing.sm }}>
+          {fields.map((field) => (
+            <Field
+              key={field.label}
+              field={field}
+              itemStates={itemStates}
+              entityStates={entityStates}
+              onSetItemState={onSetItemState}
+              onSetEntityState={onSetEntityState}
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export function SaveDetailScreen({ id }: { id: string }) {
-  const { palette, radius, spacing, icon } = useTheme();
+  const { palette, radius, spacing } = useTheme();
 
   const [showSpaceSheet, setShowSpaceSheet] = useState(false);
   const [cookModeOpen, setCookModeOpen] = useState(false);
@@ -859,6 +1033,17 @@ export function SaveDetailScreen({ id }: { id: string }) {
   );
 
   /**
+   * The Space this save currently lives in, if any — so "Add to Space" can
+   * confirm *where* rather than leaving the tap's result to be inferred.
+   */
+  const currentSpace = useLiveValue<Space | null>(
+    ['spaces'],
+    (store) => (save?.spaceId ? store.readSpace(save.spaceId) : Promise.resolve(null)),
+    null,
+    [save?.spaceId],
+  );
+
+  /**
    * The one handler behind every knowledge type's object behavior. Optimistic
    * because the controls it drives (a tick, a star) are exactly the kind of
    * thing that should feel instant — `SaveItemStateService`'s "full replace,
@@ -898,7 +1083,20 @@ export function SaveDetailScreen({ id }: { id: string }) {
   // Ingredients render through `RecipeIngredients` for recipes (it needs the
   // raw structured shape to scale by servings) rather than the model's
   // already-flattened chip strings.
-  const displayFields = model ? (isRecipe ? model.fields.filter((f) => f.label !== 'Ingredients') : model.fields) : [];
+  const allDisplayFields = model ? (isRecipe ? model.fields.filter((f) => f.label !== 'Ingredients') : model.fields) : [];
+  // Bespoke fields (Genre, Rating, Exercises…) render at full priority;
+  // generic leftovers — real data a type's own branch didn't curate — wait
+  // behind "More details" instead of competing with them for attention.
+  const displayFields = allDisplayFields.filter((f) => !f.secondary);
+  const moreDetailFields = allDisplayFields.filter((f) => f.secondary);
+
+  // Whether there's a real, openable act already covering "what can I do with
+  // this" — the shopping list, cook mode, or a Maps deep link. Only when none
+  // of those exist does a plain "Open source" get promoted to a primary
+  // button; a screenshot's `sourceUrl` is its own Supabase Storage object, not
+  // a link worth surfacing as an action, so it's excluded even then.
+  const hasBespokeAct = isRecipe || !!model?.mapsUrl;
+  const showPrimaryOpenSource = !hasBespokeAct && !isImageSave && !!save?.sourceUrl;
 
   // Whether the editor fields differ from what's persisted.
   const noteDirty =
@@ -965,109 +1163,104 @@ export function SaveDetailScreen({ id }: { id: string }) {
       {save ? (
         <>
           <Reveal index={1}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-              {isTextNote ? (
-                /* NOTE badge — a fixed warm dot + label */
-                <>
-                  <View
+            <View style={{ flexDirection: 'row', gap: spacing.md }}>
+              {/* A small visual identity for the save — a real thumbnail when
+                  one exists, otherwise the same tinted type-icon tile the
+                  Library and the rail below already use. Skipped for notes
+                  (no image is ever relevant) and screenshots (the real image
+                  renders full-width just below instead — a second, smaller
+                  copy of the same picture would be redundant). */}
+              {!isTextNote && !isImageSave ? (
+                <SaveThumb
+                  thumbnailUrl={save.thumbnailUrl}
+                  width={64}
+                  height={88}
+                  radius={radius.md}
+                  tint={save.knowledgeType ? (TYPE_COLORS[save.knowledgeType] ?? TYPE_COLORS.other) : undefined}
+                  glyph={save.knowledgeType ? saveTypeMeta(save.knowledgeType).glyph : undefined}
+                />
+              ) : null}
+
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: 3 }}>
+                  {isTextNote ? (
+                    /* NOTE badge — a fixed warm dot + label */
+                    <>
+                      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: TYPE_COLORS.other }} />
+                      <AppText variant="sectionLabel" tone="muted">NOTE</AppText>
+                    </>
+                  ) : isImageSave ? (
+                    /* SCREENSHOT badge */
+                    <>
+                      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: TYPE_COLORS.other }} />
+                      <AppText variant="sectionLabel" tone="muted">
+                        {save.knowledgeType ? save.knowledgeType.toUpperCase() : 'SCREENSHOT'}
+                      </AppText>
+                    </>
+                  ) : save.knowledgeType ? (
+                    <>
+                      <View
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: TYPE_COLORS[save.knowledgeType] ?? TYPE_COLORS.other,
+                        }}
+                      />
+                      <AppText variant="sectionLabel" tone="muted">
+                        {save.knowledgeType ?? STATUS_LABELS[save.status]}
+                      </AppText>
+                    </>
+                  ) : (
+                    <AppText variant="sectionLabel" tone="muted">
+                      {STATUS_LABELS[save.status]}
+                    </AppText>
+                  )}
+                </View>
+
+                {isTextNote ? (
+                  /* Editable title for text notes */
+                  <TextInput
+                    value={noteTitle}
+                    onChangeText={setNoteTitle}
+                    placeholder="Title"
+                    placeholderTextColor={palette.textFaint}
                     style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 4,
-                      backgroundColor: TYPE_COLORS.other,
+                      fontSize: 26,
+                      fontWeight: '700',
+                      color: palette.text,
+                      paddingVertical: 0,
                     }}
                   />
-                  <AppText variant="sectionLabel" tone="muted">NOTE</AppText>
-                </>
-              ) : isImageSave ? (
-                /* SCREENSHOT badge */
-                <>
-                  <View
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 4,
-                      backgroundColor: TYPE_COLORS.other,
-                    }}
-                  />
-                  <AppText variant="sectionLabel" tone="muted">
-                    {save.knowledgeType ? save.knowledgeType.toUpperCase() : 'SCREENSHOT'}
+                ) : (
+                  <AppText variant="display">{model?.title ?? saveTitle(save)}</AppText>
+                )}
+
+                {!isTextNote && model?.meta ? (
+                  <AppText variant="bodySmall" tone="muted" style={{ marginTop: 3 }}>
+                    {model.meta}
                   </AppText>
-                </>
-              ) : save.knowledgeType ? (
-                <>
-                  <View
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 4,
-                      backgroundColor: TYPE_COLORS[save.knowledgeType] ?? TYPE_COLORS.other,
-                    }}
-                  />
-                  <AppText variant="sectionLabel" tone="muted">
-                    {save.knowledgeType ?? STATUS_LABELS[save.status]}
-                  </AppText>
-                </>
-              ) : (
-                <AppText variant="sectionLabel" tone="muted">
-                  {STATUS_LABELS[save.status]}
-                </AppText>
-              )}
+                ) : null}
+              </View>
             </View>
-
-            {isTextNote ? (
-              /* Editable title for text notes */
-              <TextInput
-                value={noteTitle}
-                onChangeText={setNoteTitle}
-                placeholder="Title"
-                placeholderTextColor={palette.textFaint}
-                style={{
-                  fontSize: 26,
-                  fontWeight: '700',
-                  color: palette.text,
-                  marginTop: spacing.xs,
-                  marginBottom: spacing.xs,
-                  paddingVertical: 0,
-                }}
-              />
-            ) : (
-              <AppText variant="display" style={{ marginTop: spacing.xs, marginBottom: spacing.xs }}>
-                {model?.title ?? saveTitle(save)}
-              </AppText>
-            )}
-
-            {!isTextNote && model?.meta ? (
-              <AppText tone="muted" style={{ marginBottom: spacing.lg }}>
-                {model.meta}
-              </AppText>
-            ) : (
-              <View style={{ marginBottom: spacing.lg }} />
-            )}
           </Reveal>
 
           {model?.lede ? (
-            <Reveal index={2}>
-              <AppText style={{ marginBottom: spacing.xl, lineHeight: 22 }}>{model.lede}</AppText>
+            <Reveal index={1}>
+              <AppText style={{ marginTop: spacing.md, marginBottom: spacing.lg, lineHeight: 22 }}>
+                {model.lede}
+              </AppText>
             </Reveal>
-          ) : null}
+          ) : (
+            <View style={{ marginBottom: spacing.lg }} />
+          )}
 
-          {/* Full-width screenshot image — shown for IMAGE saves so users
-              can see their original screenshot alongside the extracted data. */}
+          {/* The original screenshot — real context for the extraction, not
+              the reason the save was opened, so it's a compact card rather
+              than a near-full-screen image. See `SourcePreviewCard`. */}
           {isImageSave && save.thumbnailUrl ? (
             <Reveal index={2}>
-              <Image
-                source={{ uri: save.thumbnailUrl }}
-                style={{
-                  width: '100%',
-                  height: undefined,
-                  aspectRatio: 9 / 16,
-                  borderRadius: radius.lg,
-                  marginBottom: spacing.xl,
-                  backgroundColor: palette.surface,
-                }}
-                resizeMode="contain"
-              />
+              <SourcePreviewCard uri={save.thumbnailUrl} />
             </Reveal>
           ) : null}
 
@@ -1140,32 +1333,102 @@ export function SaveDetailScreen({ id }: { id: string }) {
             </Reveal>
           ) : null}
 
-          {/* Add to Space */}
-          {save.status === 'ready' ? (
+          {/* The generic answer to "what can I do with this" for any type
+              with no bespoke act of its own — a real external link the
+              content came from, promoted from the de-emphasised Source row
+              to a proper primary button. Never shown for a screenshot: its
+              `sourceUrl` is the screenshot's own Storage object, not an
+              external link worth surfacing as an action. */}
+          {showPrimaryOpenSource ? (
             <Reveal index={2}>
               <Touchable
-                accessibilityRole="button"
-                accessibilityLabel={save.spaceId ? 'Move to a different Space' : 'Add to a Space'}
-                onPress={() => setShowSpaceSheet(true)}
-                haptic="light"
+                accessibilityRole="link"
+                accessibilityLabel={`Open original on ${sourcePlatformName(save.sourceUrl as string)}`}
+                onPress={() => void Linking.openURL(save.sourceUrl as string).catch(() => {})}
+                haptic="medium"
+                weight="tile"
                 style={{
                   flexDirection: 'row',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: spacing.sm,
+                  gap: spacing.smd,
                   paddingVertical: spacing.md,
                   borderRadius: radius.sm,
-                  borderWidth: 1,
-                  borderColor: palette.border,
-                  backgroundColor: palette.surface,
+                  backgroundColor: palette.accent,
                   marginBottom: spacing.smd,
                 }}
               >
-                <Glyph name="layers" size={16} weight={2} color={palette.textMuted} />
-                <AppText variant="label" tone="muted">
-                  {save.spaceId ? 'Move Space' : 'Add to Space'}
+                <Glyph name="link" size={16} weight={2} color={palette.onAccent} />
+                <AppText variant="label" style={{ color: palette.onAccent }}>
+                  Open source ↗
                 </AppText>
               </Touchable>
+            </Reveal>
+          ) : null}
+
+          {/* Add to Space — states its purpose when nothing is chosen yet
+              ("choose where this belongs") and confirms the result once
+              something is, rather than leaving the user to guess whether the
+              tap did anything. */}
+          {save.status === 'ready' ? (
+            <Reveal index={2}>
+              <Touchable
+                accessibilityRole="button"
+                accessibilityLabel={currentSpace ? `In ${currentSpace.name} — tap to change` : 'Add to a Space'}
+                onPress={() => setShowSpaceSheet(true)}
+                haptic="light"
+                weight="tile"
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: spacing.smd,
+                  paddingVertical: spacing.sm + 2,
+                  paddingHorizontal: spacing.md,
+                  borderRadius: radius.sm,
+                  borderWidth: 1,
+                  borderColor: currentSpace ? spaceIdentity(currentSpace).color : palette.border,
+                  backgroundColor: currentSpace ? `${spaceIdentity(currentSpace).color}14` : palette.surface,
+                  marginBottom: spacing.smd,
+                }}
+              >
+                <Glyph
+                  name={currentSpace ? spaceIdentity(currentSpace).glyph : 'layers'}
+                  size={16}
+                  weight={2}
+                  color={currentSpace ? spaceIdentity(currentSpace).color : palette.textMuted}
+                />
+                <View style={{ flex: 1 }}>
+                  <AppText variant="label" tone={currentSpace ? 'default' : 'muted'}>
+                    {currentSpace ? `Space: ${currentSpace.name}` : 'Add to Space'}
+                  </AppText>
+                  {!currentSpace ? (
+                    <AppText variant="caption" tone="faint" style={{ marginTop: 1 }}>
+                      Choose where this belongs
+                    </AppText>
+                  ) : null}
+                </View>
+                <Glyph
+                  name="chevron"
+                  size={11}
+                  weight={2}
+                  color={palette.textFaint}
+                  style={{ transform: [{ rotate: '180deg' }] }}
+                />
+              </Touchable>
+            </Reveal>
+          ) : null}
+
+          {/* Progress sits right after the space it belongs to — "what do I
+              want to do with it" then "where am I with it" — and before the
+              extracted content, per the same reasoning point 4 states: this
+              is a status the user checks often and shouldn't have to scroll
+              past ingredients or exercises to reach. */}
+          {save.status === 'ready' ? (
+            <Reveal index={2}>
+              {/* No `onChange` reload: the strip writes through the store, so
+                  `save.lifecycleStatus` above is already the new value on the
+                  next render — re-fetching would only confirm what we wrote. */}
+              <LifecycleStrip saveId={save.id} value={save.lifecycleStatus ?? 'saved'} />
             </Reveal>
           ) : null}
 
@@ -1252,31 +1515,19 @@ export function SaveDetailScreen({ id }: { id: string }) {
             </Reveal>
           ) : null}
 
-          {/* Progress only makes sense once there is something to make
-              progress on — a save still being processed has no content yet. */}
-          {save.status === 'ready' ? (
-            <Reveal index={3 + (displayFields.length ?? 1)}>
-              {/* No `onChange` reload: the strip writes through the store, so
-                  `save.lifecycleStatus` above is already the new value on the
-                  next render — re-fetching would only confirm what we wrote. */}
-              <LifecycleStrip saveId={save.id} value={save.lifecycleStatus ?? 'saved'} />
-            </Reveal>
-          ) : null}
-
-          {/* Renders nothing when there is nothing similar enough — the
-              server's distance cutoff, not a loading placeholder. */}
-          {save.status === 'ready' ? <RelatedRail saveId={save.id} /> : null}
-
-          {/* Renders nothing for a private save: a comment thread only you can
-              see is a note to self, not a discussion. */}
-          <Discussion saveId={save.id} spaceId={save.spaceId} />
-
-          {save.sourceUrl ? (
+          {/* Source — provenance, not a technical field. Plain text, no
+              border or background: this is informational, not an action the
+              rest of the screen's buttons are competing with, and the raw
+              URL never needs to be on screen for the tap to work. Never
+              shown for a screenshot: its `sourceUrl` is the same Supabase
+              Storage object already visible as the source-context card
+              above, not a second, distinct provenance worth restating. */}
+          {save.sourceUrl && !isImageSave ? (
             <Reveal index={4 + (displayFields.length ?? 1)}>
               <SectionLabel>Source</SectionLabel>
               <Touchable
                 accessibilityRole="link"
-                accessibilityLabel={`Open ${save.sourceUrl}`}
+                accessibilityLabel={`Open original on ${sourcePlatformName(save.sourceUrl)}`}
                 haptic="medium"
                 onPress={() => {
                   // Nothing to do if the OS has no handler — better a no-op
@@ -1286,20 +1537,41 @@ export function SaveDetailScreen({ id }: { id: string }) {
                 style={{
                   flexDirection: 'row',
                   alignItems: 'center',
-                  gap: spacing.smd,
-                  backgroundColor: palette.surface,
-                  borderWidth: 1,
-                  borderColor: palette.border,
-                  borderRadius: radius.md,
-                  padding: spacing.md,
+                  justifyContent: 'space-between',
+                  paddingVertical: spacing.xs,
+                  marginBottom: spacing.xl,
                 }}
               >
-                <Glyph name="link" size={icon.sm} />
-                <AppText variant="bodySmall" style={{ flex: 1 }} numberOfLines={1}>
-                  {save.sourceUrl}
+                <AppText variant="bodySmall" tone="muted">
+                  {sourcePlatformName(save.sourceUrl)}
+                </AppText>
+                <AppText variant="bodySmall" tone="accent">
+                  Open source ↗
                 </AppText>
               </Touchable>
             </Reveal>
+          ) : null}
+
+          {/* Renders nothing for a private save: a comment thread only you can
+              see is a note to self, not a discussion. */}
+          <Discussion saveId={save.id} spaceId={save.spaceId} />
+
+          {/* Renders nothing when there is nothing similar enough — the
+              server's distance cutoff, not a loading placeholder. */}
+          {save.status === 'ready' ? <RelatedRail save={save} /> : null}
+
+          {/* Real data — an enrichment field or a registry field this screen
+              hasn't given a bespoke home to yet — behind one last disclosure
+              rather than surfaced by default. Renders nothing when there's
+              nothing left to disclose. */}
+          {model ? (
+            <MoreDetails
+              fields={moreDetailFields}
+              itemStates={save.itemStates}
+              entityStates={entityStates}
+              onSetItemState={setItemState}
+              onSetEntityState={setEntityState}
+            />
           ) : null}
         </>
       ) : null}

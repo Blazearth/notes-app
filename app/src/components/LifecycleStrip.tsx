@@ -3,18 +3,19 @@ import { View } from 'react-native';
 
 import type { LifecycleStatus } from '@/api/types';
 import { writeSaveLifecycle } from '@/local/writes';
-import { AppText } from '@/components/AppText';
 import { SectionLabel } from '@/components/SectionLabel';
-import { Touchable } from '@/components/Touchable';
+import { Segmented } from '@/components/Segmented';
 import { useTheme } from '@/theme/ThemeProvider';
 
 /**
- * `saved → planned → started → completed`, as four taps.
+ * `saved → planned → started → completed`, as one travelling-thumb segmented
+ * control (`Segmented`, the same one Spaces' own tab strip uses) rather than
+ * four separate pill buttons — the four states are one progression, not four
+ * unrelated choices, and the thumb sliding between them shows that directly.
  *
- * <p>Rendered as a row of states rather than a "next step" button because the
- * server does not treat this as a state machine — going backwards is an
- * ordinary thing to want, and a UI that only advances would be stricter than
- * the thing it is driving.
+ * Still not a strict forward-only stepper: the server does not treat this as
+ * a state machine, and going backward (un-starting something) is an ordinary
+ * thing to want, so every segment stays reachable from every other.
  */
 
 const STEPS: { value: LifecycleStatus; label: string }[] = [
@@ -33,7 +34,7 @@ export function LifecycleStrip({
   value: LifecycleStatus;
   onChange?: (next: LifecycleStatus) => void;
 }) {
-  const { palette, radius, spacing } = useTheme();
+  const { spacing } = useTheme();
   // No local mirror of the value any more, and no `busy` flag.
   //
   // `value` comes from the save in the local store, which the write below
@@ -50,36 +51,7 @@ export function LifecycleStrip({
   return (
     <View style={{ marginBottom: spacing.xl }}>
       <SectionLabel>Progress</SectionLabel>
-      <View style={{ flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' }}>
-        {STEPS.map((step) => {
-          const active = step.value === value;
-          return (
-            <Touchable
-              key={step.value}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: active }}
-              accessibilityLabel={step.label}
-              onPress={() => select(step.value)}
-              haptic="selection"
-              style={{
-                paddingVertical: spacing.xs + 3,
-                paddingHorizontal: spacing.md,
-                borderRadius: radius.sm,
-                borderWidth: 1,
-                borderColor: active ? palette.accent : palette.border,
-                backgroundColor: active ? palette.accent : palette.surface,
-              }}
-            >
-              <AppText
-                variant="caption"
-                style={{ color: active ? palette.onAccent : palette.textMuted }}
-              >
-                {step.label}
-              </AppText>
-            </Touchable>
-          );
-        })}
-      </View>
+      <Segmented options={STEPS} value={value} onChange={select} />
     </View>
   );
 }
