@@ -56,6 +56,14 @@ export interface CollectionTypeMeta {
   sourcesLabel: string;
   /** Label for the node's primary action, when it has one. */
   action?: { label: string; kind: 'workoutSession' };
+  /**
+   * Whether this type's entity rows render as a dense single line instead of
+   * the default poster-tile card — right for an itinerary's places, which
+   * can run into the dozens on one destination and where a portrait tile per
+   * row makes the list mostly whitespace; wrong for a watchlist, where the
+   * poster is how a title is recognised at a glance.
+   */
+  compactList: boolean;
 }
 
 /** `entities` is the merged list; the other two are the node's provenance and its summary. */
@@ -76,6 +84,7 @@ const META: Record<string, CollectionTypeMeta> = {
     // watchlist is a screen you tap through, not one you read.
     tabs: ['entities', 'sources'],
     sourcesLabel: 'Sources',
+    compactList: false,
   },
   checklist: {
     entityNoun: plural('task'),
@@ -86,6 +95,7 @@ const META: Record<string, CollectionTypeMeta> = {
     showsKind: false,
     tabs: ['entities', 'sources'],
     sourcesLabel: 'Lists',
+    compactList: false,
   },
   itinerary: {
     entityNoun: plural('place'),
@@ -98,7 +108,13 @@ const META: Record<string, CollectionTypeMeta> = {
     // list cannot answer, and the trips that reach this destination are the
     // answer — so a destination leads with them.
     tabs: ['overview', 'entities', 'sources'],
-    sourcesLabel: 'Your itineraries',
+    // "Itineraries", not "Your itineraries" — the destination's own header
+    // already says whose trip this is (you're already inside Japan), so the
+    // possessive was saying it twice.
+    sourcesLabel: 'Itineraries',
+    // A destination can hold dozens of places; a poster tile per row is
+    // mostly whitespace at that count. See `compactList`'s own doc.
+    compactList: true,
   },
   workout: {
     entityNoun: plural('exercise'),
@@ -110,6 +126,7 @@ const META: Record<string, CollectionTypeMeta> = {
     tabs: ['entities', 'sources'],
     sourcesLabel: 'Routines',
     action: { label: 'Start workout', kind: 'workoutSession' },
+    compactList: false,
   },
 };
 
@@ -119,6 +136,7 @@ const FALLBACK: CollectionTypeMeta = {
   ratable: false,
   sectionLabel: 'Items',
   groupNoun: plural('group'),
+  compactList: false,
   showsKind: true,
   tabs: ['entities', 'sources'],
   sourcesLabel: 'Sources',

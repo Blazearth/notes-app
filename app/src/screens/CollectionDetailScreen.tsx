@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Modal, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, ScrollView, TextInput, View } from 'react-native';
 
 import type { CollectionEntityResponse, CollectionNodeResponse, SaveResponse } from '@/api/types';
 import { useLiveValue } from '@/local';
@@ -37,6 +37,7 @@ import {
   statusesFor,
 } from '@/collections/entityStatus';
 import { sourceSummaries, type SourceSummary } from '@/collections/sourceSummary';
+import { groupByDay } from '@/collections/placeGroups';
 import { musclesInSplit } from '@/collections/axes';
 import { estimateSessionLoad } from '@/collections/workoutLoad';
 import { buildCandidate } from '@/collections/nextAction';
@@ -173,19 +174,68 @@ function SubgroupRow({
 }
 
 /**
+ * A small tappable done/visited tick — the sibling of `StatusPill` for a type
+ * with no status model (itinerary, checklist). Sits beside the row's own
+ * name Touchable rather than nested inside it, so the two never fight over
+ * the same tap: a row like this is two independent hit targets side by side,
+ * the same shape `StatusPill` already has next to the title above it.
+ */
+function DoneToggle({
+  done,
+  doneNoun,
+  name,
+  compact,
+  onPress,
+}: {
+  done: boolean;
+  doneNoun: string;
+  name: string;
+  /** Icon-only, for the compact (itinerary) row — a label here would be the thing making 45 rows tall again. */
+  compact?: boolean;
+  onPress: () => void;
+}) {
+  const { palette, spacing } = useTheme();
+  return (
+    <Touchable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: done }}
+      accessibilityLabel={done ? `Mark ${name} as not ${doneNoun}` : `Mark ${name} ${doneNoun}`}
+      onPress={onPress}
+      haptic="light"
+      style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
+    >
+      <Glyph name={done ? 'checkSquare' : 'square'} size={16} color={done ? palette.accent : palette.textFaint} />
+      {compact ? null : (
+        <AppText variant="label" tone={done ? 'accent' : 'muted'}>
+          {done ? capitalise(doneNoun) : `Mark ${doneNoun}`}
+        </AppText>
+      )}
+    </Touchable>
+  );
+}
+
+/**
  * One entity, as a row, with whatever controls its type actually supports.
  *
  * The status pill sits **on the row**, not behind a tap into the sheet.
  * Setting a title to Watching is the single most common thing anyone does on
  * a watchlist, and putting it two taps away turns the screen back into a
- * read-only list of extractions. Types with no status model keep the plain
- * done tick. Rating is deliberately *not* here — five stars repeated down a
- * list of dozens of titles is noise, and rating is a considered action that
- * belongs in the detail sheet, not a thing to manage while browsing.
+ * read-only list of extractions. Types with no status model get a plain
+ * `DoneToggle` in the same spot — visited/done is a one-tap flip here too,
+ * not something that only exists inside the detail sheet. Rating is
+ * deliberately *not* here — five stars repeated down a list of dozens of
+ * titles is noise, and rating is a considered action that belongs in the
+ * detail sheet, not a thing to manage while browsing.
  *
  * The source count is worded "in N saves" and only shown when it is greater
  * than one, where it says *this keeps coming up*. "1 source" on every row is
  * noise that makes the extraction structure visible for no benefit.
+ *
+ * `collMeta.compactList` types (itinerary) render as a single dense line
+ * instead — no poster tile, tighter padding — because a destination can hold
+ * dozens of places and a portrait tile per row is mostly whitespace at that
+ * count. The done toggle moves inline as an icon-only tap target next to the
+ * chevron rather than a second row, for the same reason.
  */
 function EntityRow({
   entity,
@@ -197,13 +247,13 @@ function EntityRow({
 }: {
   entity: CollectionEntityResponse;
   type: string;
-  /** Workout only — 1-based position in its section, so a split reads as a routine rather than a pile. */
+  /** Workout and itinerary — 1-based position within its section. */
   number?: number;
   onPress: () => void;
   onCycleStatus: () => void;
   onToggleDone: () => void;
 }) {
-  const { palette, radius, spacing } = useTheme();
+  const { palette, radius, spacing, icon } = useTheme();
   const typeMeta = saveTypeMeta(type);
   const collMeta = collectionTypeMeta(type);
   const posterUrl = clean(entity.fields.posterUrl);
@@ -214,6 +264,58 @@ function EntityRow({
 
   const kind = collMeta.showsKind ? clean(entity.kind) : null;
   const meta = entityMetaLine(type, kind, entity.fields);
+  const metaLine = [meta, crossSource ? `in ${entity.sourceCount} saves` : null].filter(Boolean).join(' · ');
+
+  if (collMeta.compactList) {
+    return (
+      <Card padding={0} radius={radius.md}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: spacing.smd,
+            paddingVertical: spacing.sm + 2,
+            paddingHorizontal: spacing.md,
+          }}
+        >
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel={crossSource ? `${entity.name}, in ${entity.sourceCount} saves` : entity.name}
+            onPress={onPress}
+            haptic="selection"
+            style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.smd }}
+          >
+            {typeof number === 'number' ? (
+              <AppText variant="caption" tone="muted" style={{ width: 20 }}>
+                {String(number).padStart(2, '0')}
+              </AppText>
+            ) : null}
+            <View style={{ flex: 1 }}>
+              <AppText variant="cardTitle" numberOfLines={1}>
+                {entity.name}
+              </AppText>
+              {metaLine ? (
+                <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 1 }}>
+                  {metaLine}
+                </AppText>
+              ) : null}
+            </View>
+          </Touchable>
+          {pinned ? <Glyph name="bookmark" size={14} weight={2} color={palette.accent} /> : null}
+          <DoneToggle
+            done={done}
+            doneNoun={collMeta.doneNoun}
+            name={entity.name}
+            compact
+            onPress={onToggleDone}
+          />
+          <View style={{ transform: [{ scaleX: -1 }] }}>
+            <Glyph name="chevron" size={icon.sm} color={palette.textFaint} />
+          </View>
+        </View>
+      </Card>
+    );
+  }
 
   return (
     <Card padding={0} radius={radius.md}>
@@ -254,24 +356,25 @@ function EntityRow({
             <AppText variant="cardTitle" numberOfLines={1}>
               {entity.name}
             </AppText>
-            {meta || crossSource ? (
+            {metaLine ? (
               <AppText variant="caption" tone="muted" numberOfLines={1} style={{ marginTop: 2 }}>
-                {[meta, crossSource ? `in ${entity.sourceCount} saves` : null].filter(Boolean).join(' · ')}
+                {metaLine}
               </AppText>
             ) : null}
           </View>
           {pinned ? <Glyph name="bookmark" size={14} weight={2} color={palette.accent} /> : null}
-          {!status && done ? <Glyph name="checkSquare" size={16} color={palette.accent} /> : null}
         </Touchable>
 
-        {/* The action strip. Present only where the type has something to act
-            on — an itinerary place has no status model, so it gets nothing
-            rather than an empty row of affordances. */}
-        {status ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, flexWrap: 'wrap' }}>
+        {/* The action strip: the status pill for a type with a status model,
+            a plain done toggle otherwise. Always something tappable — the
+            detail sheet is no longer the only place this can be set. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, flexWrap: 'wrap' }}>
+          {status ? (
             <StatusPill status={status} name={entity.name} onPress={onCycleStatus} />
-          </View>
-        ) : null}
+          ) : (
+            <DoneToggle done={done} doneNoun={collMeta.doneNoun} name={entity.name} onPress={onToggleDone} />
+          )}
+        </View>
       </View>
     </Card>
   );
@@ -531,6 +634,9 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [tab, setTab] = useState<CollectionTab | null>(null);
+  // Itinerary only, and only worth showing past a handful of places — see
+  // `SHOW_PLACE_SEARCH` below.
+  const [placeQuery, setPlaceQuery] = useState('');
 
   const type = nodeType(nodeId);
 
@@ -586,6 +692,7 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
    * union are already the right subset with no extra filtering here.
    */
   const isWorkout = type === 'workout';
+  const isItinerary = type === 'itinerary';
   const workoutSummary = useMemo(
     () => (isWorkout && !hasFolders ? estimateSessionLoad(shown.map((e) => e.fields)) : null),
     [isWorkout, hasFolders, shown],
@@ -618,13 +725,29 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
     Number(b.state?.pinned === true) - Number(a.state?.pinned === true);
 
   /**
-   * Sections are the type's own status model where it has one (Want to watch
-   * / Watching / Watched), and a plain open/done split where it does not.
-   * Both drop empty sections, so a fresh collection is one list rather than
-   * three headings over nothing.
+   * Sections are, in order of preference: an itinerary's places grouped by
+   * day (the fix for "45 identical cards" — a person reads a trip by when
+   * they're somewhere, not by a visited/not-visited split; grouping by
+   * `area` was tried and rejected, see `placeGroups.ts`), the type's own
+   * status model where it has one (Want to watch / Watching / Watched), and
+   * a plain open/done split otherwise. All three drop empty sections, so a
+   * fresh collection is one list rather than headings over nothing.
    */
+  // A search box earns its space past a handful of places — below that a
+  // destination's whole list is already shorter than the box itself.
+  const SHOW_PLACE_SEARCH = isItinerary && shown.length > 6;
+  const normalizedPlaceQuery = placeQuery.trim().toLowerCase();
+
   const sections = useMemo(() => {
-    const sorted = [...shown].sort(byPinned);
+    const base =
+      isItinerary && normalizedPlaceQuery
+        ? shown.filter((e) => e.name.toLowerCase().includes(normalizedPlaceQuery))
+        : shown;
+    const sorted = [...base].sort(byPinned);
+    if (isItinerary) {
+      const groups = groupByDay(sorted.map((e) => ({ day: clean(e.fields.day) })));
+      return groups.map((g) => ({ label: g.label, entities: g.indices.map((i) => sorted[i]) }));
+    }
     if (statusesFor(type)) {
       return bySection(type, sorted).map((s) => ({ label: s.status.label, entities: s.entities }));
     }
@@ -634,7 +757,7 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
       { label: collMeta.sectionLabel, entities: open },
       { label: capitalise(collMeta.doneNoun), entities: done },
     ].filter((s) => s.entities.length > 0);
-  }, [shown, type, collMeta.sectionLabel, collMeta.doneNoun]);
+  }, [shown, type, isItinerary, normalizedPlaceQuery, collMeta.sectionLabel, collMeta.doneNoun]);
 
   const doneCount = shown.filter((e) => e.state?.done === true).length;
   const selected = entities.find((e) => e.entityKey === selectedKey) ?? null;
@@ -642,6 +765,11 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
   // Tabs only on a leaf, and only when the type asks for more than the list.
   const tabs = hasFolders ? [] : collMeta.tabs.filter((t) => t !== 'sources' || summaries.length > 0);
   const activeTab: CollectionTab = tab && tabs.includes(tab) ? tab : (tabs[0] ?? 'entities');
+  // Where the node's own "next up" nudge belongs — Overview when the type
+  // has one (it already exists to answer "why are these together", which is
+  // exactly what the nudge explains), Entities otherwise. Showing the same
+  // card again on Places or on the sources list said the same thing twice.
+  const primaryTab: CollectionTab = tabs.includes('overview') ? 'overview' : 'entities';
 
   /**
    * Optimistic through the store rather than through local component state:
@@ -713,7 +841,7 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
                 key={entity.entityKey}
                 entity={entity}
                 type={type}
-                number={isWorkout ? entityIndex + 1 : undefined}
+                number={isWorkout || isItinerary ? entityIndex + 1 : undefined}
                 onPress={() => setSelectedKey(entity.entityKey)}
                 onCycleStatus={() => cycleStatus(entity)}
                 onToggleDone={() => toggleDone(entity)}
@@ -846,8 +974,11 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
 
         {/* This node's own decide card, above the list it decides over — one
             grounded pick, never a generated one, and gone entirely when the
-            type's own threshold (`@/collections/nextAction`) is not met. */}
-        {nextAction ? (
+            type's own threshold (`@/collections/nextAction`) is not met.
+            Shown once, on `primaryTab` only — repeating it on every tab is
+            what made Places and the sources list feel templated rather than
+            focused on their own job. */}
+        {nextAction && activeTab === primaryTab ? (
           <Reveal index={1}>
             <NextActionCard
               action={nextAction}
@@ -976,7 +1107,59 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
             </Reveal>
           </>
         ) : (
-          entityList
+          <>
+            {SHOW_PLACE_SEARCH ? (
+              <Reveal index={1}>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: spacing.smd,
+                    backgroundColor: palette.surface,
+                    borderWidth: 1,
+                    borderColor: palette.border,
+                    borderRadius: 100,
+                    paddingVertical: spacing.sm,
+                    paddingHorizontal: spacing.lg,
+                    marginBottom: spacing.lg,
+                  }}
+                >
+                  <Glyph name="search" size={16} weight={2} color={palette.textMuted} />
+                  <TextInput
+                    value={placeQuery}
+                    onChangeText={setPlaceQuery}
+                    placeholder={`Search ${collMeta.entityNoun(2)}…`}
+                    placeholderTextColor={palette.textFaint}
+                    accessibilityLabel={`Search ${collMeta.entityNoun(2)}`}
+                    style={{ flex: 1, paddingVertical: 4, fontSize: 14, color: palette.text }}
+                  />
+                  {placeQuery ? (
+                    <Touchable
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear search"
+                      onPress={() => setPlaceQuery('')}
+                      haptic="selection"
+                    >
+                      <AppText variant="caption" tone="muted">
+                        Clear
+                      </AppText>
+                    </Touchable>
+                  ) : null}
+                </View>
+              </Reveal>
+            ) : null}
+            {normalizedPlaceQuery && sections.length === 0 ? (
+              <Reveal index={2}>
+                <Card>
+                  <AppText variant="caption" tone="muted">
+                    No {collMeta.entityNoun(2)} match “{placeQuery.trim()}”.
+                  </AppText>
+                </Card>
+              </Reveal>
+            ) : (
+              entityList
+            )}
+          </>
         )}
       </Screen>
 

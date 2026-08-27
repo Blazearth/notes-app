@@ -31,6 +31,7 @@ import {
   type DetailField,
   type DetailObject,
   type DetailObjectRow,
+  type DetailFieldGroup,
   type EntityStates,
 } from '@/saves/detailModel';
 import { STATUS_LABELS, saveTitle, sourcePlatformName } from '@/saves/format';
@@ -334,21 +335,34 @@ function RelatedRail({ save }: { save: SaveResponse }) {
   );
 }
 
-/** An itinerary place's "Open in Maps" deep link — pure URL, no state. */
+/**
+ * An itinerary place's "Open in Maps" deep link — pure URL, no state.
+ *
+ * Icon-only, sitting in the card's header rather than a labelled row below
+ * the content: with 30+ places on a destination, "Open in Maps" repeated as
+ * text down the whole screen is the loudest thing on it despite being the
+ * least interesting fact about any single place. The pin glyph is universal
+ * enough not to need the label restated, and `accessibilityLabel` keeps it
+ * legible to a screen reader regardless.
+ */
 function MapsButton({ url }: { url: string }) {
-  const { palette, spacing } = useTheme();
+  const { palette, radius } = useTheme();
   return (
     <Touchable
       accessibilityRole="link"
       accessibilityLabel="Open in Maps"
       onPress={() => void Linking.openURL(url).catch(() => {})}
       haptic="light"
-      style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.xs }}
+      style={{
+        width: 30,
+        height: 30,
+        borderRadius: radius.sm,
+        backgroundColor: palette.surface,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
     >
       <Glyph name="mapPin" size={14} color={palette.accent} />
-      <AppText variant="bodySmall" tone="accent">
-        Open in Maps
-      </AppText>
     </Touchable>
   );
 }
@@ -406,7 +420,10 @@ function ObjectCards({
         const line = compactRowLine(object.rows);
         const hasControl =
           (object.control === 'check' || object.control === 'watch') && (object.statePath || object.entityKey);
-        const hasActionRow = hasControl || object.restLabel || object.mapsUrl;
+        // `mapsUrl` is deliberately not part of this: it renders as a small
+        // icon in the header instead of a labelled row, so a list of dozens
+        // of places doesn't repeat "Open in Maps" in text down the screen.
+        const hasActionRow = hasControl || object.restLabel;
 
         return (
           <View
@@ -467,13 +484,54 @@ function ObjectCards({
                     <WatchControl state={state} onChange={applyChange} />
                   ) : null}
                   {object.restLabel ? <RestTimer label={object.restLabel} /> : null}
-                  {object.mapsUrl ? <MapsButton url={object.mapsUrl} /> : null}
                 </View>
               ) : null}
             </View>
+            {object.mapsUrl ? <MapsButton url={object.mapsUrl} /> : null}
           </View>
         );
       })}
+    </View>
+  );
+}
+
+/**
+ * The clustered form of `ObjectCards` — an itinerary's places under "Tokyo",
+ * "Mt. Fuji", "Kyoto" headings instead of one 45-card list. A thin wrapper
+ * rather than a second card renderer: each group is still just `ObjectCards`
+ * with a small heading above it, so a place's own card (thumbnail, tips,
+ * "Open in Maps") is identical either way.
+ */
+function GroupedObjectCards({
+  groups,
+  itemStates,
+  entityStates,
+  onSetItemState,
+  onSetEntityState,
+}: {
+  groups: DetailFieldGroup[];
+  itemStates: ItemStates;
+  entityStates: EntityStates;
+  onSetItemState: SetItemState;
+  onSetEntityState: SetEntityState;
+}) {
+  const { spacing } = useTheme();
+  return (
+    <View style={{ gap: spacing.lg }}>
+      {groups.map((group) => (
+        <View key={group.label}>
+          <AppText variant="label" style={{ marginBottom: spacing.sm }}>
+            {group.label}
+          </AppText>
+          <ObjectCards
+            objects={group.objects}
+            itemStates={itemStates}
+            entityStates={entityStates}
+            onSetItemState={onSetItemState}
+            onSetEntityState={onSetEntityState}
+          />
+        </View>
+      ))}
     </View>
   );
 }
@@ -496,7 +554,15 @@ function Field({
     <View style={{ marginBottom: spacing.xl }}>
       <SectionLabel>{field.label}</SectionLabel>
       {field.progress ? <ProgressBar done={field.progress.done} total={field.progress.total} /> : null}
-      {field.style === 'objects' && field.objects ? (
+      {field.style === 'objects' && field.groups ? (
+        <GroupedObjectCards
+          groups={field.groups}
+          itemStates={itemStates}
+          entityStates={entityStates}
+          onSetItemState={onSetItemState}
+          onSetEntityState={onSetEntityState}
+        />
+      ) : field.style === 'objects' && field.objects ? (
         <ObjectCards
           objects={field.objects}
           itemStates={itemStates}
@@ -1366,10 +1432,12 @@ export function SaveDetailScreen({ id }: { id: string }) {
             </Reveal>
           ) : null}
 
-          {/* Add to Space — states its purpose when nothing is chosen yet
-              ("choose where this belongs") and confirms the result once
-              something is, rather than leaving the user to guess whether the
-              tap did anything. */}
+          {/* Add to Space — organisation, not the reason this screen was
+              opened, so it's a small pill rather than a full-width bar
+              competing with the primary act above it. Still names the
+              result once something is chosen ("Space: Kyoto Trip"), just
+              without the explanatory caption a self-describing icon+label
+              doesn't need. */}
           {save.status === 'ready' ? (
             <Reveal index={2}>
               <Touchable
@@ -1380,11 +1448,12 @@ export function SaveDetailScreen({ id }: { id: string }) {
                 weight="tile"
                 style={{
                   flexDirection: 'row',
+                  alignSelf: 'flex-start',
                   alignItems: 'center',
-                  gap: spacing.smd,
-                  paddingVertical: spacing.sm + 2,
-                  paddingHorizontal: spacing.md,
-                  borderRadius: radius.sm,
+                  gap: spacing.xs,
+                  paddingVertical: spacing.xs + 2,
+                  paddingHorizontal: spacing.smd,
+                  borderRadius: 100,
                   borderWidth: 1,
                   borderColor: currentSpace ? spaceIdentity(currentSpace).color : palette.border,
                   backgroundColor: currentSpace ? `${spaceIdentity(currentSpace).color}14` : palette.surface,
@@ -1393,27 +1462,13 @@ export function SaveDetailScreen({ id }: { id: string }) {
               >
                 <Glyph
                   name={currentSpace ? spaceIdentity(currentSpace).glyph : 'layers'}
-                  size={16}
+                  size={14}
                   weight={2}
                   color={currentSpace ? spaceIdentity(currentSpace).color : palette.textMuted}
                 />
-                <View style={{ flex: 1 }}>
-                  <AppText variant="label" tone={currentSpace ? 'default' : 'muted'}>
-                    {currentSpace ? `Space: ${currentSpace.name}` : 'Add to Space'}
-                  </AppText>
-                  {!currentSpace ? (
-                    <AppText variant="caption" tone="faint" style={{ marginTop: 1 }}>
-                      Choose where this belongs
-                    </AppText>
-                  ) : null}
-                </View>
-                <Glyph
-                  name="chevron"
-                  size={11}
-                  weight={2}
-                  color={palette.textFaint}
-                  style={{ transform: [{ rotate: '180deg' }] }}
-                />
+                <AppText variant="bodySmall" tone={currentSpace ? 'default' : 'muted'}>
+                  {currentSpace ? currentSpace.name : 'Add to Space'}
+                </AppText>
               </Touchable>
             </Reveal>
           ) : null}

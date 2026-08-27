@@ -1,6 +1,7 @@
 import type { SaveResponse } from '@/api/types';
 import { entityKey as computeEntityKey } from '@/collections/entities';
 import { estimateSessionLoad } from '@/collections/workoutLoad';
+import { groupByDay } from '@/collections/placeGroups';
 
 /** One row inside a {@link DetailObject} — a labelled value or chip list. */
 export interface DetailObjectRow {
@@ -51,6 +52,19 @@ export interface DetailObject {
   imageUrl?: string;
 }
 
+/**
+ * A sub-heading inside an `objects`-style field — an itinerary's places
+ * clustered by area and day, so "45 identical cards" becomes "Tokyo, day
+ * 1–3" / "Mt. Fuji, day 4" / "Kyoto, day 5–7" instead of one flat list.
+ * `objects` here is a subset of the parent field's own `objects`, in the
+ * order they should render within the group — nothing here is generated or
+ * merged across sources, just the extracted `area`/`day` used to cluster.
+ */
+export interface DetailFieldGroup {
+  label: string;
+  objects: DetailObject[];
+}
+
 /** A field rendered as its own block: one value, a list of them, or objects. */
 export interface DetailField {
   label: string;
@@ -58,6 +72,12 @@ export interface DetailField {
   text?: string;
   items?: string[];
   objects?: DetailObject[];
+  /**
+   * When present, `objects` above should be rendered clustered under these
+   * headings instead of as one flat list. Absent when clustering would say
+   * nothing — a single area, or no place stating one at all.
+   */
+  groups?: DetailFieldGroup[];
   /** Steps render numbered; ingredients and tags render as chips. */
   style: 'text' | 'chips' | 'steps' | 'objects';
   /**
@@ -386,11 +406,11 @@ function sectionsField(value: unknown, itemStates: ItemStates): DetailField | nu
  */
 function placesField(value: unknown, destination: string | null): DetailField | null {
   if (!Array.isArray(value)) return null;
-  const objects: DetailObject[] = [];
-  for (const raw of value) {
-    if (!isRecord(raw)) continue;
-    const name = clean(raw.name);
-    if (!name) continue;
+  const records = value.filter((raw): raw is Record<string, unknown> => isRecord(raw) && !!clean(raw.name));
+  if (!records.length) return null;
+
+  const objects: DetailObject[] = records.map((raw) => {
+    const name = clean(raw.name) as string;
     const rows: DetailObjectRow[] = [];
     const tips = cleanList(raw.tips);
     if (tips.length) rows.push({ label: 'Tips', items: tips });
@@ -400,14 +420,32 @@ function placesField(value: unknown, destination: string | null): DetailField | 
     if (timeNeeded) rows.push({ label: 'Time needed', text: timeNeeded });
     const area = clean(raw.area);
     const query = area ? `${name}, ${area}` : destination ? `${name}, ${destination}` : name;
-    objects.push({
+    // `day` is left out here: when clustering applies below, it's already
+    // the group heading; when it doesn't (every place shares one day, or
+    // none states one), repeating it per row said nothing the field's own
+    // "Places" heading and context hadn't already.
+    return {
       title: name,
-      meta: join([clean(raw.kind), area, clean(raw.day) ? `day ${clean(raw.day)}` : null]),
+      meta: join([clean(raw.kind), area]),
       rows,
       mapsUrl: mapsUrl(query),
-    });
-  }
-  return objects.length ? { label: 'Places', objects, style: 'objects' } : null;
+    };
+  });
+
+  // Cluster into "Day 1–3" / "Day 4" the way an itinerary is actually read —
+  // but only when clustering says something: a single day (or none at all)
+  // would produce one group repeating the field's own heading, so the flat
+  // list stays the fallback. Grouped by `day`, not `area`: the registry
+  // defines a place's `area` as the neighbourhood *within* it, not the
+  // region it belongs to, so it names a place's own detail, not a group of
+  // places — see `placeGroups.ts`.
+  const dayGroups = groupByDay(records.map((r) => ({ day: clean(r.day) })));
+  const groups: DetailFieldGroup[] | undefined =
+    dayGroups.length > 1
+      ? dayGroups.map((g) => ({ label: g.label, objects: g.indices.map((i) => objects[i]) }))
+      : undefined;
+
+  return { label: 'Places', objects, groups, style: 'objects' };
 }
 
 /**

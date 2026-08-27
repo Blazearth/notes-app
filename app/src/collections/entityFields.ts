@@ -125,12 +125,10 @@ const ROW_META: Record<string, (fields: Record<string, unknown>) => string | nul
     const prescription = sets && reps ? `${sets} × ${reps}` : (sets ?? reps);
     return [prescription, rest ? `rest ${rest}` : null].filter(Boolean).join(' · ') || null;
   },
-  // "Day 1-4 · 4 days" — when to go and how long to allow.
-  itinerary: (f) => {
-    const day = scalarText(f.day);
-    const time = scalarText(f.timeNeeded);
-    return [day ? `Day ${day}` : null, time].filter(Boolean).join(' · ') || null;
-  },
+  // "4 days" — how long to allow. `day` is deliberately left off: the
+  // collection screen groups itinerary places by day, so it's already the
+  // section heading above this row and repeating it here would say it twice.
+  itinerary: (f) => scalarText(f.timeNeeded),
   checklist: (f) => scalarText(f.detail),
 };
 
