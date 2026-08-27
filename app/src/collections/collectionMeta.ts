@@ -75,7 +75,7 @@ const META: Record<string, CollectionTypeMeta> = {
     // No overview: the titles are the content. A summary tab in front of a
     // watchlist is a screen you tap through, not one you read.
     tabs: ['entities', 'sources'],
-    sourcesLabel: 'Recommended by',
+    sourcesLabel: 'Sources',
   },
   checklist: {
     entityNoun: plural('task'),

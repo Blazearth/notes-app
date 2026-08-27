@@ -169,6 +169,30 @@ public final class CollectionAxes {
     }
 
     /**
+     * Synonyms that must bucket together <em>before</em> display naming, not
+     * just look alike after it. Without this, one save's item carrying
+     * {@code kind: "movie"} and another's carrying {@code kind: "film"} land
+     * in two different buckets — each one correctly labelled "Movies" by
+     * {@link #kindDisplayName}, but as two sibling nodes rather than one
+     * merged node ("Anime / Movies / Movies" in the tree). Only entries whose
+     * raw values genuinely differ need a mapping; every other kind in
+     * {@code KIND_DISPLAY_NAMES} already has one raw spelling. Mirrored by
+     * hand in {@code app/src/collections/axes.ts}'s {@code canonicalKind} —
+     * both must agree, or the client-derived and server-derived trees would
+     * disagree on a node's id.
+     */
+    private static final Map<String, String> KIND_CANONICAL = Map.of(
+            "film", "movie",
+            "tv", "series",
+            "show", "series");
+
+    /** The raw {@code kind} value to bucket by — synonyms folded to one spelling, before display naming. */
+    public static String canonicalKind(String kind) {
+        String normalised = kind == null ? "" : kind.trim().toLowerCase(Locale.ROOT);
+        return KIND_CANONICAL.getOrDefault(normalised, normalised);
+    }
+
+    /**
      * Muscle group → training split. The vocabulary is the model's own
      * ({@code muscleGroups: ['chest', 'shoulders', 'triceps']}), and the
      * mapping is the standard one every push/pull/legs program uses.

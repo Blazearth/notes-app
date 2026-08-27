@@ -87,6 +87,27 @@ export function kindDisplayName(kind: string): string {
 }
 
 /**
+ * Synonyms that must bucket together *before* display naming, not just look
+ * alike after it. Without this, one save's item carrying `kind: "movie"` and
+ * another's carrying `kind: "film"` land in two different buckets — each one
+ * correctly labelled "Movies" by `kindDisplayName`, but as two sibling nodes
+ * rather than one merged node ("Anime / Movies / Movies" in the tree). Only
+ * entries whose raw values genuinely differ need a mapping; every other kind
+ * in `KIND_DISPLAY_NAMES` already has one raw spelling.
+ */
+const KIND_CANONICAL: Record<string, string> = {
+  film: 'movie',
+  tv: 'series',
+  show: 'series',
+};
+
+/** The raw `kind` value to bucket by — synonyms folded to one spelling, before display naming. */
+export function canonicalKind(kind: string): string {
+  const normalised = kind.trim().toLowerCase();
+  return KIND_CANONICAL[normalised] ?? normalised;
+}
+
+/**
  * Muscle group → training split. The vocabulary is the model's own
  * (`muscleGroups: ['chest', 'shoulders', 'triceps']`) and the mapping is the
  * standard one every push/pull/legs program uses.

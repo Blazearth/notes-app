@@ -46,14 +46,18 @@ import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { useTheme } from '@/theme/ThemeProvider';
 
 /**
- * How this screen names its own "next up" nudge, per type — "Pick one" reads
- * right over a watchlist, "Keep going" over a checklist that is already
- * underway. Workout has no entry: its own action button and session-load
+ * How this screen names its own "next up" nudge, per type — "Next up" reads
+ * as a plain state ("this is what you're already doing / should do next"),
+ * not a generated recommendation, which is why it stays the default label
+ * rather than something that implies Weavr is picking on your behalf.
+ * "Keep going" over a checklist that is already underway is the one
+ * exception, since a checklist genuinely isn't a "next up" until it's
+ * started. Workout has no entry: its own action button and session-load
  * card (below) already do this job, and a second nudge card would be the
  * same suggestion said twice on one screen.
  */
 const NEXT_ACTION_LABELS: Record<string, string> = {
-  recommendation_list: 'Pick one',
+  recommendation_list: 'Next up',
   itinerary: 'Plan ahead',
   checklist: 'Keep going',
 };
@@ -171,11 +175,13 @@ function SubgroupRow({
 /**
  * One entity, as a row, with whatever controls its type actually supports.
  *
- * The status pill and the stars sit **on the row**, not behind a tap into the
- * sheet. Setting a title to Watching is the single most common thing anyone
- * does on a watchlist, and putting it two taps away turns the screen back
- * into a read-only list of extractions. Types with no status model keep the
- * plain done tick.
+ * The status pill sits **on the row**, not behind a tap into the sheet.
+ * Setting a title to Watching is the single most common thing anyone does on
+ * a watchlist, and putting it two taps away turns the screen back into a
+ * read-only list of extractions. Types with no status model keep the plain
+ * done tick. Rating is deliberately *not* here — five stars repeated down a
+ * list of dozens of titles is noise, and rating is a considered action that
+ * belongs in the detail sheet, not a thing to manage while browsing.
  *
  * The source count is worded "in N saves" and only shown when it is greater
  * than one, where it says *this keeps coming up*. "1 source" on every row is
@@ -188,7 +194,6 @@ function EntityRow({
   onPress,
   onCycleStatus,
   onToggleDone,
-  onRate,
 }: {
   entity: CollectionEntityResponse;
   type: string;
@@ -197,7 +202,6 @@ function EntityRow({
   onPress: () => void;
   onCycleStatus: () => void;
   onToggleDone: () => void;
-  onRate: (rating: number) => void;
 }) {
   const { palette, radius, spacing } = useTheme();
   const typeMeta = saveTypeMeta(type);
@@ -207,7 +211,6 @@ function EntityRow({
   const pinned = entity.state?.pinned === true;
   const crossSource = entity.sourceCount > 1;
   const status = currentStatus(type, entity.state);
-  const rating = typeof entity.state?.rating === 'number' ? entity.state.rating : 0;
 
   const kind = collMeta.showsKind ? clean(entity.kind) : null;
   const meta = entityMetaLine(type, kind, entity.fields);
@@ -262,30 +265,11 @@ function EntityRow({
         </Touchable>
 
         {/* The action strip. Present only where the type has something to act
-            on — an itinerary place has no status model and no rating, so it
-            gets nothing rather than an empty row of affordances. */}
-        {status || collMeta.ratable ? (
+            on — an itinerary place has no status model, so it gets nothing
+            rather than an empty row of affordances. */}
+        {status ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, flexWrap: 'wrap' }}>
-            {status ? (
-              <StatusPill status={status} name={entity.name} onPress={onCycleStatus} />
-            ) : (
-              <Touchable
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: done }}
-                accessibilityLabel={`${entity.name}: ${done ? `mark as not ${collMeta.doneNoun}` : `mark ${collMeta.doneNoun}`}`}
-                onPress={onToggleDone}
-                haptic="light"
-                style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
-              >
-                <Glyph name={done ? 'checkSquare' : 'square'} size={16} color={done ? palette.accent : palette.textMuted} />
-                <AppText variant="caption" tone={done ? 'accent' : 'muted'}>
-                  {done ? capitalise(collMeta.doneNoun) : `Mark ${collMeta.doneNoun}`}
-                </AppText>
-              </Touchable>
-            )}
-            {collMeta.ratable ? (
-              <StarRating rating={rating} name={entity.name} onRate={onRate} />
-            ) : null}
+            <StatusPill status={status} name={entity.name} onPress={onCycleStatus} />
           </View>
         ) : null}
       </View>
@@ -733,7 +717,6 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
                 onPress={() => setSelectedKey(entity.entityKey)}
                 onCycleStatus={() => cycleStatus(entity)}
                 onToggleDone={() => toggleDone(entity)}
-                onRate={(rating) => rate(entity, rating)}
               />
             ))}
           </View>

@@ -11,7 +11,7 @@
  * .java` is the source of truth for merge behaviour if the two drift.
  */
 
-import { axesFor, axisDisplayName, derivedValues, type CollectionAxis } from './axes';
+import { axesFor, axisDisplayName, canonicalKind, derivedValues, type CollectionAxis } from './axes';
 import { entityKey as computeEntityKey } from './entities';
 
 export interface CollectionSource {
@@ -314,7 +314,10 @@ function axisValues(
 }
 
 function entityFieldValues(entity: CollectionEntity, field: string): string[] {
-  if (field === 'kind') return isUsable(entity.kind) ? [entity.kind.trim()] : [];
+  // Canonicalised, not just trimmed — bucketing by the raw extracted spelling
+  // would file "movie" and "film" as two separate nodes that both happen to
+  // display as "Movies". See `canonicalKind`.
+  if (field === 'kind') return isUsable(entity.kind) ? [canonicalKind(entity.kind)] : [];
   return usableStrings(entity.fields[field]);
 }
 

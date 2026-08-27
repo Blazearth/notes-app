@@ -477,7 +477,11 @@ public class CollectionService {
 
     private static List<String> entityFieldValues(CollectionEntity entity, String field) {
         if ("kind".equals(field)) {
-            return isUsable(entity.kind()) ? List.of(entity.kind().trim()) : List.of();
+            // Canonicalised, not just trimmed — bucketing by the raw extracted
+            // spelling would file "movie" and "film" as two separate nodes
+            // that both happen to display as "Movies". See
+            // CollectionAxes.canonicalKind.
+            return isUsable(entity.kind()) ? List.of(CollectionAxes.canonicalKind(entity.kind())) : List.of();
         }
         return usableStrings(entity.fields().get(field));
     }

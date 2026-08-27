@@ -237,7 +237,7 @@ class CollectionServiceTest {
      * The first axis subdivides entities the way groups subdivide saves — but
      * by what each recommended item <em>is</em> ({@code kind}, read off the
      * merged entity) rather than by the list's own {@code medium}. A node's
-     * <b>id keeps the extracted vocabulary</b> ({@code ~film}) while its
+     * <b>id keeps the extracted vocabulary</b> ({@code ~movie}) while its
      * <b>name is the product-facing one</b> ("Movies"), so renaming a folder
      * can never invalidate a deep link.
      */
@@ -245,13 +245,34 @@ class CollectionServiceTest {
     void theFirstAxisSubdividesEntitiesByWhatEachItemIs() {
         CollectionNode recs = tree(
                 recommendationSave("anime", recommendationItem("Blue Box", Map.of("kind", "anime"))),
-                recommendationSave("film", recommendationItem("Parasite", Map.of("kind", "film"))))
+                recommendationSave("film", recommendationItem("Parasite", Map.of("kind", "movie"))))
                 .getFirst();
 
         assertThat(recs.subgroups()).extracting(CollectionNode::name)
                 .containsExactlyInAnyOrder("Anime", "Movies");
         assertThat(recs.subgroups()).extracting(CollectionNode::id)
-                .containsExactlyInAnyOrder("recommendation_list~anime", "recommendation_list~film");
+                .containsExactlyInAnyOrder("recommendation_list~anime", "recommendation_list~movie");
+    }
+
+    /**
+     * The bug this canonicalisation fixes: two items whose {@code kind} is
+     * spelled differently ({@code "movie"} and {@code "film"}) but both
+     * display as "Movies" must land in <em>one</em> bucket, not two siblings
+     * that both happen to be named "Movies". Bucketing by the raw extracted
+     * spelling — which is what {@link CollectionAxes#canonicalKind} replaced —
+     * would produce exactly that duplicate.
+     */
+    @Test
+    void kindSynonymsMergeIntoOneBucketNotDuplicateSiblings() {
+        CollectionNode recs = tree(
+                recommendationSave("mixed",
+                        recommendationItem("Parasite", Map.of("kind", "movie")),
+                        recommendationItem("Oldboy", Map.of("kind", "film"))))
+                .getFirst();
+
+        assertThat(recs.subgroups()).extracting(CollectionNode::name).containsExactly("Movies");
+        assertThat(recs.subgroups()).extracting(CollectionNode::id).containsExactly("recommendation_list~movie");
+        assertThat(recs.subgroups().getFirst().entityCount()).isEqualTo(2);
     }
 
     /**
@@ -293,7 +314,9 @@ class CollectionServiceTest {
 
         assertThat(CollectionService.mergeType(saves, "recommendation_list", "anime"))
                 .extracting(CollectionEntity::name).containsExactly("Blue Box");
-        assertThat(CollectionService.mergeType(saves, "recommendation_list", "film"))
+        // "film" canonicalises to "movie" (CollectionAxes.canonicalKind), so that's
+        // the facet value the node actually resolves under.
+        assertThat(CollectionService.mergeType(saves, "recommendation_list", "movie"))
                 .extracting(CollectionEntity::name).containsExactly("Parasite");
     }
 
@@ -472,7 +495,7 @@ class CollectionServiceTest {
                 "recommendation_list",
                 "recommendation_list~anime",
                 "recommendation_list~anime~romance",
-                "recommendation_list~film~thriller");
+                "recommendation_list~movie~thriller");
 
         assertThat(CollectionService.mergeNode(saves, "recommendation_list~anime~romance", CollectionOverrides.EMPTY))
                 .extracting(CollectionEntity::name)
