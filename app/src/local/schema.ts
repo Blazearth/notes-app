@@ -220,4 +220,6 @@ export const KV = {
    * running two seconds fast would step its cursor past rows it never received.
    */
   syncCursor: 'sync_cursor',
+  /** Recent search queries, most-recent-first — a plain `string[]`, client-only. */
+  recentSearches: 'recent_searches',
 } as const;

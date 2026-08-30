@@ -15,7 +15,7 @@ import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { useLiveValue } from '@/local';
 import { DERIVED_TABLES, readCollections } from '@/local/derived';
-import { saveTitle, STATUS_LABELS } from '@/saves/format';
+import { saveTitle, STATUS_LABELS, TRY_IT_EXAMPLES } from '@/saves/format';
 import { saveTypeMeta } from '@/saves/saveTypeMeta';
 import { writeSaveFlags, writeDeleteSave } from '@/local/writes';
 import { useSaves } from '@/saves/SavesProvider';
@@ -146,7 +146,7 @@ function TypeTile({ type, count, onPress }: { type: string; count: number; onPre
  * either screen knowing about the other.
  */
 export function LibraryScreen() {
-  const { palette, layout, radius, spacing } = useTheme();
+  const { palette, layout, radius, spacing, icon } = useTheme();
   const { saves, status, error, refresh, refreshing } = useSaves();
   const router = useRouter();
   const [filter, setFilter] = useState<string>(ALL);
@@ -529,9 +529,38 @@ export function LibraryScreen() {
             <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
               Your library is empty
             </AppText>
-            <AppText variant="caption" tone="muted">
-              Tap + and paste a link, or share something into Weavr from another app.
+            <AppText variant="bodySmall" tone="muted" style={{ marginBottom: spacing.md }}>
+              Paste a link, or share anything into Weavr from another app — it'll organize it for you.
             </AppText>
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel="Add something"
+              onPress={() => router.push('/capture')}
+              haptic="medium"
+              weight="tile"
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: spacing.smd,
+                paddingVertical: spacing.md,
+                borderRadius: radius.sm,
+                backgroundColor: palette.accent,
+                marginBottom: spacing.lg,
+              }}
+            >
+              <Glyph name="plus" size={icon.sm} weight={2} color={palette.onAccent} />
+              <AppText variant="label" style={{ color: palette.onAccent }}>
+                Add something
+              </AppText>
+            </Touchable>
+
+            <SectionLabel>Try it with</SectionLabel>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+              {TRY_IT_EXAMPLES.map((label) => (
+                <Chip key={label} label={label} onPress={() => router.push('/capture')} />
+              ))}
+            </View>
           </Card>
         </Reveal>
       ) : null}

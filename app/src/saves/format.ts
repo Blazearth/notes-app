@@ -144,6 +144,15 @@ export function relativeTime(iso: string): string {
   return new Date(then).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/**
+ * Illustrative only, for an empty Home/Library's "Try it with" row — every
+ * chip opens the same Capture sheet as the "Add something" button. There is
+ * no per-platform capture path to link to, so naming a spread of sources here
+ * is purely to make "paste anything" concrete on an otherwise-empty screen,
+ * never a claim that these do something different from one another.
+ */
+export const TRY_IT_EXAMPLES = ['YouTube', 'Instagram', 'Reddit', 'Article', 'Product'];
+
 export const STATUS_LABELS: Record<SaveStatus, string> = {
   processing: 'Processing',
   // Not a failure. The daily AI budget was spent, so the save waits for the next

@@ -4,17 +4,80 @@ import { ActivityIndicator, TextInput, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
-import type { SearchHit } from '@/api/types';
+import type { SaveResponse, SearchHit } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
 import { Reveal } from '@/components/Reveal';
 import { SaveCard } from '@/components/SaveCard';
 import { Screen } from '@/components/Screen';
+import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
-import { getStore } from '@/local';
+import { getStore, KV } from '@/local';
+import { buildCardModel } from '@/saves/cardModel';
 import { mergeSearchHits, toLocalHits } from '@/search/merge';
 import { useTheme } from '@/theme/ThemeProvider';
+
+/**
+ * A handful of example queries that show what semantic search can do — not
+ * drawn from any real library, so they never claim a specific result exists.
+ * Tapping one runs a real search rather than previewing fake results.
+ */
+const SUGGESTED_QUERIES = [
+  'romance anime without school',
+  'places worth visiting in Japan',
+  'workouts for back and biceps',
+];
+
+const RECENT_SEARCHES_LIMIT = 6;
+
+async function loadRecentSearches(): Promise<string[]> {
+  return (await getStore().readKv<string[]>(KV.recentSearches)) ?? [];
+}
+
+/** Most-recent-first, deduped case-insensitively, capped. Client-only — never synced. */
+async function pushRecentSearch(query: string): Promise<string[]> {
+  const store = getStore();
+  const existing = (await store.readKv<string[]>(KV.recentSearches)) ?? [];
+  const next = [query, ...existing.filter((q) => q.toLowerCase() !== query.toLowerCase())].slice(
+    0,
+    RECENT_SEARCHES_LIMIT,
+  );
+  await store.putKv(KV.recentSearches, next);
+  return next;
+}
+
+/**
+ * Which of the query's own words literally appear in what the card already
+ * shows (title + meta) — real, derivable overlap, never a guess at *why* a
+ * semantic match fired. There is no server signal for that, so nothing here
+ * claims one: a `semantic`-only hit gets `SemanticBadge` and nothing more.
+ */
+function matchedWords(query: string, save: SaveResponse): string[] {
+  const model = buildCardModel(save);
+  const haystack = [model?.title, model?.meta]
+    .filter((v): v is string => !!v)
+    .join(' ')
+    .toLowerCase();
+  if (!haystack) return [];
+  const words = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ''))
+    .filter((w) => w.length > 2);
+  return [...new Set(words.filter((w) => haystack.includes(w)))];
+}
+
+/**
+ * `semantic`-only hits first, ahead of anything the query's own words also
+ * touched — a two-stage read only when the split says something: an
+ * all-semantic or all-direct result list renders flat instead.
+ */
+function splitHits(hits: SearchHit[]): { direct: SearchHit[]; related: SearchHit[]; showSplit: boolean } {
+  const direct = hits.filter((h) => h.match !== 'semantic');
+  const related = hits.filter((h) => h.match === 'semantic');
+  return { direct, related, showSplit: direct.length > 0 && related.length > 0 };
+}
 
 /**
  * How long the field stays quiet before a *server* query goes out.
@@ -79,8 +142,34 @@ function SemanticBadge() {
       }}
     >
       <AppText variant="caption" tone="muted" style={{ fontSize: 9.5 }}>
-        related
+        by meaning
       </AppText>
+    </View>
+  );
+}
+
+/** One result row: the card itself, plus — only for a hybrid hit with a real
+ * literal overlap — the words that overlap. Never shown for a `semantic`-only
+ * hit, which has no literal words to report. */
+function ResultRow({
+  hit,
+  query,
+  onPress,
+}: {
+  hit: SearchHit;
+  query: string;
+  onPress: () => void;
+}) {
+  const { spacing } = useTheme();
+  const matched = hit.match === 'both' ? matchedWords(query, hit.save) : [];
+  return (
+    <View style={{ gap: 4 }}>
+      <SaveCard save={hit.save} trailing={hit.match === 'semantic' ? <SemanticBadge /> : undefined} onPress={onPress} />
+      {matched.length > 0 ? (
+        <AppText variant="caption" tone="faint" style={{ marginLeft: spacing.smd }}>
+          Matched: {matched.join(' · ')}
+        </AppText>
+      ) : null}
     </View>
   );
 }
@@ -91,6 +180,11 @@ export function SearchScreen() {
 
   const [query, setQuery] = useState('');
   const [state, setState] = useState<State>({ kind: 'idle' });
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+
+  useEffect(() => {
+    void loadRecentSearches().then(setRecentSearches);
+  }, []);
 
   /**
    * Guards against a slow early request landing after a fast later one and
@@ -136,6 +230,10 @@ export function SearchScreen() {
   const runServer = useCallback(
     async (ticket: number, trimmed: string) => {
       if (!trimmed) return;
+      // Recorded here, not on every keystroke: reaching the debounced server
+      // call is what makes a query a real search rather than a word typed and
+      // then changed.
+      void pushRecentSearch(trimmed).then(setRecentSearches);
       try {
         const hits = await repo.searchSaves(trimmed);
         if (ticket !== seq.current) return;
@@ -244,7 +342,7 @@ export function SearchScreen() {
             autoFocus
             returnKeyType="search"
             onSubmitEditing={searchNow}
-            placeholder="Ask or find anything…"
+            placeholder="Search your library…"
             placeholderTextColor={palette.textFaint}
             accessibilityLabel="Search your saves"
             style={{
@@ -269,17 +367,56 @@ export function SearchScreen() {
         </View>
       </Reveal>
 
+      {/* Compact by design — this disappears the moment a keystroke lands
+          (`query` becomes non-empty, which flips `state.kind` away from
+          `idle` in the effect below), so it never competes with the keyboard
+          for space. No `Card` chrome: this is orientation, not content. */}
       {state.kind === 'idle' ? (
         <Reveal index={1}>
-          <Card>
-            <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
-              Search everything you have saved
+          <View style={{ marginBottom: spacing.xl }}>
+            <SectionLabel>Search by meaning</SectionLabel>
+            <AppText variant="bodySmall" tone="muted" style={{ marginBottom: spacing.md }}>
+              Search by words, or describe what you're looking for.
             </AppText>
-            <AppText variant="caption" tone="muted">
-              Exact words work, and so does describing what you are after — "somewhere nice to eat
-              in Copenhagen" finds the place even if you never wrote those words down.
-            </AppText>
-          </Card>
+            <View style={{ gap: 2 }}>
+              {SUGGESTED_QUERIES.map((example) => (
+                <Touchable
+                  key={example}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Search for ${example}`}
+                  onPress={() => setQuery(example)}
+                  haptic="selection"
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm }}
+                >
+                  <Glyph name="search" size={13} weight={2} color={palette.textFaint} />
+                  <AppText variant="bodySmall" tone="muted">
+                    “{example}”
+                  </AppText>
+                </Touchable>
+              ))}
+            </View>
+          </View>
+
+          {recentSearches.length > 0 ? (
+            <View>
+              <SectionLabel>Recent searches</SectionLabel>
+              <View style={{ gap: 2 }}>
+                {recentSearches.map((q) => (
+                  <Touchable
+                    key={q}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Search again for ${q}`}
+                    onPress={() => setQuery(q)}
+                    haptic="selection"
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm }}
+                  >
+                    <Glyph name="clock" size={13} weight={2} color={palette.textFaint} />
+                    <AppText variant="bodySmall">{q}</AppText>
+                  </Touchable>
+                ))}
+              </View>
+            </View>
+          ) : null}
         </Reveal>
       ) : null}
 
@@ -369,21 +506,38 @@ export function SearchScreen() {
         </Reveal>
       ) : null}
 
-      {state.kind === 'results' && state.hits.length > 0 ? (
-        <View style={{ gap: spacing.smd }}>
-          {state.hits.map((hit, i) => (
-            <Reveal key={hit.save.id} index={i}>
-              <SaveCard
-                save={hit.save}
-                trailing={hit.match === 'semantic' ? <SemanticBadge /> : undefined}
-                onPress={() =>
-                  router.push({ pathname: '/save/[id]', params: { id: hit.save.id } })
-                }
-              />
-            </Reveal>
-          ))}
-        </View>
-      ) : null}
+      {state.kind === 'results' && state.hits.length > 0
+        ? (() => {
+            const { direct, related, showSplit } = splitHits(state.hits);
+            const goTo = (id: string) => () => router.push({ pathname: '/save/[id]', params: { id } });
+            return (
+              <View style={{ gap: spacing.smd }}>
+                <AppText variant="caption" tone="faint">
+                  {state.hits.length} {state.hits.length === 1 ? 'result' : 'results'}
+                </AppText>
+                {direct.map((hit, i) => (
+                  <Reveal key={hit.save.id} index={i}>
+                    <ResultRow hit={hit} query={state.query} onPress={goTo(hit.save.id)} />
+                  </Reveal>
+                ))}
+                {/* Only when the split says something: a query that returned
+                    nothing but semantic hits (or nothing but literal ones)
+                    renders as one flat list instead of a section with nothing
+                    above or below it. */}
+                {showSplit ? (
+                  <>
+                    <SectionLabel>Also related</SectionLabel>
+                    {related.map((hit, i) => (
+                      <Reveal key={hit.save.id} index={direct.length + i}>
+                        <ResultRow hit={hit} query={state.query} onPress={goTo(hit.save.id)} />
+                      </Reveal>
+                    ))}
+                  </>
+                ) : null}
+              </View>
+            );
+          })()
+        : null}
     </Screen>
   );
 }

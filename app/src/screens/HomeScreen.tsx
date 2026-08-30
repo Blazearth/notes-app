@@ -10,6 +10,7 @@ import { KV, useLiveValue } from '@/local';
 import { DERIVED_TABLES, readCollections, readContinueSaves, readGroups, readTopNextAction } from '@/local/derived';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
+import { Chip } from '@/components/Chip';
 import { CollectionCard } from '@/components/CollectionCard';
 import { Glyph } from '@/components/Glyph';
 import { NextActionCard } from '@/components/NextActionCard';
@@ -28,7 +29,7 @@ import { morphFrom } from '@/motion/morph';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import { useDigestDismissed } from '@/saves/digestDismiss';
 import { daysLeftInWeek } from '@/saves/digestWeek';
-import { STATUS_LABELS, saveTitle } from '@/saves/format';
+import { STATUS_LABELS, saveTitle, TRY_IT_EXAMPLES } from '@/saves/format';
 import { useSaves } from '@/saves/SavesProvider';
 import { writeSaveFlags, writeDeleteSave } from '@/local/writes';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -289,7 +290,7 @@ function subgroupPreview(group: KnowledgeGroup): string | null {
  * during development.
  */
 function RecentlyCaptured({ limit }: { limit: number }) {
-  const { palette, spacing } = useTheme();
+  const { palette, radius, spacing, icon } = useTheme();
   const { saves, status, error, refresh } = useSaves();
   // Don't show archived saves on Home — they belong in the Archived filter in Library
   const visibleSaves = saves.filter((s) => !s.archived);
@@ -322,14 +323,45 @@ function RecentlyCaptured({ limit }: { limit: number }) {
   }
 
   if (saves.length === 0) {
+    // Purely the empty state — every branch above returns before this one,
+    // and this one stops rendering the moment `saves.length` is nonzero.
     return (
       <Card>
         <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
           Nothing saved yet
         </AppText>
-        <AppText variant="caption" tone="muted">
-          Tap + and paste a link, or share something into Weavr from another app.
+        <AppText variant="bodySmall" tone="muted" style={{ marginBottom: spacing.md }}>
+          Paste a link, or share anything into Weavr from another app — it'll organize it for you.
         </AppText>
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel="Add something"
+          onPress={() => router.push('/capture')}
+          haptic="medium"
+          weight="tile"
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: spacing.smd,
+            paddingVertical: spacing.md,
+            borderRadius: radius.sm,
+            backgroundColor: palette.accent,
+            marginBottom: spacing.lg,
+          }}
+        >
+          <Glyph name="plus" size={icon.sm} weight={2} color={palette.onAccent} />
+          <AppText variant="label" style={{ color: palette.onAccent }}>
+            Add something
+          </AppText>
+        </Touchable>
+
+        <SectionLabel>Try it with</SectionLabel>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+          {TRY_IT_EXAMPLES.map((label) => (
+            <Chip key={label} label={label} onPress={() => router.push('/capture')} />
+          ))}
+        </View>
       </Card>
     );
   }
