@@ -2,6 +2,15 @@ import { useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { ApiError } from '@/api/client';
 import type { SaveResponse, Space } from '@/api/types';
@@ -34,7 +43,9 @@ import {
   type DetailFieldGroup,
   type EntityStates,
 } from '@/saves/detailModel';
-import { STATUS_LABELS, saveTitle, sourcePlatformName } from '@/saves/format';
+import { bareUrl, STATUS_LABELS, saveTitle, sourceKindLabel, sourcePlatformName } from '@/saves/format';
+import { canRetry, isRetrying, resolveRetry, retryTarget, startRetry } from '@/saves/retry';
+import { useSaves } from '@/saves/SavesProvider';
 import { baseServings, scaleQuantity } from '@/saves/scaling';
 import { groupItemNoun, saveTypeMeta } from '@/saves/saveTypeMeta';
 import { FACETS, isUsableFacetValue } from '@/knowledge/facets';
@@ -719,6 +730,72 @@ function CookMode({ steps, onClose }: { steps: string[]; onClose: () => void }) 
 }
 
 /**
+ * Three dots pulsing in staggered sequence — signals "still working, no
+ * action needed" without claiming literal per-step progress the client has
+ * no way to observe. Mirrors `Skeleton`'s reanimated idiom and respects
+ * reduced-motion the same way.
+ */
+function PulsingDots() {
+  const { palette } = useTheme();
+  const reduced = useReducedMotion();
+  const d1 = useSharedValue(reduced ? 0.7 : 0.3);
+  const d2 = useSharedValue(reduced ? 0.7 : 0.3);
+  const d3 = useSharedValue(reduced ? 0.7 : 0.3);
+
+  useEffect(() => {
+    if (reduced) return;
+    const pulse = (v: typeof d1, delay: number) => {
+      v.value = withDelay(
+        delay,
+        withRepeat(withSequence(withTiming(1, { duration: 400 }), withTiming(0.3, { duration: 400 })), -1, true),
+      );
+    };
+    pulse(d1, 0);
+    pulse(d2, 150);
+    pulse(d3, 300);
+  }, [reduced, d1, d2, d3]);
+
+  const s1 = useAnimatedStyle(() => ({ opacity: d1.value }));
+  const s2 = useAnimatedStyle(() => ({ opacity: d2.value }));
+  const s3 = useAnimatedStyle(() => ({ opacity: d3.value }));
+
+  return (
+    <View style={{ flexDirection: 'row', gap: 5 }}>
+      {[s1, s2, s3].map((style, i) => (
+        <Animated.View
+          key={i}
+          style={[{ width: 6, height: 6, borderRadius: 3, backgroundColor: palette.textMuted }, style]}
+        />
+      ))}
+    </View>
+  );
+}
+
+/**
+ * What Weavr broadly does to a save, as a calm static list — not a literal
+ * per-item tracker, because the client has no signal for which stage is
+ * actually running. Claiming step 1 is "done" while step 2 is "active" would
+ * be inventing progress the pipeline never reported.
+ */
+const PROCESSING_STAGES = ['Reading source', 'Extracting details', 'Organizing results'];
+
+function StageList() {
+  const { palette, spacing } = useTheme();
+  return (
+    <View style={{ gap: 6 }}>
+      {PROCESSING_STAGES.map((stage) => (
+        <View key={stage} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+          <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: palette.textFaint }} />
+          <AppText variant="bodySmall" tone="muted">
+            {stage}
+          </AppText>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
  * The status page for a save the pipeline has not finished with.
  *
  * A processing or failed save is a legitimate thing to open — it is in the feed
@@ -726,52 +803,132 @@ function CookMode({ steps, onClose }: { steps: string[]; onClose: () => void }) 
  * empty detail view. `pending` is called out separately because it is not a
  * failure: the daily model budget was spent and the save is queued for the next
  * window, which the user should read as "waiting", not "broken".
+ *
+ * Never tells the user to refresh anything: `SavesProvider` already polls a
+ * `processing` save every couple of seconds and writes the result straight
+ * into the local store, so this screen's own `useLive` subscription re-renders
+ * it the moment the status changes — no action needed, so none is asked for.
  */
 function UnfinishedSave({ save }: { save: SaveResponse }) {
-  const { palette, spacing } = useTheme();
+  const { palette, spacing, radius } = useTheme();
+  const router = useRouter();
+  const { saves } = useSaves();
+  const [retrying, setRetrying] = useState(() => isRetrying(save.id));
+  const target = retrying ? retryTarget(save.id, saves) : undefined;
 
-  const copy: Record<string, { title: string; body: string }> = {
-    processing: {
-      title: 'Still working on this one',
-      body: 'Weavr is reading the source and pulling out the details. Pull down on the feed to check again.',
-    },
-    pending: {
-      title: 'Queued for tomorrow',
-      body: "Today's AI budget is spent, so this save is waiting for the next window. Nothing is lost — it will be processed automatically.",
-    },
-    failed: {
-      title: "Couldn't process this",
-      body: save.errorMessage ?? 'Something went wrong and Weavr could not extract anything useful.',
-    },
-    // Pipeline ran fine — the content just had nothing extractable
-    // (login wall, video-only Short, empty transcript, etc.).
-    unusable: {
-      title: 'Nothing to extract here',
-      body: "Weavr read this content but couldn't pull out any useful information — it may be behind a login wall, have no transcript, or contain only media.",
-    },
+  // Same mechanism as the feed's `SaveCard` retry: watches the linked attempt
+  // through the same live store every screen reads, advancing the instant the
+  // pipeline moves the new save to `ready` or `failed`.
+  useEffect(() => {
+    if (!retrying || !target) return;
+    if (target.status === 'ready') {
+      resolveRetry(save.id, target, true);
+      // A successful retry deletes *this* row (see `saves/retry.ts`), so
+      // staying put would leave the screen pointed at a save that no longer
+      // exists. Hand off to the new one instead of re-rendering into a void.
+      router.replace({ pathname: '/save/[id]', params: { id: target.id } });
+    } else if (target.status === 'failed') {
+      resolveRetry(save.id, target, false);
+      setRetrying(false);
+    }
+  }, [retrying, target, save.id, router]);
+
+  const handleRetry = () => {
+    if (retrying) return;
+    if (startRetry(save, saves)) setRetrying(true);
   };
 
-  // For unusable saves (now status=ready), key off knowledgeType.
-  const key = save.knowledgeType === 'unusable' ? 'unusable' : save.status;
-  const { title, body } = copy[key] ?? copy.processing;
+  if (save.knowledgeType === 'unusable') {
+    // Pipeline ran fine — the content just had nothing extractable (login
+    // wall, video-only Short, empty transcript, etc.).
+    return (
+      <Card>
+        <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
+          Nothing to extract here
+        </AppText>
+        <AppText variant="bodySmall" tone="muted">
+          Weavr read this content but couldn't pull out any useful information — it may be behind a login wall,
+          have no transcript, or contain only media.
+        </AppText>
+      </Card>
+    );
+  }
 
+  if (save.status === 'pending') {
+    return (
+      <Card>
+        <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
+          Queued for tomorrow
+        </AppText>
+        <AppText variant="bodySmall" tone="muted">
+          Today's AI budget is spent, so this save is waiting for the next window. Nothing is lost — it will be
+          processed automatically.
+        </AppText>
+      </Card>
+    );
+  }
+
+  if (save.status === 'failed') {
+    return (
+      <Card>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md }}>
+          <View style={{ flex: 1 }}>
+            <AppText variant="cardTitle" style={{ marginBottom: spacing.xs, color: palette.danger }}>
+              What went wrong
+            </AppText>
+            <AppText variant="bodySmall" tone="muted">
+              {save.errorMessage ?? 'Something went wrong and Weavr could not extract anything useful.'}
+            </AppText>
+            {save.errorCode ? (
+              <AppText variant="caption" tone="muted" style={{ marginTop: spacing.md, color: palette.textFaint }}>
+                {save.errorCode}
+              </AppText>
+            ) : null}
+          </View>
+          {retrying ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+              <ActivityIndicator size="small" color={palette.textMuted} />
+              <AppText variant="caption" tone="muted" style={{ fontSize: 11 }}>
+                Retrying…
+              </AppText>
+            </View>
+          ) : canRetry(save) ? (
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel="Retry"
+              onPress={handleRetry}
+              haptic="selection"
+              style={{
+                paddingVertical: spacing.xs,
+                paddingHorizontal: spacing.smd,
+                borderRadius: radius.pill,
+                borderWidth: 1,
+                borderColor: palette.border,
+              }}
+            >
+              <AppText variant="label" tone="accent" style={{ fontSize: 12 }}>
+                Retry
+              </AppText>
+            </Touchable>
+          ) : null}
+        </View>
+      </Card>
+    );
+  }
+
+  // `processing` — the only state left.
   return (
     <Card>
       <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
-        {title}
+        Reading your source…
       </AppText>
-      <AppText variant="bodySmall" tone="muted">
-        {body}
+      <AppText variant="bodySmall" tone="muted" style={{ marginBottom: spacing.lg }}>
+        Weavr is extracting the useful details. This usually takes a few seconds.
       </AppText>
-      {save.status === 'failed' && save.errorCode ? (
-        <AppText
-          variant="caption"
-          tone="muted"
-          style={{ marginTop: spacing.md, color: palette.textFaint }}
-        >
-          {save.errorCode}
-        </AppText>
-      ) : null}
+      <View style={{ marginBottom: spacing.md }}>
+        <PulsingDots />
+      </View>
+      <StageList />
     </Card>
   );
 }
@@ -970,69 +1127,6 @@ function SourcePreviewCard({ uri }: { uri: string }) {
   );
 }
 
-/**
- * Everything the model or an enricher produced that no bespoke layout claimed
- * — real data, just not curated for this type — collapsed behind a toggle
- * rather than shown at the same priority as Ingredients or Genre. Renders
- * nothing when there's nothing to disclose.
- */
-function MoreDetails({
-  fields,
-  itemStates,
-  entityStates,
-  onSetItemState,
-  onSetEntityState,
-}: {
-  fields: DetailField[];
-  itemStates: ItemStates;
-  entityStates: EntityStates;
-  onSetItemState: SetItemState;
-  onSetEntityState: SetEntityState;
-}) {
-  const { palette, spacing } = useTheme();
-  const [open, setOpen] = useState(false);
-
-  if (fields.length === 0) return null;
-
-  return (
-    <View style={{ marginBottom: spacing.xl }}>
-      <Touchable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-        accessibilityLabel={open ? 'Hide more details' : 'Show more details'}
-        onPress={() => setOpen((v) => !v)}
-        haptic="light"
-        style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.xs }}
-      >
-        <AppText variant="sectionLabel" tone="muted">
-          More details
-        </AppText>
-        <Glyph
-          name="chevron"
-          size={10}
-          weight={2}
-          color={palette.textFaint}
-          style={{ transform: [{ rotate: open ? '90deg' : '-90deg' }] }}
-        />
-      </Touchable>
-      {open ? (
-        <View style={{ marginTop: spacing.sm }}>
-          {fields.map((field) => (
-            <Field
-              key={field.label}
-              field={field}
-              itemStates={itemStates}
-              entityStates={entityStates}
-              onSetItemState={onSetItemState}
-              onSetEntityState={onSetEntityState}
-            />
-          ))}
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
 export function SaveDetailScreen({ id }: { id: string }) {
   const { palette, radius, spacing } = useTheme();
 
@@ -1146,15 +1240,28 @@ export function SaveDetailScreen({ id }: { id: string }) {
   const isRecipe = save?.knowledgeType === 'recipe';
   const isTextNote = save?.sourceType === 'text';
   const isImageSave = save?.sourceType === 'image';
+  // Before the pipeline has classified anything, `saveTitle`'s fallback is
+  // the bare host+path of the URL — technically accurate, but a wall of raw
+  // URL as the hero headline reads as broken rather than "still working".
+  // "Saving this Short" names what's actually happening instead; a failed
+  // save gets the past-tense verb so the hero doesn't read as still in
+  // progress right above a card that says otherwise.
+  const unfinishedHeadline =
+    save && !model && !isTextNote
+      ? `${save.status === 'failed' ? "Couldn't save" : 'Saving'} this ${sourceKindLabel(save)}`
+      : undefined;
+  const unfinishedSubtitle =
+    unfinishedHeadline && save?.sourceUrl
+      ? [sourcePlatformName(save.sourceUrl), sourceKindLabel(save) !== 'link' ? sourceKindLabel(save) : null]
+          .filter((p): p is string => !!p)
+          .join(' ')
+      : undefined;
   // Ingredients render through `RecipeIngredients` for recipes (it needs the
   // raw structured shape to scale by servings) rather than the model's
-  // already-flattened chip strings.
-  const allDisplayFields = model ? (isRecipe ? model.fields.filter((f) => f.label !== 'Ingredients') : model.fields) : [];
-  // Bespoke fields (Genre, Rating, Exercises…) render at full priority;
-  // generic leftovers — real data a type's own branch didn't curate — wait
-  // behind "More details" instead of competing with them for attention.
-  const displayFields = allDisplayFields.filter((f) => !f.secondary);
-  const moreDetailFields = allDisplayFields.filter((f) => f.secondary);
+  // already-flattened chip strings. Bespoke fields and generic leftovers
+  // (Category, page count, …) render at the same priority — nothing that
+  // helps explain the item gets tucked behind a disclosure.
+  const displayFields = model ? (isRecipe ? model.fields.filter((f) => f.label !== 'Ingredients') : model.fields) : [];
 
   // Whether there's a real, openable act already covering "what can I do with
   // this" — the shopping list, cook mode, or a Maps deep link. Only when none
@@ -1299,27 +1406,24 @@ export function SaveDetailScreen({ id }: { id: string }) {
                     }}
                   />
                 ) : (
-                  <AppText variant="display">{model?.title ?? saveTitle(save)}</AppText>
+                  <AppText variant="display">{unfinishedHeadline ?? model?.title ?? saveTitle(save)}</AppText>
                 )}
 
-                {!isTextNote && model?.meta ? (
+                {!isTextNote && (model?.meta ?? unfinishedSubtitle) ? (
                   <AppText variant="bodySmall" tone="muted" style={{ marginTop: 3 }}>
-                    {model.meta}
+                    {model?.meta ?? unfinishedSubtitle}
+                  </AppText>
+                ) : null}
+                {unfinishedSubtitle && save?.sourceUrl ? (
+                  <AppText variant="caption" tone="faint" numberOfLines={1} style={{ marginTop: 2 }}>
+                    {bareUrl(save.sourceUrl)}
                   </AppText>
                 ) : null}
               </View>
             </View>
           </Reveal>
 
-          {model?.lede ? (
-            <Reveal index={1}>
-              <AppText style={{ marginTop: spacing.md, marginBottom: spacing.lg, lineHeight: 22 }}>
-                {model.lede}
-              </AppText>
-            </Reveal>
-          ) : (
-            <View style={{ marginBottom: spacing.lg }} />
-          )}
+          <View style={{ marginBottom: spacing.lg }} />
 
           {/* The original screenshot — real context for the extraction, not
               the reason the save was opened, so it's a compact card rather
@@ -1487,6 +1591,16 @@ export function SaveDetailScreen({ id }: { id: string }) {
             </Reveal>
           ) : null}
 
+          {/* Summary — the reason a saved item is useful later, not secondary
+              metadata, so it renders right after Progress and before every
+              other extracted field. */}
+          {model?.lede ? (
+            <Reveal index={3}>
+              <SectionLabel>Summary</SectionLabel>
+              <AppText style={{ marginBottom: spacing.xl, lineHeight: 22 }}>{model.lede}</AppText>
+            </Reveal>
+          ) : null}
+
           {model && isRecipe ? (
             <Reveal index={3}>
               <RecipeIngredients data={save.structuredData ?? {}} />
@@ -1573,10 +1687,13 @@ export function SaveDetailScreen({ id }: { id: string }) {
           {/* Source — provenance, not a technical field. Plain text, no
               border or background: this is informational, not an action the
               rest of the screen's buttons are competing with, and the raw
-              URL never needs to be on screen for the tap to work. Never
-              shown for a screenshot: its `sourceUrl` is the same Supabase
-              Storage object already visible as the source-context card
-              above, not a second, distinct provenance worth restating. */}
+              URL never needs to be on screen for the tap to work. The CTA text
+              only repeats "Open source" when this row is the *only* way to
+              open it — a bespoke act (recipe, place) already ate the primary
+              button above, so here it's just an arrow. Never shown for a
+              screenshot: its `sourceUrl` is the same Supabase Storage object
+              already visible as the source-context card above, not a second,
+              distinct provenance worth restating. */}
           {save.sourceUrl && !isImageSave ? (
             <Reveal index={4 + (displayFields.length ?? 1)}>
               <SectionLabel>Source</SectionLabel>
@@ -1601,7 +1718,7 @@ export function SaveDetailScreen({ id }: { id: string }) {
                   {sourcePlatformName(save.sourceUrl)}
                 </AppText>
                 <AppText variant="bodySmall" tone="accent">
-                  Open source ↗
+                  {showPrimaryOpenSource ? '↗' : 'Open source ↗'}
                 </AppText>
               </Touchable>
             </Reveal>
@@ -1614,20 +1731,6 @@ export function SaveDetailScreen({ id }: { id: string }) {
           {/* Renders nothing when there is nothing similar enough — the
               server's distance cutoff, not a loading placeholder. */}
           {save.status === 'ready' ? <RelatedRail save={save} /> : null}
-
-          {/* Real data — an enrichment field or a registry field this screen
-              hasn't given a bespoke home to yet — behind one last disclosure
-              rather than surfaced by default. Renders nothing when there's
-              nothing left to disclose. */}
-          {model ? (
-            <MoreDetails
-              fields={moreDetailFields}
-              itemStates={save.itemStates}
-              entityStates={entityStates}
-              onSetItemState={setItemState}
-              onSetEntityState={setEntityState}
-            />
-          ) : null}
         </>
       ) : null}
     </Screen>

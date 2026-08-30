@@ -86,14 +86,6 @@ export interface DetailField {
    * item states at render time, never stored itself.
    */
   progress?: { done: number; total: number };
-  /**
-   * True for a field that reached the screen only because `leftovers()`
-   * didn't recognise it — a genuine extracted or enriched value, just not one
-   * curated for this type. The screen renders these behind a "More details"
-   * disclosure rather than at the same priority as the fields a type's own
-   * bespoke branch chose deliberately. Never set on a bespoke field.
-   */
-  secondary?: boolean;
 }
 
 export interface SaveDetailModel {
@@ -514,11 +506,9 @@ const HANDLED_ELSEWHERE: Record<string, ReadonlySet<string>> = {
  * code change to show what it produces; it just shows the extra fields
  * generically until someone gives them a nicer home.
  *
- * Every result is `secondary: true` — a field reaching the screen only
- * because nothing claimed it is, by definition, not one a type's own bespoke
- * branch considered essential. The screen renders these behind a "More
- * details" disclosure rather than at the same priority as Ingredients or
- * Genre.
+ * Rendered at the same priority as every bespoke field (Ingredients, Genre,
+ * …) — a save's tags, category, and other extracted-but-uncurated values are
+ * part of what makes it useful later, not fine print.
  */
 function leftovers(data: Record<string, unknown>, knowledgeType: string): DetailField[] {
   const claimed = HANDLED_ELSEWHERE[knowledgeType] ?? new Set<string>();
@@ -532,7 +522,7 @@ function leftovers(data: Record<string, unknown>, knowledgeType: string): Detail
             ? listField(humanise(key), value)
             : textField(humanise(key), value),
       ),
-  ).map((field) => ({ ...field, secondary: true }));
+  );
 }
 
 /**

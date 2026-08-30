@@ -87,6 +87,38 @@ const SOURCE_LABELS: Record<SaveResponse['sourceType'], string> = {
 };
 
 /**
+ * The bare noun for "Saving this ___" on a still-processing save — read from
+ * the URL's own shape (host + path), never guessed from content the pipeline
+ * hasn't extracted yet. `Short`/`Reel` keep the platform's own capitalised
+ * feature name; everything else is a lowercase common noun.
+ */
+export function sourceKindLabel(save: SaveResponse): string {
+  if (save.sourceType !== 'url' || !save.sourceUrl) {
+    return { url: 'link', text: 'note', image: 'image', pdf: 'PDF', audio: 'audio' }[save.sourceType];
+  }
+  try {
+    const url = new URL(save.sourceUrl);
+    const host = url.hostname.replace(/^www\./, '');
+    const path = url.pathname;
+    if (/(^|\.)youtube\.com$/.test(host) || host === 'youtu.be') return /\/shorts\//.test(path) ? 'Short' : 'video';
+    if (/(^|\.)instagram\.com$/.test(host)) return /\/reel/i.test(path) ? 'Reel' : 'post';
+    if (/(^|\.)tiktok\.com$/.test(host)) return 'video';
+    if (/(^|\.)reddit\.com$/.test(host)) return 'post';
+    if (/(^|\.)(twitter\.com|x\.com)$/.test(host)) return 'post';
+    if (/(^|\.)pinterest\.[a-z.]+$/.test(host)) return 'pin';
+    if (/(^|\.)facebook\.com$/.test(host)) return 'post';
+  } catch {
+    // Malformed URL: fall through to the generic noun below.
+  }
+  return 'link';
+}
+
+/** "https://www.youtube.com/shorts/WnNPIKikQYI" → "youtube.com/shorts/WnNPIKikQYI" — for a de-emphasised secondary line, never the hero. */
+export function bareUrl(url: string): string {
+  return url.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
+}
+
+/**
  * "3h ago" for an activity feed or a comment.
  *
  * Cuts off at a week and shows a date instead: past that point the exact day is
