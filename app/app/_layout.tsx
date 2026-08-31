@@ -4,7 +4,8 @@
 import 'react-native-url-polyfill/auto';
 
 import { Sora_500Medium, Sora_600SemiBold, Sora_700Bold, useFonts } from '@expo-google-fonts/sora';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
@@ -20,6 +21,7 @@ import { PreferencesProvider, usePreferences } from '@/prefs/PreferencesProvider
 import { SavesProvider } from '@/saves/SavesProvider';
 import { ConfigErrorScreen } from '@/screens/ConfigErrorScreen';
 import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
+import { registerForPushNotificationsAsync } from '@/notifications/notifications';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -30,6 +32,28 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
  */
 function Routes() {
   const { palette } = useTheme();
+  const { session } = useSession();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!session) return;
+    registerForPushNotificationsAsync().catch(() => {});
+
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data;
+      if (!data) return;
+      if (data.type === 'space' && data.spaceId) {
+        router.push({ pathname: '/space/[id]', params: { id: String(data.spaceId) } });
+      } else if (data.type === 'save' && data.saveId) {
+        router.push({ pathname: '/save/[id]', params: { id: String(data.saveId) } });
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [session, router]);
+
   return (
     <>
       <StatusBar style={palette.isDark ? 'light' : 'dark'} />

@@ -457,6 +457,14 @@ weavr:
     # Storage bucket for screenshot uploads. Created in the Supabase dashboard.
     storage-bucket: ${WEAVR_SUPABASE_STORAGE_BUCKET:screenshots}
 
+  # --------------------------------------------------------------------------
+  # Push Notifications — Expo Push API
+  # --------------------------------------------------------------------------
+  notifications:
+    enabled: ${WEAVR_NOTIFICATIONS_ENABLED:true}
+    expo-push-url: ${WEAVR_EXPO_PUSH_URL:https://exp.host/--/api/v2/push/send}
+    timeout: ${WEAVR_NOTIFICATIONS_TIMEOUT:10s}
+
 management:
   endpoints:
     web:

@@ -53,6 +53,8 @@ import { spaceIdentity } from '@/spaces/spaceMeta';
 import { TYPE_COLORS } from '@/theme/palettes';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AddToSpaceSheet } from './AddToSpaceSheet';
+import { ReminderSheet } from '@/components/ReminderSheet';
+import { getScheduledReminderForSave } from '@/notifications/notifications';
 
 function BackButton() {
   const { palette, radius, icon, spacing } = useTheme();
@@ -1131,7 +1133,19 @@ export function SaveDetailScreen({ id }: { id: string }) {
   const { palette, radius, spacing } = useTheme();
 
   const [showSpaceSheet, setShowSpaceSheet] = useState(false);
+  const [showReminderSheet, setShowReminderSheet] = useState(false);
+  const [hasReminder, setHasReminder] = useState(false);
   const [cookModeOpen, setCookModeOpen] = useState(false);
+
+  const checkReminder = useCallback(() => {
+    getScheduledReminderForSave(id).then((res) => {
+      setHasReminder(!!res);
+    });
+  }, [id]);
+
+  useEffect(() => {
+    checkReminder();
+  }, [checkReminder]);
 
   // The save comes from the local store, so opening a card is instant from
   // anywhere — the feed, the Library, a group, a search result, a cold deep
@@ -1304,7 +1318,33 @@ export function SaveDetailScreen({ id }: { id: string }) {
     <>
       <Screen>
       <Reveal index={0}>
-        <BackButton />
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md }}>
+          <BackButton />
+          {save && save.status === 'ready' ? (
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={hasReminder ? 'Reminder scheduled — tap to view' : 'Set reminder'}
+              onPress={() => setShowReminderSheet(true)}
+              haptic="light"
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing.xs,
+                paddingVertical: spacing.xs + 2,
+                paddingHorizontal: spacing.smd,
+                borderRadius: radius.pill,
+                borderWidth: 1,
+                borderColor: hasReminder ? palette.accent : palette.border,
+                backgroundColor: hasReminder ? `${palette.accent}14` : palette.surface,
+              }}
+            >
+              <Glyph name="clock" size={14} weight={2} color={hasReminder ? palette.accent : palette.textMuted} />
+              <AppText variant="caption" tone={hasReminder ? 'accent' : 'muted'} style={{ fontWeight: '600' }}>
+                {hasReminder ? 'Reminder set' : 'Remind me'}
+              </AppText>
+            </Touchable>
+          ) : null}
+        </View>
       </Reveal>
 
       {loading && !save ? (
@@ -1736,6 +1776,15 @@ export function SaveDetailScreen({ id }: { id: string }) {
     </Screen>
     {save && showSpaceSheet ? (
       <AddToSpaceSheet save={save} onClose={() => setShowSpaceSheet(false)} />
+    ) : null}
+    {save && showReminderSheet ? (
+      <ReminderSheet
+        save={save}
+        onClose={() => {
+          setShowReminderSheet(false);
+          checkReminder();
+        }}
+      />
     ) : null}
     {cookModeOpen && recipeSteps.length > 0 ? (
       <CookMode steps={recipeSteps} onClose={() => setCookModeOpen(false)} />
