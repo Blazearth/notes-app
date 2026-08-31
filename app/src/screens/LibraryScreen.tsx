@@ -654,7 +654,6 @@ export function LibraryScreen() {
                       onPress={() => handleCardPress(save)}
                       onLongPress={() => handleLongPress(save.id)}
                       onFavorite={() => void setFlag(save, { favorite: !save.favorite })}
-                      onArchive={() => void setFlag(save, { archived: !save.archived })}
                       onDelete={() => confirmDelete(save.id)}
                       trailing={
                         save.status === 'ready' ? undefined : (
@@ -703,7 +702,6 @@ export function LibraryScreen() {
                     onPress={() => handleCardPress(save)}
                     onLongPress={() => handleLongPress(save.id)}
                     onFavorite={() => setFlag(save, { favorite: !save.favorite })}
-                    onArchive={() => setFlag(save, { archived: !save.archived })}
                     onDelete={() => confirmDelete(save.id)}
                     trailing={
                       save.status === 'ready' ? undefined : (
