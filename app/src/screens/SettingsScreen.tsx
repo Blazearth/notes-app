@@ -83,9 +83,13 @@ function UsageBar({ label, used, limit }: { label: string; used: number; limit: 
  * A limit of `-1` means unlimited: either the user is Pro, or caps are not
  * being enforced yet. In both cases a usage meter would be meaningless, so
  * there isn't one.
+ *
+ * "Upgrade" was a label rather than a control until the paywall existed. It is
+ * a button now — and still only rendered for a user who is not already Pro,
+ * since there is nothing to sell them.
  */
-function PlanCard({ me }: { me: MeResponse | null }) {
-  const { spacing } = useTheme();
+function PlanCard({ me, onUpgrade }: { me: MeResponse | null; onUpgrade: () => void }) {
+  const { spacing, radius, palette } = useTheme();
   const metered = me !== null && me.savesLimit > 0;
 
   return (
@@ -101,15 +105,33 @@ function PlanCard({ me }: { me: MeResponse | null }) {
         <AppText variant="cardTitle" tone="onAccentContainer" style={{ fontSize: 13 }}>
           {me?.pro ? 'Weavr Pro' : 'Free plan'}
         </AppText>
-        {me && !me.pro ? (
+        {/* Rendered for a Pro user too, as "Manage" — that is the only route to
+            Restore purchases, which is exactly what someone who has reinstalled
+            or switched device needs, and they are the least likely to go
+            looking for it behind an "Upgrade" button. */}
+        <Touchable
+          onPress={onUpgrade}
+          accessibilityRole="button"
+          accessibilityLabel={me?.pro ? 'Manage your Weavr Pro subscription' : 'Upgrade to Weavr Pro'}
+          weight="control"
+          haptic="medium"
+          style={{
+            paddingHorizontal: spacing.md,
+            paddingVertical: spacing.xs,
+            borderRadius: radius.pill,
+            backgroundColor: me?.pro ? 'transparent' : palette.accent,
+            borderWidth: me?.pro ? 1 : 0,
+            borderColor: palette.onAccentContainer,
+          }}
+        >
           <AppText
             variant="label"
-            tone="onAccentContainer"
+            tone={me?.pro ? 'onAccentContainer' : 'onAccent'}
             style={{ fontSize: 11.5, fontWeight: '600' }}
           >
-            Upgrade
+            {me?.pro ? 'Manage' : 'Upgrade'}
           </AppText>
-        ) : null}
+        </Touchable>
       </View>
 
       {metered && me ? (
@@ -336,7 +358,7 @@ export function SettingsScreen() {
         </View>
       </Card>
 
-      <PlanCard me={me} />
+      <PlanCard me={me} onUpgrade={() => router.push('/paywall')} />
 
       {/* Renders nothing unless the outbox has something to report — see
           `PendingWrites` for why a rejected write is shown rather than

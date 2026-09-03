@@ -140,13 +140,19 @@ motion blur and stylised fonts are exactly where tesseract fails hard.
 |---|---|---|
 | RevenueCat webhook + entitlements | ✅ Done | Six webhook cases driven live. Entitlement derived from expiry, with dedupe and ordering guards |
 | Free-tier caps | ✅ Done | Enforced in the worker and at the Act controller. Deliberately **off** by default until there is a paid tier to escape to |
-| **RevenueCat SDK in the app** | ⛔ Not built | No `react-native-purchases` dependency at all |
-| **Paywall** | ⛔ Not built | — |
-| **Store products / subscriptions** | ⛔ Not built | — |
-| Sandbox purchase | ⛔ Not built | — |
+| **RevenueCat SDK in the app** | 🟠 Unverified | `react-native-purchases` 10.9.0, behind a three-way adapter seam (`app/src/billing/`) split by Metro platform extension. Measured, not assumed: the **web** bundle contains 0 references to the SDK and the **Android** bundle contains it. `Purchases.configure`/`logIn`/`logOut` are wired to the Supabase session — but **the SDK has never run**, because that needs a dev client on a device and there is no Android SDK here |
+| **Paywall** | 🟠 Unverified | `/paywall`, reached from the Settings plan card ("Upgrade", or "Manage" for a Pro user, which is the only route to Restore). Benefits, plan rows, the server's own usage counters, restore, and a billing disclosure that changes for a lifetime plan. Driven end to end through headless Chrome in mock mode — 31/31 CDP checks including the buy → confirm → plan-card-flips loop. Never run on a device, and never against a real store |
+| **Server confirmation of a purchase** | 🟠 Unverified | The client never claims Pro from the SDK: a completed purchase polls `GET /v1/me` on a bounded ~21s schedule and only the server's answer is rendered. A wait that expires is its own state (`pending`, "your purchase went through, still confirming"), never an error — the user has been charged. Exercised in mock mode only; no real webhook has ever raced it |
+| **Store products / subscriptions** | ⛔ Not built | No RevenueCat dashboard project, entitlement, products or current offering; no Play Console subscription. The paywall renders its "nothing on sale yet" state until these exist. External clock — see [play-store-release.md §1.7](play-store-release.md) |
+| **RevenueCat SDK keys** | ⛔ Not built | `EXPO_PUBLIC_REVENUECAT_*` are present but **empty** in `eas.json`. Empty disables purchases (deliberately — the paywall explains itself rather than crashing), so a build shipped today has a paywall that cannot sell |
+| Sandbox purchase | ⛔ Not built | Nothing here has met a real store. The highest-value single test remaining |
 
-**The server half is done and the client half does not exist.** This is a
-RevenueCat hackathon; this is a submission requirement, not a feature.
+**The client half now exists but has never met a store.** The code path is
+complete and driven; what is missing is entirely outside this repo — a
+RevenueCat dashboard, Play Console products, the two SDK keys, and the webhook
+secret on Render. Without that last one in particular, a real purchase never
+becomes Pro and the app waits forever. This is a RevenueCat hackathon, so the
+sandbox purchase is a submission requirement, not a feature.
 
 ---
 
@@ -283,9 +289,14 @@ These gate TestFlight and sandbox purchases, which gate the submission.
 
 ### Tier 2 — submission-blocking
 
-7. **`react-native-purchases` + paywall + a real sandbox purchase.** The server
-   half is done and verified; the client half does not exist. This is a
-   RevenueCat hackathon — without it there is no valid entry.
+7. ~~**`react-native-purchases` + paywall**~~ **Built 2026-09-04** — SDK, adapter
+   seam, paywall route, identity wiring and the server-confirmation wait, all
+   driven end to end in mock mode (31/31 CDP checks). **A real sandbox purchase
+   is still open, and so is everything it depends on**: the RevenueCat dashboard
+   (entitlement, products, a *current* offering), Play Console subscriptions, the
+   two `EXPO_PUBLIC_REVENUECAT_*` keys in `eas.json` (present but empty), and
+   `WEAVR_REVENUECAT_WEBHOOK_SECRET` on Render — without that last one no
+   purchase ever becomes Pro. See [play-store-release.md §1.7](play-store-release.md).
 8. **Deployment.** The image must install `yt-dlp`, `ffmpeg`, `tesseract` *and*
    `tesseract-ocr-eng`; a plain JRE has none, and missing language data reads
    every frame as nothing, silently. Plus the keep-warm cron — Supabase pauses

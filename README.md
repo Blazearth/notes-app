@@ -785,6 +785,19 @@ HTTP ping to a static endpoint.
   captures (a Settings list, a notification) so "not decided yet" gets an
   answer instead of a silent drop with a paper trail nobody reads.
 
+- **Purchases are wired but cannot sell anything yet, and one blank is worse
+  than the others.** `app/src/billing/` and `/paywall` are complete and driven
+  (31/31 CDP checks in mock mode), but `EXPO_PUBLIC_REVENUECAT_ANDROID_KEY`/
+  `_IOS_KEY` are **empty** in `eas.json` and no RevenueCat dashboard, entitlement,
+  product or current offering exists — so a build made today shows a paywall that
+  correctly explains it has nothing to sell. The dangerous one is
+  `WEAVR_REVENUECAT_WEBHOOK_SECRET` on Render: it fails closed, so with it unset a
+  real purchase would complete at the store, never reach `subscriptions`, and
+  leave the app waiting on a confirmation that can never arrive — the user pays
+  and gets nothing, with no error anywhere. Set it in the same pass as the SDK
+  keys, not after. `WEAVR_ENFORCE_FREE_CAPS` stays off until all of the above is
+  real. See [docs/play-store-release.md §1.7](docs/play-store-release.md).
+
 **Store submission** (full list in [docs/play-store-release.md](docs/play-store-release.md))
 
 - **The `production` EAS profile still has no `env` block**, so a production AAB
