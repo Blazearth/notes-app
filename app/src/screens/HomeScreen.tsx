@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
-import React, { useMemo, useRef } from 'react';
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, View } from 'react-native';
+import React, { useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import { MOCK_CATEGORIES, MOCK_SOURCE_LABELS, type KnowledgeGroup } from '@/data';
 import type { CollectionNodeResponse, DigestResponse, SaveResponse, Space } from '@/api/types';
@@ -12,6 +12,7 @@ import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Chip } from '@/components/Chip';
 import { CollectionCard } from '@/components/CollectionCard';
+import { ConfirmSheet } from '@/components/ConfirmSheet';
 import { Glyph } from '@/components/Glyph';
 import { NextActionCard } from '@/components/NextActionCard';
 
@@ -295,6 +296,7 @@ function RecentlyCaptured({ limit }: { limit: number }) {
   // Don't show archived saves on Home — they belong in the Archived filter in Library
   const visibleSaves = saves.filter((s) => !s.archived);
   const router = useRouter();
+  const [deleteTarget, setDeleteTarget] = useState<SaveResponse | null>(null);
 
   if (status === 'loading') {
     return (
@@ -374,47 +376,51 @@ function RecentlyCaptured({ limit }: { limit: number }) {
   // every section below it becomes unreachable without a long scroll.
   const shown = visibleSaves.slice(0, limit);
 
-  const confirmDelete = (saveId: string) => {
-    Alert.alert(
-      'Delete save',
-      'This will permanently delete this save. It cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => writeDeleteSave(saveId) },
-      ],
-    );
-  };
-
   return (
-    <View style={{ gap: spacing.smd }}>
-      {shown.map((save) => (
-        <SaveCard
-          key={save.id}
-          save={save}
-          onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
-          subtitleOverride={sourceLine(save)}
-          onFavorite={() => writeSaveFlags(save.id, { favorite: !save.favorite })}
-          onDelete={() => confirmDelete(save.id)}
-          trailing={
-            save.status === 'ready' ? undefined : (
-              <StatusPill label={STATUS_LABELS[save.status]} tint={tintFor(save.status)} />
-            )
-          }
-        />
-      ))}
-      {visibleSaves.length > shown.length ? (
-        <Touchable
-          accessibilityRole="button"
-          onPress={() => router.push('/search')}
-          haptic="selection"
-          style={{ alignSelf: 'center', paddingVertical: spacing.sm }}
-        >
-          <AppText variant="label" tone="accent" style={{ fontSize: 13 }}>
-            See all {visibleSaves.length}
-          </AppText>
-        </Touchable>
-      ) : null}
-    </View>
+    <>
+      <View style={{ gap: spacing.smd }}>
+        {shown.map((save) => (
+          <SaveCard
+            key={save.id}
+            save={save}
+            onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
+            subtitleOverride={sourceLine(save)}
+            onFavorite={() => writeSaveFlags(save.id, { favorite: !save.favorite })}
+            onDelete={() => setDeleteTarget(save)}
+            trailing={
+              save.status === 'ready' ? undefined : (
+                <StatusPill label={STATUS_LABELS[save.status]} tint={tintFor(save.status)} />
+              )
+            }
+          />
+        ))}
+        {visibleSaves.length > shown.length ? (
+          <Touchable
+            accessibilityRole="button"
+            onPress={() => router.push('/search')}
+            haptic="selection"
+            style={{ alignSelf: 'center', paddingVertical: spacing.sm }}
+          >
+            <AppText variant="label" tone="accent" style={{ fontSize: 13 }}>
+              See all {visibleSaves.length}
+            </AppText>
+          </Touchable>
+        ) : null}
+      </View>
+
+      <ConfirmSheet
+        visible={deleteTarget !== null}
+        title="Delete this save?"
+        itemLabel={deleteTarget ? saveTitle(deleteTarget) : undefined}
+        message="This removes it from your library. This can't be undone."
+        confirmLabel="Delete save"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) writeDeleteSave(deleteTarget.id);
+          setDeleteTarget(null);
+        }}
+      />
+    </>
   );
 }
 

@@ -1,12 +1,13 @@
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, View } from 'react-native';
+import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import type { CollectionNodeResponse, SaveResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Chip } from '@/components/Chip';
 import { CollectionCard } from '@/components/CollectionCard';
+import { ConfirmSheet } from '@/components/ConfirmSheet';
 import { Glyph, type GlyphName } from '@/components/Glyph';
 import { Reveal } from '@/components/Reveal';
 import { SaveCard } from '@/components/SaveCard';
@@ -155,6 +156,9 @@ export function LibraryScreen() {
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<SaveResponse | null>(null);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+  const [showAiOrganizedInfo, setShowAiOrganizedInfo] = useState(false);
 
   // K3: the Library's top level for entity-bearing types (recommendation_list,
   // itinerary, checklist) renders collections, not save rows — see
@@ -330,31 +334,9 @@ export function LibraryScreen() {
     [selectedIds, exitSelection],
   );
 
-  const confirmDelete = useCallback((saveId: string) => {
-    Alert.alert(
-      'Delete save',
-      'This will permanently delete this save. It cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => writeDeleteSave(saveId) },
-      ],
-    );
-  }, []);
+  const confirmDelete = useCallback((save: SaveResponse) => setDeleteTarget(save), []);
 
-  const bulkDelete = useCallback(() => {
-    const ids = [...selectedIds];
-    Alert.alert(
-      `Delete ${ids.length} save${ids.length > 1 ? 's' : ''}`,
-      'This will permanently delete the selected saves. It cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete', style: 'destructive',
-          onPress: () => { exitSelection(); for (const id of ids) writeDeleteSave(id); },
-        },
-      ],
-    );
-  }, [selectedIds, exitSelection]);
+  const bulkDelete = useCallback(() => setBulkDeleteConfirm(true), []);
 
   return (
     <Screen
@@ -617,7 +599,7 @@ export function LibraryScreen() {
                   <Touchable
                     accessibilityRole="button"
                     accessibilityLabel="Why these are grouped"
-                    onPress={() => Alert.alert(AI_ORGANIZED_TITLE, AI_ORGANIZED_MESSAGE)}
+                    onPress={() => setShowAiOrganizedInfo(true)}
                     haptic="light"
                   >
                     <AppText variant="caption" tone="muted" style={{ fontSize: 11, textDecorationLine: 'underline' }}>
@@ -654,7 +636,7 @@ export function LibraryScreen() {
                       onPress={() => handleCardPress(save)}
                       onLongPress={() => handleLongPress(save.id)}
                       onFavorite={() => void setFlag(save, { favorite: !save.favorite })}
-                      onDelete={() => confirmDelete(save.id)}
+                      onDelete={() => confirmDelete(save)}
                       trailing={
                         save.status === 'ready' ? undefined : (
                           <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>
@@ -702,7 +684,7 @@ export function LibraryScreen() {
                     onPress={() => handleCardPress(save)}
                     onLongPress={() => handleLongPress(save.id)}
                     onFavorite={() => setFlag(save, { favorite: !save.favorite })}
-                    onDelete={() => confirmDelete(save.id)}
+                    onDelete={() => confirmDelete(save)}
                     trailing={
                       save.status === 'ready' ? undefined : (
                         <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>
@@ -732,6 +714,42 @@ export function LibraryScreen() {
           </View>
         </>
       ) : null}
+
+      <ConfirmSheet
+        visible={deleteTarget !== null}
+        title="Delete this save?"
+        itemLabel={deleteTarget ? saveTitle(deleteTarget) : undefined}
+        message="This removes it from your library. This can't be undone."
+        confirmLabel="Delete save"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) writeDeleteSave(deleteTarget.id);
+          setDeleteTarget(null);
+        }}
+      />
+
+      <ConfirmSheet
+        visible={bulkDeleteConfirm}
+        title={`Delete ${selectedIds.size} save${selectedIds.size > 1 ? 's' : ''}?`}
+        message="This removes them from your library. This can't be undone."
+        confirmLabel="Delete saves"
+        onCancel={() => setBulkDeleteConfirm(false)}
+        onConfirm={() => {
+          const ids = [...selectedIds];
+          exitSelection();
+          setBulkDeleteConfirm(false);
+          for (const id of ids) writeDeleteSave(id);
+        }}
+      />
+
+      <ConfirmSheet
+        visible={showAiOrganizedInfo}
+        title={AI_ORGANIZED_TITLE}
+        message={AI_ORGANIZED_MESSAGE}
+        confirmLabel="Got it"
+        destructive={false}
+        onConfirm={() => setShowAiOrganizedInfo(false)}
+      />
     </Screen>
   );
 }
