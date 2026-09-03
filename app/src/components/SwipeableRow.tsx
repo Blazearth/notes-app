@@ -15,27 +15,26 @@ import { useTheme } from '@/theme/ThemeProvider';
 import { Glyph } from './Glyph';
 
 const ACTION_WIDTH = 76;
-const ARCHIVE_TRIGGER = 68;
-const DELETE_TRIGGER = 160; // swipe further left for delete
+const FAVORITE_TRIGGER = 68; // swipe right past this to favorite
+const DELETE_TRIGGER = 160; // swipe left past this to delete — anything short of it snaps back, nothing else fires
 
 export interface SwipeableRowProps {
   children: React.ReactNode;
   onFavorite?: () => void;
-  onArchive?: () => void;
   onDelete?: () => void;
   disabled?: boolean;
 }
 
-export function SwipeableRow({ children, onFavorite, onArchive, onDelete, disabled }: SwipeableRowProps) {
+export function SwipeableRow({ children, onFavorite, onDelete, disabled }: SwipeableRowProps) {
   const { palette, radius, spacing } = useTheme();
   const fireHaptic = useHaptic();
   const translateX = useSharedValue(0);
   const reduced = useReducedMotion();
 
   const canFavorite = !!onFavorite;
-  const canLeft = !!(onArchive || onDelete);
+  const canLeft = !!onDelete;
 
-  const maxLeft = canLeft ? -(onDelete ? DELETE_TRIGGER + 24 : ACTION_WIDTH + 24) : 0;
+  const maxLeft = canLeft ? -(DELETE_TRIGGER + 24) : 0;
 
   const pan = Gesture.Pan()
     .enabled(!disabled && (canFavorite || canLeft))
@@ -49,7 +48,7 @@ export function SwipeableRow({ children, onFavorite, onArchive, onDelete, disabl
     })
     .onEnd(() => {
       'worklet';
-      if (translateX.value > ARCHIVE_TRIGGER && onFavorite) {
+      if (translateX.value > FAVORITE_TRIGGER && onFavorite) {
         translateX.value = withSpring(0, Spring.press);
         runOnJS(fireHaptic)('success');
         runOnJS(onFavorite)();
@@ -57,10 +56,6 @@ export function SwipeableRow({ children, onFavorite, onArchive, onDelete, disabl
         translateX.value = withSpring(0, Spring.press);
         runOnJS(fireHaptic)('error');
         runOnJS(onDelete)();
-      } else if (translateX.value < -ARCHIVE_TRIGGER && onArchive) {
-        translateX.value = withSpring(0, Spring.press);
-        runOnJS(fireHaptic)('success');
-        runOnJS(onArchive)();
       } else {
         translateX.value = withSpring(0, Spring.press);
       }
@@ -71,17 +66,11 @@ export function SwipeableRow({ children, onFavorite, onArchive, onDelete, disabl
   }));
 
   const favoriteOpacity = useAnimatedStyle(() => ({
-    opacity: Math.min(1, translateX.value / ARCHIVE_TRIGGER),
+    opacity: Math.min(1, translateX.value / FAVORITE_TRIGGER),
   }));
 
-  // Left background: red when past delete threshold, yellow otherwise
-  const leftBg = useAnimatedStyle(() => {
-    const past = translateX.value < -DELETE_TRIGGER;
-    return { backgroundColor: past ? palette.danger : palette.warning };
-  });
-
-  const archiveOpacity = useAnimatedStyle(() => ({
-    opacity: Math.min(1, -translateX.value / ARCHIVE_TRIGGER),
+  const leftOpacity = useAnimatedStyle(() => ({
+    opacity: Math.min(1, -translateX.value / DELETE_TRIGGER),
   }));
 
   if (!canFavorite && !canLeft) return <>{children}</>;
@@ -105,19 +94,16 @@ export function SwipeableRow({ children, onFavorite, onArchive, onDelete, disabl
       {canLeft ? (
         <Animated.View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, archiveOpacity, leftBg, {
+          style={[StyleSheet.absoluteFill, leftOpacity, {
             borderRadius: radius.md,
+            backgroundColor: palette.danger,
             alignItems: 'flex-end',
             justifyContent: 'center',
             paddingRight: spacing.lg,
             gap: spacing.sm,
           }]}
         >
-          <Glyph
-            name={onDelete ? 'close' : 'archive'}
-            size={20} weight={2}
-            color={palette.background}
-          />
+          <Glyph name="close" size={20} weight={2} color={palette.background} />
         </Animated.View>
       ) : null}
       <GestureDetector gesture={pan}>

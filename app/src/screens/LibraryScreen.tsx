@@ -654,7 +654,6 @@ export function LibraryScreen() {
                       onPress={() => handleCardPress(save)}
                       onLongPress={() => handleLongPress(save.id)}
                       onFavorite={() => void setFlag(save, { favorite: !save.favorite })}
-                      onArchive={() => void setFlag(save, { archived: !save.archived })}
                       onDelete={() => confirmDelete(save.id)}
                       trailing={
                         save.status === 'ready' ? undefined : (
@@ -703,7 +702,6 @@ export function LibraryScreen() {
                     onPress={() => handleCardPress(save)}
                     onLongPress={() => handleLongPress(save.id)}
                     onFavorite={() => setFlag(save, { favorite: !save.favorite })}
-                    onArchive={() => setFlag(save, { archived: !save.archived })}
                     onDelete={() => confirmDelete(save.id)}
                     trailing={
                       save.status === 'ready' ? undefined : (
@@ -725,7 +723,7 @@ export function LibraryScreen() {
                     {filter === FAVORITES
                       ? 'Swipe right on a save, or long-press to select several, to favorite it.'
                       : filter === ARCHIVED
-                        ? 'Swipe left on a save to archive it.'
+                        ? 'Long-press a save to select it, then Archive selected.'
                         : `Saves land in ${labelFor(filter)} once the pipeline classifies them.`}
                   </AppText>
                 </Card>

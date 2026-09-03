@@ -394,7 +394,6 @@ function RecentlyCaptured({ limit }: { limit: number }) {
           onPress={() => router.push({ pathname: '/save/[id]', params: { id: save.id } })}
           subtitleOverride={sourceLine(save)}
           onFavorite={() => writeSaveFlags(save.id, { favorite: !save.favorite })}
-          onArchive={() => writeSaveFlags(save.id, { archived: true })}
           onDelete={() => confirmDelete(save.id)}
           trailing={
             save.status === 'ready' ? undefined : (
