@@ -1,8 +1,9 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
-import { supabase } from './supabase';
+import { supabase, SUPABASE_AUTH_STORAGE_KEY } from './supabase';
 import { getAuthCallbackUrl } from './redirectUrl';
 import { getMe } from '@/api/client';
 import { USE_MOCK_DATA } from '@/data/config';
@@ -52,6 +53,29 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (USE_MOCK_DATA) return;
     let cancelled = false;
 
+    // The fast path: read the persisted session straight off disk, with no
+    // network involved, and hydrate on that alone. `supabase.auth.getSession()`
+    // below looks like the same read but is not — see `SUPABASE_AUTH_STORAGE_KEY`
+    // for why it can block on a real token-refresh request. A stale/expired
+    // token used optimistically for one paint is harmless: every actual API
+    // call re-reads the session itself (`authHeader` in `@/api/client`), and if
+    // the stored session turns out not to hold up, the real call below and
+    // `onAuthStateChange` correct it — including signing out — once they land.
+    void AsyncStorage.getItem(SUPABASE_AUTH_STORAGE_KEY)
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        try {
+          const stored = JSON.parse(raw) as Session;
+          if (stored?.access_token) setSession(stored);
+        } catch {
+          // Corrupt storage — the real getSession() below is authoritative.
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setHydrated(true);
+      });
+
     supabase.auth
       .getSession()
       .then(({ data }) => {
@@ -59,9 +83,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {
         // A bad stored session should land the user on sign-in, not crash.
-      })
-      .finally(() => {
-        if (!cancelled) setHydrated(true);
       });
 
     // Fires on sign-in, sign-out, and every token refresh — so this is what
