@@ -39,3 +39,25 @@ export const supabase = createClient(SUPABASE_URL_OR_PLACEHOLDER, SUPABASE_ANON_
     flowType: 'pkce',
   },
 });
+
+/**
+ * The AsyncStorage key supabase-js persists the session under — reproduced
+ * here, not read off the client, because `storageKey` is `protected` on
+ * `GoTrueClient`.
+ *
+ * Verified against `@supabase/supabase-js`'s own source
+ * (`dist/index.mjs`): with no `storageKey` override (this client sets none),
+ * the default is `` `sb-${new URL(url).hostname.split('.')[0]}-auth-token` ``,
+ * and `_saveSession` (no `userStorage` configured here either) writes the
+ * `Session` object to it verbatim via `JSON.stringify` — no wrapper, no
+ * separate user record.
+ *
+ * `SessionProvider` reads this key directly so the splash gate can hydrate
+ * from what is already on disk. `supabase.auth.getSession()` looks like the
+ * same local read but is not: it awaits `_recoverAndRefresh()`, which awaits
+ * a real `/token` network call whenever the stored access token is inside
+ * GoTrue's expiry margin — true on most cold starts, since access tokens are
+ * short-lived. Blocking the splash on that violates the "app must not depend
+ * on the network to launch" rule the rest of `@/local` was built around.
+ */
+export const SUPABASE_AUTH_STORAGE_KEY = `sb-${new URL(SUPABASE_URL_OR_PLACEHOLDER).hostname.split('.')[0]}-auth-token`;

@@ -141,6 +141,31 @@ const savesByIdempotencyKey: Record<string, string> = {};
  */
 const tombstones: { type: string; id: string; at: string }[] = [];
 
+/**
+ * Whether the mock account is Pro — the stand-in for a `subscriptions` row.
+ *
+ * Mock mode's equivalent of the RevenueCat webhook having landed. It is
+ * deliberately *this* side of the seam rather than inside the purchases
+ * adapter: in production the client's SDK cannot make anyone Pro either, only
+ * the server can, and the app finds out by asking `GET /v1/me`. Keeping the
+ * flag here means the mock exercises that same direction of travel instead of
+ * inventing a shortcut the real code has no equivalent of.
+ */
+let mockPro = false;
+let mockProRenewsAt: string | null = null;
+
+/**
+ * Called by `mockPurchases` when a fake purchase completes — never by a screen.
+ *
+ * @param planId used only to pick a plausible renewal date, so the Settings
+ *   card's "Renews …" line is exercised with a real value rather than skipped.
+ */
+export function grantMockPro(planId: string): void {
+  mockPro = true;
+  const days = planId.includes('annual') ? 365 : 30;
+  mockProRenewsAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
 /** K4c curation — mirrors `collection_overrides`. Chained merges are resolved to their final target on write, same as `CollectionOverrideService.resolveChains`. */
 const mergeRedirects: Record<string, string> = {};
 const entityNameOverrides: Record<string, string> = {};
@@ -502,6 +527,26 @@ export const mockRepository: Repository = {
   // -------------------------------------------------------------- account
 
   getMe(): Promise<MeResponse> {
+    // Reads the same module-scope entitlement a mock purchase writes, so the
+    // paywall's whole loop — buy, poll `/v1/me`, watch the Settings plan card
+    // flip — runs for real with no store and no backend. A `pro: false`
+    // constant here would leave every state the paywall renders while it waits
+    // unexercised. See `grantMockPro`.
+    if (mockPro) {
+      return delay<MeResponse>({
+        userId: MOCK_USER_ID,
+        pro: true,
+        entitlement: 'pro',
+        subscriptionStatus: 'active',
+        renewsAt: mockProRenewsAt ?? undefined,
+        savesUsed: saves.length,
+        // -1 is the server's own "unlimited" sentinel, so the card takes the
+        // same branch it would in production rather than a mock-only one.
+        savesLimit: -1,
+        actsUsed: 1,
+        actsLimit: -1,
+      });
+    }
     return delay<MeResponse>({
       userId: MOCK_USER_ID,
       pro: false,

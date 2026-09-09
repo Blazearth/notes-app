@@ -1,11 +1,12 @@
 import { useKeepAwake } from 'expo-keep-awake';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, TextInput, View } from 'react-native';
+import { ActivityIndicator, TextInput, View } from 'react-native';
 
 import type { CollectionEntityResponse, CollectionNodeResponse } from '@/api/types';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
+import { ConfirmSheet } from '@/components/ConfirmSheet';
 import { Glyph } from '@/components/Glyph';
 import { RestTimer } from '@/components/RestTimer';
 import { Reveal } from '@/components/Reveal';
@@ -189,16 +190,8 @@ export function WorkoutSessionScreen({ nodeId }: { nodeId: string }) {
     [currentIndex, total],
   );
 
-  const confirmEnd = useCallback(() => {
-    Alert.alert(
-      'End workout?',
-      "Nothing here is saved to your library — you'll lose this session's progress.",
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'End workout', style: 'destructive', onPress: () => router.back() },
-      ],
-    );
-  }, [router]);
+  const [confirmEndVisible, setConfirmEndVisible] = useState(false);
+  const confirmEnd = useCallback(() => setConfirmEndVisible(true), []);
 
   /** Total sets actually logged, for the completion summary — not the prescribed count. */
   const loggedSets = useMemo(
@@ -543,6 +536,18 @@ export function WorkoutSessionScreen({ nodeId }: { nodeId: string }) {
           );
         })}
       </View>
+
+      <ConfirmSheet
+        visible={confirmEndVisible}
+        title="End workout?"
+        message="Nothing here is saved to your library — you'll lose this session's progress."
+        confirmLabel="End workout"
+        onCancel={() => setConfirmEndVisible(false)}
+        onConfirm={() => {
+          setConfirmEndVisible(false);
+          router.back();
+        }}
+      />
     </Screen>
   );
 }

@@ -196,9 +196,7 @@ export interface SaveCardProps {
   selected?: boolean;
   /** Swipe-right action. Omitted (not just disabled) while `selectionMode` is active — a drag can't fire a flag flip mid-selection. */
   onFavorite?: () => void;
-  /** Swipe-left action, same rule as `onFavorite`. */
-  onArchive?: () => void;
-  /** Swipe-left-further or bulk action to permanently delete. */
+  /** Swipe-left (full swipe, confirmed by the caller) or bulk action to permanently delete. */
   onDelete?: () => void;
 }
 
@@ -211,7 +209,6 @@ export function SaveCard({
   selectionMode,
   selected,
   onFavorite,
-  onArchive,
   onDelete,
 }: SaveCardProps) {
   const { palette, spacing, radius } = useTheme();
@@ -313,15 +310,10 @@ export function SaveCard({
     );
   }
 
-  if (!onFavorite && !onArchive && !onDelete) return card;
+  if (!onFavorite && !onDelete) return card;
 
   return (
-    <SwipeableRow
-      disabled={selectionMode}
-      onFavorite={onFavorite}
-      onArchive={onArchive}
-      onDelete={onDelete}
-    >
+    <SwipeableRow disabled={selectionMode} onFavorite={onFavorite} onDelete={onDelete}>
       {card}
     </SwipeableRow>
   );

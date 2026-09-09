@@ -109,17 +109,43 @@ verified that way and that a reviewer will hit immediately:
 - [ ] Sign up as a brand-new user and complete: sign in → share a link from another app → save reaches `ready` → search → Space → delete account
 - [ ] Confirm the app works after force-stop and after a cold start with no network
 
-### 1.7 RevenueCat is server-only — do not advertise a paid tier
+### 1.7 RevenueCat — the code is in; the dashboard and the store records are not
 
-`react-native-purchases` is **not** in [app/package.json](../app/package.json). The API has
-`billing/` with a RevenueCat webhook, entitlement service and usage counters, but the app
-has no purchase flow, no paywall, and no products.
+**Changed 2026-09-04.** `react-native-purchases` (10.9.0) is now in
+[app/package.json](../app/package.json), the paywall exists (`/paywall`, reached from the
+Settings plan card), and `PurchasesProvider` wires identity, purchase, restore and the
+server-confirmation wait. The server half — webhook, `EntitlementService`, usage counters —
+was already done. What is **not** done is everything outside this repo, and none of it can
+be compressed:
 
-That's a fine state to launch in — ship it free. But:
-
-- [ ] The store listing must not describe a subscription, "Pro", or any paid feature
-- [ ] "Contains ads" and "In-app purchases" both declared **No** in the console
-- [ ] If you add purchases later, digital goods **must** use Google Play Billing — a Stripe/web checkout for in-app features is a policy violation and a common rejection
+- [ ] **RevenueCat dashboard**: a project, an entitlement whose identifier matches
+      `WEAVR_ENTITLEMENT_ID` (default `pro`), products, and an **offering marked current**.
+      With no current offering the paywall renders its "no subscription is on sale yet"
+      state — correct behaviour, but not a shippable paid tier.
+- [ ] **Google Play Console**: the subscription products themselves, matching the
+      RevenueCat product ids.
+- [ ] **`EXPO_PUBLIC_REVENUECAT_ANDROID_KEY` / `_IOS_KEY` filled in
+      [app/eas.json](../app/eas.json)**, both profiles. They are present but **empty**, which
+      is deliberate (unset disables purchases and the paywall says so, rather than crashing)
+      and is exactly the kind of blank that ships unnoticed. `EXPO_PUBLIC_*` is inlined at
+      build time, so a shell variable does not reach an EAS build — it has to be in that file.
+- [ ] **The webhook**: point RevenueCat at `POST /v1/webhooks/revenuecat` and set the same
+      value in `WEAVR_REVENUECAT_WEBHOOK_SECRET` on Render. Unset fails closed, so without
+      this **no purchase ever becomes Pro** — the app will sit on "still confirming" forever
+      and the user has paid for nothing. This is the single highest-consequence blank here.
+- [ ] **A real sandbox purchase, end to end**, on a device: buy → webhook lands →
+      `GET /v1/me` reports `pro` → the paywall's confirmed state → caps lifted. Nothing in
+      this repo has been proven against a real store; the whole flow's only evidence is a
+      mock-mode CDP run.
+- [ ] **Flip `WEAVR_ENFORCE_FREE_CAPS=true` — last, and only after the above.** It is off by
+      default on purpose: enforcing a cap before anyone can actually subscribe caps every
+      user with no way out.
+- [ ] Once products exist: declare **"In-app purchases" = Yes** in the console (it is `No`
+      today, which is correct only while nothing is for sale), and the listing may then
+      describe the subscription.
+- [ ] Digital goods **must** use Google Play Billing — a Stripe/web checkout for in-app
+      features is a policy violation and a common rejection. RevenueCat's Android SDK uses
+      Play Billing, so this is satisfied by construction, not by a choice made later.
 
 ### 1.8 `USE_MOCK_DATA` — already safe, verify anyway
 

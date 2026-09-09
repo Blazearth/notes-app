@@ -14,6 +14,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { MISSING_CONFIG } from '@/api/config';
 import { SessionProvider, useSession } from '@/auth/SessionProvider';
+import { PurchasesProvider } from '@/billing';
 import { USE_MOCK_DATA } from '@/data/config';
 import { openStore } from '@/local';
 import { SyncProvider } from '@/local/SyncProvider';
@@ -154,6 +155,16 @@ function Routes() {
             group screen. */}
         <Stack.Screen name="compare-workouts" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="shopping-list" options={{ animation: 'slide_from_right' }} />
+        {/* The paywall. A full route rather than a `Sheet`: it carries the
+            benefits, the plan rows, the usage line, restore and the billing
+            disclosure, which is more than a sheet's short-form surface holds —
+            and a purchase is a destination, not a quick action.
+
+            Listed here for the reason every other route on this Stack is: K7
+            shipped a `session/[nodeId]` file that rendered on a direct visit
+            and navigated nowhere from inside the app, because it was missing
+            from this list. */}
+        <Stack.Screen name="paywall" options={{ animation: 'slide_from_right' }} />
         {/* Search reads as a layer over the feed rather than a place you
             travel to, so it fades in where the others slide. */}
         <Stack.Screen name="search" options={{ animation: 'fade' }} />
@@ -218,9 +229,15 @@ function SplashGate({ fontsReady }: { fontsReady: boolean }) {
           belonging to a different account before a screen can render it, and
           starts the background sync that fills the store the screens read. */}
       <SyncProvider>
-        <SavesProvider>
-          <Routes />
-        </SavesProvider>
+        {/* Inside `SyncProvider` because confirming a purchase means polling
+            `GET /v1/me` through `sync.syncMe()` and reading the result back out
+            of the local store — both need the store open, which `SplashGate`
+            has already waited for by the time anything here mounts. */}
+        <PurchasesProvider>
+          <SavesProvider>
+            <Routes />
+          </SavesProvider>
+        </PurchasesProvider>
       </SyncProvider>
     </ThemeProvider>
   );

@@ -356,6 +356,24 @@ npx expo run:android                  # the real test — needs a device or emul
 `npm run lint` is currently a trap: there is no ESLint config, so `expo lint`
 drops into interactive setup. Either configure it or drop the script.
 
+**A brand-new route fails `typecheck` until the dev server has served a page.**
+`experiments.typedRoutes` is on, so `router.push('/paywall')` is checked against
+a generated union in `.expo/types/router.d.ts` — and a route file that exists on
+disk is not in that union yet. The failure is misleading: tsc says the literal
+is "not assignable", which reads as a typo in a path that is plainly correct.
+`npx expo export` does **not** regenerate it; only the dev server does, and only
+once something actually requests a bundle. So:
+
+```bash
+npx expo start --web --port 8099 &   # then hit it once
+curl -s -o /dev/null http://localhost:8099/
+npm run typecheck                    # now the new route resolves
+```
+
+Adding the route to the `<Stack>` in `app/app/_layout.tsx` is a separate,
+equally required step — see that file's comments for the two shipped routes that
+rendered on a direct visit and navigated nowhere from inside the app.
+
 ---
 
 ## Techniques worth reusing
