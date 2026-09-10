@@ -1,3 +1,4 @@
+import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
@@ -11,7 +12,7 @@ import { ConfirmSheet } from '@/components/ConfirmSheet';
 import { Glyph, type GlyphName } from '@/components/Glyph';
 import { Reveal } from '@/components/Reveal';
 import { SaveCard } from '@/components/SaveCard';
-import { Screen } from '@/components/Screen';
+import { useScreenContentStyle } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Touchable } from '@/components/Touchable';
 import { useLiveValue } from '@/local';
@@ -338,18 +339,41 @@ export function LibraryScreen() {
 
   const bulkDelete = useCallback(() => setBulkDeleteConfirm(true), []);
 
-  return (
-    <Screen
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={palette.accent}
-          colors={[palette.accent]}
-          progressBackgroundColor={palette.surface}
-        />
-      }
-    >
+  const contentStyle = useScreenContentStyle();
+
+  const renderSave = useCallback(
+    ({ item: save }: { item: SaveResponse }) => (
+      <SaveCard
+        save={save}
+        selectionMode={selectionMode}
+        selected={selectedIds.has(save.id)}
+        onPress={() => handleCardPress(save)}
+        onLongPress={() => handleLongPress(save.id)}
+        onFavorite={() => setFlag(save, { favorite: !save.favorite })}
+        onDelete={() => confirmDelete(save)}
+        trailing={
+          save.status === 'ready' ? undefined : (
+            <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>
+              {STATUS_LABELS[save.status]}
+            </AppText>
+          )
+        }
+      />
+    ),
+    [selectionMode, selectedIds, handleCardPress, handleLongPress, setFlag, confirmDelete],
+  );
+
+  const saveKeyExtractor = useCallback((save: SaveResponse) => save.id, []);
+
+  const ItemSeparator = useCallback(() => <View style={{ height: spacing.smd }} />, [spacing.smd]);
+
+  // Only `visible` — the "Recent Saves" rows — is virtualized. Everything
+  // above it (header, search, sort menu, dimension/filter chips, Collections,
+  // Handnotes, By-type tiles) is a handful of items regardless of library
+  // size, so it rides along as one non-virtualized `ListHeaderComponent`
+  // rather than needing FlashList's mixed-item-type machinery.
+  const listHeader = (
+    <View>
       <Reveal
         index={0}
         style={{
@@ -479,12 +503,6 @@ export function LibraryScreen() {
             </View>
           ) : null}
         </Reveal>
-      ) : null}
-
-      {status === 'loading' ? (
-        <View style={{ paddingVertical: spacing.xxl * 2, alignItems: 'center' }}>
-          <ActivityIndicator color={palette.accent} />
-        </View>
       ) : null}
 
       {status === 'error' ? (
@@ -670,50 +688,61 @@ export function LibraryScreen() {
           <Reveal index={5}>
             <SectionLabel>{filter === ALL ? 'Recent Saves' : labelFor(filter)}</SectionLabel>
           </Reveal>
-          <View style={{ gap: spacing.smd }}>
-            {visible.length > 0 ? (
-              visible.map((save, i) => (
-                // Keyed by filter as well as id, so switching filters remounts
-                // the rows and they animate in. Without the filter in the key,
-                // React reuses the survivors and a filter change lands silently.
-                <Reveal key={`${filter}-${save.id}`} index={i}>
-                  <SaveCard
-                    save={save}
-                    selectionMode={selectionMode}
-                    selected={selectedIds.has(save.id)}
-                    onPress={() => handleCardPress(save)}
-                    onLongPress={() => handleLongPress(save.id)}
-                    onFavorite={() => setFlag(save, { favorite: !save.favorite })}
-                    onDelete={() => confirmDelete(save)}
-                    trailing={
-                      save.status === 'ready' ? undefined : (
-                        <AppText variant="caption" tone="muted" style={{ fontSize: 10 }}>
-                          {STATUS_LABELS[save.status]}
-                        </AppText>
-                      )
-                    }
-                  />
-                </Reveal>
-              ))
-            ) : (
-              <Reveal key={`${filter}-empty`}>
-                <Card>
-                  <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
-                    Nothing here yet
-                  </AppText>
-                  <AppText variant="caption" tone="muted">
-                    {filter === FAVORITES
-                      ? 'Swipe right on a save, or long-press to select several, to favorite it.'
-                      : filter === ARCHIVED
-                        ? 'Long-press a save to select it, then Archive selected.'
-                        : `Saves land in ${labelFor(filter)} once the pipeline classifies them.`}
-                  </AppText>
-                </Card>
-              </Reveal>
-            )}
-          </View>
         </>
       ) : null}
+    </View>
+  );
+
+  // `ListEmptyComponent` only ever renders when `data` (below) is empty, so
+  // its branches line up with the states that used to gate the inline list:
+  // the spinner while loading, and "nothing matches this filter" once the
+  // library has saves but the current filter doesn't. The two other empty
+  // states — the load error and the truly-empty-library card — render
+  // unconditionally in the header above regardless of `visible`, so they are
+  // not repeated here.
+  const listEmpty =
+    status === 'loading' ? (
+      <View style={{ paddingVertical: spacing.xxl * 2, alignItems: 'center' }}>
+        <ActivityIndicator color={palette.accent} />
+      </View>
+    ) : status === 'ready' && saves.length > 0 ? (
+      <Reveal key={`${filter}-empty`}>
+        <Card>
+          <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
+            Nothing here yet
+          </AppText>
+          <AppText variant="caption" tone="muted">
+            {filter === FAVORITES
+              ? 'Swipe right on a save, or long-press to select several, to favorite it.'
+              : filter === ARCHIVED
+                ? 'Long-press a save to select it, then Archive selected.'
+                : `Saves land in ${labelFor(filter)} once the pipeline classifies them.`}
+          </AppText>
+        </Card>
+      </Reveal>
+    ) : null;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: palette.background }}>
+      <FlashList
+        data={status === 'ready' ? visible : []}
+        keyExtractor={saveKeyExtractor}
+        renderItem={renderSave}
+        ItemSeparatorComponent={ItemSeparator}
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={listEmpty}
+        contentContainerStyle={contentStyle}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={palette.accent}
+            colors={[palette.accent]}
+            progressBackgroundColor={palette.surface}
+          />
+        }
+      />
 
       <ConfirmSheet
         visible={deleteTarget !== null}
@@ -750,6 +779,6 @@ export function LibraryScreen() {
         destructive={false}
         onConfirm={() => setShowAiOrganizedInfo(false)}
       />
-    </Screen>
+    </View>
   );
 }

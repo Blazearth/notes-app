@@ -23,15 +23,14 @@ export interface ScreenProps {
   refreshControl?: React.ReactElement<RefreshControlProps>;
 }
 
-export function Screen({
-  children,
-  cover = false,
-  reserveNavSpace = true,
-  contentStyle,
-  scroll = true,
-  refreshControl,
-}: ScreenProps) {
-  const { palette, layout, navBarStyle } = useTheme();
+/**
+ * The padding/inset math `Screen` applies to its scroll container — pulled
+ * out so a screen that needs a virtualized root (FlashList, which cannot sit
+ * inside `Screen`'s own ScrollView) can still match its content inset
+ * exactly instead of re-deriving it.
+ */
+export function useScreenContentStyle(reserveNavSpace = true): { paddingHorizontal: number; paddingTop: number; paddingBottom: number } {
+  const { layout, navBarStyle } = useTheme();
   const insets = useSafeAreaInsets();
 
   const bottomInset = reserveNavSpace
@@ -40,14 +39,25 @@ export function Screen({
       : layout.navScrollInset + insets.bottom
     : insets.bottom;
 
-  const padding: StyleProp<ViewStyle> = [
-    {
-      paddingHorizontal: layout.screenGutter,
-      paddingTop: insets.top + layout.screenGutter,
-      paddingBottom: bottomInset,
-    },
-    contentStyle,
-  ];
+  return {
+    paddingHorizontal: layout.screenGutter,
+    paddingTop: insets.top + layout.screenGutter,
+    paddingBottom: bottomInset,
+  };
+}
+
+export function Screen({
+  children,
+  cover = false,
+  reserveNavSpace = true,
+  contentStyle,
+  scroll = true,
+  refreshControl,
+}: ScreenProps) {
+  const { palette } = useTheme();
+  const screenPadding = useScreenContentStyle(reserveNavSpace);
+
+  const padding: StyleProp<ViewStyle> = [screenPadding, contentStyle];
 
   return (
     <View style={{ flex: 1, backgroundColor: palette.background }}>
