@@ -46,7 +46,7 @@ class SpaceServiceTombstoneTest {
         jdbc = mock(JdbcClient.class);
         tombstones = mock(TombstoneService.class);
         service = new SpaceService(jdbc, mock(ProfileService.class), JsonMapper.builder().build(),
-                tombstones);
+                tombstones, mock(com.weavr.api.notification.NotificationService.class));
     }
 
     /** `roleOf`, which every guard in SpaceService funnels through. */

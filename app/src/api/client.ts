@@ -887,3 +887,23 @@ export function getSync(since?: string | null, limit = 200): Promise<SyncRespons
   if (since) params.set('since', since);
   return request<SyncResponse>(`/v1/sync?${params.toString()}`);
 }
+
+// ---------------------------------------------------------------------------
+// Push Notifications
+// ---------------------------------------------------------------------------
+
+export function registerPushToken(token: string, platform = 'expo'): Promise<void> {
+  return request<void>('/v1/notifications/push-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, platform }),
+  });
+}
+
+export function unregisterPushToken(token: string): Promise<void> {
+  return request<void>('/v1/notifications/push-token', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+}

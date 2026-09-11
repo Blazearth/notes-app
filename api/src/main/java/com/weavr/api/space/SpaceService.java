@@ -51,14 +51,17 @@ public class SpaceService {
     private final ProfileService profiles;
     private final ObjectMapper objectMapper;
     private final TombstoneService tombstones;
+    private final com.weavr.api.notification.NotificationService notifications;
     private final SecureRandom random = new SecureRandom();
 
     SpaceService(JdbcClient jdbc, ProfileService profiles, ObjectMapper objectMapper,
-                 TombstoneService tombstones) {
+                 TombstoneService tombstones,
+                 com.weavr.api.notification.NotificationService notifications) {
         this.jdbc = jdbc;
         this.profiles = profiles;
         this.objectMapper = objectMapper;
         this.tombstones = tombstones;
+        this.notifications = notifications;
     }
 
     public record Space(UUID id, String name, String type, UUID ownerId, SpaceRole myRole,
@@ -416,6 +419,16 @@ public class SpaceService {
 
         addMember(invite.spaceId(), userId, invite.role());
         recordActivity(invite.spaceId(), userId, null, "member_joined", Map.of());
+
+        String joinerName = profiles.getUsername(userId).orElse("A new member");
+        notifications.notifySpaceMembers(
+                invite.spaceId(),
+                userId,
+                invite.spaceName(),
+                joinerName + " joined " + invite.spaceName(),
+                Map.of("type", "space", "spaceId", invite.spaceId().toString())
+        );
+
         log.info("User {} joined space {} via invite {}", userId, invite.spaceId(), invite.id());
         return get(userId, invite.spaceId());
     }

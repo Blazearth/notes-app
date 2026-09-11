@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "com.weavr.app",
-      "versionCode": 2,
+      "versionCode": 3,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {

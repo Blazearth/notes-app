@@ -88,6 +88,13 @@ class RestClientConfig {
         return builder(props.timeout());
     }
 
+    @Bean
+    @Qualifier("notification")
+    @Scope("prototype")
+    RestClient.Builder notificationRestClientBuilder(com.weavr.api.notification.NotificationProperties props) {
+        return builder(props.timeout());
+    }
+
     private static RestClient.Builder builder(Duration readTimeout) {
         return RestClient.builder().requestFactory(requestFactory(readTimeout));
     }
