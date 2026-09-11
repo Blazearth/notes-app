@@ -14,20 +14,28 @@ export interface SaveTypeMeta {
   label: string;
   glyph: GlyphName;
   color: string;
+  /**
+   * Whether this type gets the Saved/Planned/Started/Done progress control.
+   * Per CLAUDE.md's "completion must be user-owned" principle: shared only
+   * across the Acts that genuinely have a completion state (workout, recipe,
+   * itinerary) — never forced onto a save that has nothing to complete
+   * (articles, products, reference saves get no ring). Defaults to `false`.
+   */
+  hasProgress?: boolean;
 }
 
 /** The 14 types `KnowledgeTypeRegistry` ships today, in its registration order. */
 const KNOWLEDGE_TYPES: SaveTypeMeta[] = [
-  { type: 'recipe', label: 'Recipes', glyph: 'utensils', color: TYPE_COLORS.recipe },
+  { type: 'recipe', label: 'Recipes', glyph: 'utensils', color: TYPE_COLORS.recipe, hasProgress: true },
   { type: 'movie', label: 'Watchlist', glyph: 'film', color: TYPE_COLORS.movie },
   { type: 'place', label: 'Places', glyph: 'mapPin', color: TYPE_COLORS.place },
   { type: 'article', label: 'Articles', glyph: 'fileText', color: TYPE_COLORS.article },
   { type: 'product', label: 'Products', glyph: 'tag', color: TYPE_COLORS.product },
   { type: 'book', label: 'Books', glyph: 'book', color: TYPE_COLORS.book },
-  { type: 'workout', label: 'Workouts', glyph: 'activity', color: TYPE_COLORS.workout },
+  { type: 'workout', label: 'Workouts', glyph: 'activity', color: TYPE_COLORS.workout, hasProgress: true },
   { type: 'recommendation_list', label: 'Recommendations', glyph: 'list', color: TYPE_COLORS.recommendation_list },
   { type: 'checklist', label: 'Checklists', glyph: 'checkSquare', color: TYPE_COLORS.checklist },
-  { type: 'itinerary', label: 'Itineraries', glyph: 'compass', color: TYPE_COLORS.itinerary },
+  { type: 'itinerary', label: 'Itineraries', glyph: 'compass', color: TYPE_COLORS.itinerary, hasProgress: true },
   { type: 'course', label: 'Courses', glyph: 'graduationCap', color: TYPE_COLORS.course },
   { type: 'github_repo', label: 'Repos', glyph: 'code', color: TYPE_COLORS.github_repo },
   { type: 'other', label: 'Notes', glyph: 'textNote', color: TYPE_COLORS.other },
