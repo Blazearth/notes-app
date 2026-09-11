@@ -107,6 +107,12 @@ export async function scheduleSaveReminder({
   body?: string;
   date: Date;
 }): Promise<string | null> {
+  // expo-notifications' scheduling API isn't implemented on web (it throws
+  // UnavailabilityError) — local device reminders aren't a web concept anyway.
+  if (Platform.OS === 'web') {
+    return null;
+  }
+
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
   let finalStatus = existingStatus;
   if (existingStatus !== 'granted') {
@@ -120,20 +126,23 @@ export async function scheduleSaveReminder({
   // Cancel any existing reminder for this save before setting a new one
   await cancelSaveReminder(saveId);
 
-  const identifier = await Notifications.scheduleNotificationAsync({
-    content: {
-      title: `Reminder: ${title}`,
-      body: body || 'Tap to view your saved notes.',
-      data: { type: 'save', saveId },
-      sound: 'default',
-    },
-    trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.DATE,
-      date,
-    },
-  });
-
-  return identifier;
+  try {
+    return await Notifications.scheduleNotificationAsync({
+      content: {
+        title: `Reminder: ${title}`,
+        body: body || 'Tap to view your saved notes.',
+        data: { type: 'save', saveId },
+        sound: 'default',
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date,
+      },
+    });
+  } catch (err) {
+    console.warn('Failed to schedule reminder for save:', err);
+    return null;
+  }
 }
 
 /**
