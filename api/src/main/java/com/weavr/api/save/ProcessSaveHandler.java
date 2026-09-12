@@ -5,6 +5,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import com.weavr.api.analytics.AnalyticsEvents;
+import com.weavr.api.analytics.AnalyticsService;
 import com.weavr.api.job.JobHandler;
 import com.weavr.api.job.JobQueue;
 import com.weavr.api.job.JobRecord;
@@ -52,11 +54,12 @@ class ProcessSaveHandler implements JobHandler {
     private final JobQueue jobQueue;
     private final JdbcClient jdbc;
     private final SafeUrlFetcher fetcher;
+    private final AnalyticsService analytics;
 
     ProcessSaveHandler(SaveRepository saves, SaveStageWriter stages,
                        SourceExtractor cascade, ExtractionServiceClient extractionService,
                        JobQueue jobQueue, JdbcClient jdbc,
-                       SafeUrlFetcher fetcher) {
+                       SafeUrlFetcher fetcher, AnalyticsService analytics) {
         this.saves = saves;
         this.stages = stages;
         this.cascade = cascade;
@@ -64,6 +67,7 @@ class ProcessSaveHandler implements JobHandler {
         this.jobQueue = jobQueue;
         this.jdbc = jdbc;
         this.fetcher = fetcher;
+        this.analytics = analytics;
     }
 
     @Override
@@ -238,5 +242,10 @@ class ProcessSaveHandler implements JobHandler {
                 .param(userMessage)
                 .param(saveId)
                 .update();
+
+        saves.findById(saveId).ifPresent(save -> analytics.capture(save.getUserId(),
+                AnalyticsEvents.EXTRACTION_FAILED,
+                Map.of("stage", "download", "error_type", errorCode,
+                        "source_type", save.getSourceType().name())));
     }
 }

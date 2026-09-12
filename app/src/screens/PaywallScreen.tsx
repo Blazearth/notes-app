@@ -1,8 +1,10 @@
-import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, View } from 'react-native';
 
 import type { MeResponse } from '@/api/types';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent, type PaywallTrigger } from '@/analytics/events';
 import { usePurchases, type PurchaseOutcome, type PurchasePlan } from '@/billing';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -174,6 +176,16 @@ function PlanRow({
 export function PaywallScreen() {
   const { palette, spacing, radius, layout } = useTheme();
   const router = useRouter();
+  const { trigger } = useLocalSearchParams<{ trigger?: string }>();
+
+  useEffect(() => {
+    track(AnalyticsEvent.ScreenViewed, { screen_name: 'paywall' });
+    track(AnalyticsEvent.PaywallViewed, {
+      trigger: trigger === 'entitlement_gate' ? 'entitlement_gate' : ('settings' as PaywallTrigger),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const {
     available,
     unavailableReason,
@@ -380,7 +392,11 @@ export function PaywallScreen() {
 
       {!alreadyPro ? (
         <Touchable
-          onPress={() => selected && void run(() => purchase(selected.id))}
+          onPress={() => {
+            if (!selected) return;
+            track(AnalyticsEvent.PurchaseStarted, { package_id: selected.id });
+            void run(() => purchase(selected.id));
+          }}
           disabled={busy || !available || !selected}
           baseOpacity={busy || !available || !selected ? 0.5 : 1}
           accessibilityRole="button"

@@ -8,11 +8,14 @@ import { Stack, useRouter } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { MISSING_CONFIG } from '@/api/config';
+import { initAnalytics, track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { SessionProvider, useSession } from '@/auth/SessionProvider';
 import { PurchasesProvider } from '@/billing';
 import { USE_MOCK_DATA } from '@/data/config';
@@ -25,6 +28,10 @@ import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
 import { registerForPushNotificationsAsync } from '@/notifications/notifications';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+initAnalytics();
+
+/** Module load time, as a proxy for cold-start time zero — see `SplashGate`. */
+const APP_LAUNCHED_AT = Date.now();
 
 /**
  * Inside the theme so the native stack background and the status-bar icons
@@ -54,6 +61,22 @@ function Routes() {
       subscription.remove();
     };
   }, [session, router]);
+
+  // Warm `app_opened`: the cold-start one fires once from `SplashGate` below,
+  // keyed on time-to-ready rather than on this listener's first (already
+  // "active") state — see AppState's own docs for why the initial call does
+  // not represent a transition.
+  const wasActive = useRef(true);
+  useEffect(() => {
+    const handle = (state: AppStateStatus) => {
+      if (state === 'active' && !wasActive.current) {
+        track(AnalyticsEvent.AppOpened, {});
+      }
+      wasActive.current = state === 'active';
+    };
+    const listener = AppState.addEventListener('change', handle);
+    return () => listener.remove();
+  }, []);
 
   return (
     <>
@@ -219,6 +242,16 @@ function SplashGate({ fontsReady }: { fontsReady: boolean }) {
   // in the wrong theme, or flashes sign-in at an already-signed-in user.
   useEffect(() => {
     if (ready) SplashScreen.hideAsync().catch(() => {});
+  }, [ready]);
+
+  // Cold-start `app_opened` — the one cold-start number worth its own field
+  // (§I): first impression is make-or-break for a silent-capture product with
+  // no other feedback loop. Fires once, the moment the splash would lift.
+  const coldOpenFired = useRef(false);
+  useEffect(() => {
+    if (!ready || coldOpenFired.current) return;
+    coldOpenFired.current = true;
+    track(AnalyticsEvent.AppOpened, { startup_duration_ms: Date.now() - APP_LAUNCHED_AT });
   }, [ready]);
 
   if (!ready) return null;

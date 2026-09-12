@@ -14,6 +14,8 @@ import Animated, {
 
 import { ApiError } from '@/api/client';
 import type { SaveResponse, Space } from '@/api/types';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent, daysSinceCapture } from '@/analytics/events';
 import { useLive, useLiveValue } from '@/local';
 import { sync } from '@/local/sync';
 import {
@@ -1186,6 +1188,18 @@ export function SaveDetailScreen({ id }: { id: string }) {
   useEffect(() => {
     void sync.pullSave(id);
   }, [id]);
+
+  // `save_viewed` — whether "ready" ever gets acted on. Keyed on `id` alone
+  // (not on `save`, which changes shape as fields fill in) so a re-render
+  // from an unrelated field update never double-fires this.
+  useEffect(() => {
+    if (!save || save.status !== 'ready') return;
+    track(AnalyticsEvent.SaveViewed, {
+      knowledge_type: save.knowledgeType ?? 'unknown',
+      days_since_capture: daysSinceCapture(save.createdAt),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, save?.status]);
 
   const loading = reading && save == null;
 

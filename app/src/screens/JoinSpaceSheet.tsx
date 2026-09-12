@@ -4,6 +4,8 @@ import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, TextInput, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { repo } from '@/data';
 import { getStore } from '@/local';
 import { AppText } from '@/components/AppText';
@@ -49,6 +51,7 @@ export function JoinSpaceSheet() {
         // Same reason as CreateSpaceSheet: the list behind this sheet reads the
         // store, so writing here is what makes the join visible immediately.
         await getStore().putSpaces([space]);
+        track(AnalyticsEvent.SpaceJoined, {});
         dismiss();
         router.push({ pathname: '/space/[id]', params: { id: space.id } });
       } catch (e) {

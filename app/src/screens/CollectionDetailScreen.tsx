@@ -1,8 +1,10 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Modal, ScrollView, TextInput, View } from 'react-native';
 
 import type { CollectionEntityResponse, CollectionNodeResponse, SaveResponse } from '@/api/types';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { useLiveValue } from '@/local';
 import {
   DERIVED_TABLES,
@@ -639,6 +641,11 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
   const [placeQuery, setPlaceQuery] = useState('');
 
   const type = nodeType(nodeId);
+
+  useEffect(() => {
+    track(AnalyticsEvent.CollectionOpened, { collection_type: type });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeId]);
 
   // All derived from the local store by the same merge core the server runs
   // (`@/collections/merge` + `@/local/derived`), so there is no fetch and no

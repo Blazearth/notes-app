@@ -3,6 +3,8 @@ import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import { MOCK_CATEGORIES, MOCK_SOURCE_LABELS, type KnowledgeGroup } from '@/data';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent, ageSinceCaptureBucket } from '@/analytics/events';
 import type { CollectionNodeResponse, DigestResponse, SaveResponse, Space } from '@/api/types';
 import { collectionTypeMeta } from '@/collections/collectionMeta';
 import type { NextAction } from '@/collections/nextAction';
@@ -416,7 +418,12 @@ function RecentlyCaptured({ limit }: { limit: number }) {
         confirmLabel="Delete save"
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => {
-          if (deleteTarget) writeDeleteSave(deleteTarget.id);
+          if (deleteTarget) {
+            track(AnalyticsEvent.SaveDeleted, {
+              age_since_capture: ageSinceCaptureBucket(deleteTarget.createdAt),
+            });
+            writeDeleteSave(deleteTarget.id);
+          }
           setDeleteTarget(null);
         }}
       />

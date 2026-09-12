@@ -3,6 +3,7 @@ package com.weavr.api.config;
 import java.net.http.HttpClient;
 import java.time.Duration;
 
+import com.weavr.api.analytics.AnalyticsProperties;
 import com.weavr.api.asr.GroqProperties;
 import com.weavr.api.embed.EmbeddingProperties;
 import com.weavr.api.enrich.EnrichmentProperties;
@@ -92,6 +93,13 @@ class RestClientConfig {
     @Qualifier("notification")
     @Scope("prototype")
     RestClient.Builder notificationRestClientBuilder(com.weavr.api.notification.NotificationProperties props) {
+        return builder(props.timeout());
+    }
+
+    @Bean
+    @Qualifier("posthog")
+    @Scope("prototype")
+    RestClient.Builder posthogRestClientBuilder(AnalyticsProperties props) {
         return builder(props.timeout());
     }
 

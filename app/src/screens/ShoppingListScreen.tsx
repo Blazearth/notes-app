@@ -4,6 +4,8 @@ import { ActivityIndicator, RefreshControl, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import type { ShoppingListItem, ShoppingListResponse } from '@/api/types';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { repo } from '@/data';
 import { useLiveValue } from '@/local';
 import {
@@ -184,6 +186,10 @@ export function ShoppingListScreen({ spaceId }: { spaceId?: string } = {}) {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    track(AnalyticsEvent.ActStarted, { act_type: 'shopping_list' });
+  }, []);
+
   /**
    * The interaction this whole layer exists for: repeated taps, standing in a
    * shop, on the worst connection the app ever sees.
@@ -196,6 +202,12 @@ export function ShoppingListScreen({ spaceId }: { spaceId?: string } = {}) {
    */
   const toggle = useCallback(
     (item: ShoppingListItem) => {
+      // The last unchecked item just got checked — the list is finished.
+      // Distinguishes opened-it from used-it (§E); an unchecked-back-off
+      // never re-fires this, since only the checking direction can complete.
+      if (!item.checked && items.every((i) => i.id === item.id || i.checked)) {
+        track(AnalyticsEvent.ActCompleted, { act_type: 'shopping_list' });
+      }
       if (spaceId) {
         // The optimistic copy lives here rather than in the store, for the
         // reason stated on `spaceList`. The queued op is the *same* one the
@@ -217,7 +229,7 @@ export function ShoppingListScreen({ spaceId }: { spaceId?: string } = {}) {
       }
       writeShoppingItemChecked(item.id, !item.checked);
     },
-    [spaceId],
+    [spaceId, items],
   );
 
   const clearChecked = useCallback(() => {

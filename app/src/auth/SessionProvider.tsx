@@ -1,11 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { supabase, SUPABASE_AUTH_STORAGE_KEY } from './supabase';
 import { getAuthCallbackUrl } from './redirectUrl';
 import { getMe } from '@/api/client';
+import { identify, resetAnalytics, track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { USE_MOCK_DATA } from '@/data/config';
 import { MOCK_USER_ID } from '@/data/mockData';
 import { mirrorShareSession } from '@/share/nativeShareConfig';
@@ -106,6 +108,19 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     mirrorShareSession(session?.access_token ?? null, session?.refresh_token ?? null);
   }, [session]);
 
+  // §F: identify on every session establish, not just first sign-in — a
+  // token refresh or app restart fires `onAuthStateChange` with the same
+  // user, and re-identifying is what merges every device/session into one
+  // PostHog person with no alias logic needed.
+  const identifiedUserId = useRef<string | null>(null);
+  useEffect(() => {
+    const userId = session?.user.id ?? null;
+    if (userId && identifiedUserId.current !== userId) {
+      identify(userId);
+      identifiedUserId.current = userId;
+    }
+  }, [session]);
+
   // The refresh timer must not run while the app is backgrounded: on native the
   // JS runtime is suspended, so a timer that fires there either does nothing or
   // wakes up to a stale clock. Supabase exposes explicit start/stop for this.
@@ -129,6 +144,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const signIn = useCallback(async (email: string, password: string) => {
     if (USE_MOCK_DATA) {
       setSession(MOCK_SESSION);
+      track(AnalyticsEvent.SignInCompleted, {});
       return;
     }
     const { error } = await supabase.auth.signInWithPassword({
@@ -136,6 +152,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       password,
     });
     if (error) throw new Error(error.message);
+    track(AnalyticsEvent.SignInCompleted, {});
     // Sync the server-authoritative username to local prefs so returning
     // users see their username on any device without re-entering it.
     try {
@@ -150,6 +167,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const signUp = useCallback(async (email: string, password: string, name?: string) => {
     if (USE_MOCK_DATA) {
       setSession(MOCK_SESSION);
+      track(AnalyticsEvent.SignInCompleted, {});
       return { needsConfirmation: false };
     }
     const trimmedName = name?.trim();
@@ -173,11 +191,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       },
     });
     if (error) throw new Error(error.message);
-    // With email confirmation enabled, signUp returns a user but no session.
+    // With email confirmation enabled, signUp returns a user but no session —
+    // no session means no value delivered yet, so this is not the activation
+    // anchor until a real session exists.
+    if (data.session != null) track(AnalyticsEvent.SignInCompleted, {});
     return { needsConfirmation: data.session == null };
   }, []);
 
   const signOut = useCallback(async () => {
+    identifiedUserId.current = null;
+    resetAnalytics();
     if (USE_MOCK_DATA) {
       setSession(null);
       return;

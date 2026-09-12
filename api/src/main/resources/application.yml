@@ -465,6 +465,15 @@ weavr:
     expo-push-url: ${WEAVR_EXPO_PUSH_URL:https://exp.host/--/api/v2/push/send}
     timeout: ${WEAVR_NOTIFICATIONS_TIMEOUT:10s}
 
+  # --------------------------------------------------------------------------
+  # Analytics — PostHog server-side capture (docs/weavr-analytics-plan.md)
+  # --------------------------------------------------------------------------
+  analytics:
+    enabled: ${WEAVR_ANALYTICS_ENABLED:false}
+    api-key: ${WEAVR_POSTHOG_API_KEY:}
+    host: ${WEAVR_POSTHOG_HOST:https://us.i.posthog.com}
+    timeout: ${WEAVR_ANALYTICS_TIMEOUT:5s}
+
 management:
   endpoints:
     web:

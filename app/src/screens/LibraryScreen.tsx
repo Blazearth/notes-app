@@ -4,6 +4,8 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 
 import type { CollectionNodeResponse, SaveResponse } from '@/api/types';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent, ageSinceCaptureBucket } from '@/analytics/events';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Chip } from '@/components/Chip';
@@ -752,7 +754,12 @@ export function LibraryScreen() {
         confirmLabel="Delete save"
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => {
-          if (deleteTarget) writeDeleteSave(deleteTarget.id);
+          if (deleteTarget) {
+            track(AnalyticsEvent.SaveDeleted, {
+              age_since_capture: ageSinceCaptureBucket(deleteTarget.createdAt),
+            });
+            writeDeleteSave(deleteTarget.id);
+          }
           setDeleteTarget(null);
         }}
       />
@@ -767,7 +774,13 @@ export function LibraryScreen() {
           const ids = [...selectedIds];
           exitSelection();
           setBulkDeleteConfirm(false);
-          for (const id of ids) writeDeleteSave(id);
+          for (const id of ids) {
+            const target = saves.find((s) => s.id === id);
+            track(AnalyticsEvent.SaveDeleted, {
+              age_since_capture: target ? ageSinceCaptureBucket(target.createdAt) : '>1w',
+            });
+            writeDeleteSave(id);
+          }
         }}
       />
 

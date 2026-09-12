@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, TextInput, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { repo } from '@/data';
 import type { SaveResponse, SearchHit } from '@/api/types';
 import { AppText } from '@/components/AppText';
@@ -186,6 +188,10 @@ export function SearchScreen() {
     void loadRecentSearches().then(setRecentSearches);
   }, []);
 
+  useEffect(() => {
+    track(AnalyticsEvent.ScreenViewed, { screen_name: 'search' });
+  }, []);
+
   /**
    * Guards against a slow early request landing after a fast later one and
    * overwriting it — the classic debounced-search race. Comparing the sequence
@@ -239,6 +245,11 @@ export function SearchScreen() {
         if (ticket !== seq.current) return;
         serverHits.current = hits;
         publish(trimmed, false, null);
+        const merged = mergeSearchHits(localHits.current, hits);
+        track(AnalyticsEvent.SearchPerformed, {
+          result_count: merged.length,
+          has_results: merged.length > 0,
+        });
       } catch (e) {
         if (ticket !== seq.current) return;
         publish(
@@ -246,6 +257,9 @@ export function SearchScreen() {
           false,
           e instanceof ApiError ? e : new ApiError('server', 'Something went wrong', null),
         );
+        track(AnalyticsEvent.SearchFailed, {
+          error_type: e instanceof ApiError ? e.kind : 'unknown',
+        });
       }
     },
     [publish],
@@ -509,7 +523,13 @@ export function SearchScreen() {
       {state.kind === 'results' && state.hits.length > 0
         ? (() => {
             const { direct, related, showSplit } = splitHits(state.hits);
-            const goTo = (id: string) => () => router.push({ pathname: '/save/[id]', params: { id } });
+            const goTo = (id: string, position: number, knowledgeType: string | undefined) => () => {
+              track(AnalyticsEvent.SearchResultOpened, {
+                position,
+                knowledge_type: knowledgeType ?? 'unknown',
+              });
+              router.push({ pathname: '/save/[id]', params: { id } });
+            };
             return (
               <View style={{ gap: spacing.smd }}>
                 <AppText variant="caption" tone="faint">
@@ -517,7 +537,11 @@ export function SearchScreen() {
                 </AppText>
                 {direct.map((hit, i) => (
                   <Reveal key={hit.save.id} index={i}>
-                    <ResultRow hit={hit} query={state.query} onPress={goTo(hit.save.id)} />
+                    <ResultRow
+                      hit={hit}
+                      query={state.query}
+                      onPress={goTo(hit.save.id, i, hit.save.knowledgeType)}
+                    />
                   </Reveal>
                 ))}
                 {/* Only when the split says something: a query that returned
@@ -529,7 +553,11 @@ export function SearchScreen() {
                     <SectionLabel>Also related</SectionLabel>
                     {related.map((hit, i) => (
                       <Reveal key={hit.save.id} index={direct.length + i}>
-                        <ResultRow hit={hit} query={state.query} onPress={goTo(hit.save.id)} />
+                        <ResultRow
+                          hit={hit}
+                          query={state.query}
+                          onPress={goTo(hit.save.id, direct.length + i, hit.save.knowledgeType)}
+                        />
                       </Reveal>
                     ))}
                   </>

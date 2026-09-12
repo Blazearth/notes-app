@@ -9,6 +9,8 @@ import React, {
 } from 'react';
 
 import type { MeResponse } from '@/api/types';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { useSession } from '@/auth/SessionProvider';
 import { KV, getStore } from '@/local';
 import { sync } from '@/local/sync';
@@ -196,6 +198,10 @@ export function PurchasesProvider({ children }: { children: React.ReactNode }) {
         // would report `pending` when the next attempt might have confirmed.
       }
     }
+    // Quantifies how often users hit the uncomfortable "still confirming"
+    // state — see §E. The user has been charged; this is a wait, not a
+    // failure, and the event says so.
+    track(AnalyticsEvent.PurchasePollTimeout, {});
     return false;
   }, []);
 

@@ -268,6 +268,26 @@ should be reflected in the terms.
 - [ ] Terms state that users are responsible for the content they share into the app
 - [ ] Confirm no downloaded video is retained (the pipeline deletes in a `finally`; verify the Storage bucket holds only thumbnails and user screenshots)
 
+### 4.7 PostHog analytics (added 2026-09-12)
+
+The app and API now carry code that *can* emit behavioural analytics to
+PostHog (`docs/weavr-analytics-plan.md`; wiring in `app/src/analytics/` and
+`api/.../analytics/`) — off by default (`weavr.analytics.enabled=false`, no
+`WEAVR_POSTHOG_API_KEY`/`EXPO_PUBLIC_POSTHOG_KEY` configured), so nothing sends
+yet. Answer the Data Safety form against what happens once it is turned on,
+not against today's dormant state — a form filled in before the switch flips
+is wrong the day it does.
+
+- [ ] Declare "App activity" / "App interactions" data collection (screen
+      views, feature usage) — purpose: analytics, not shared for advertising
+- [ ] Declare "Device or other IDs" if PostHog's own device/session id is
+      collected on top of the account-keyed `distinct_id`
+- [ ] Confirm the answer says data is **not shared with third parties for
+      advertising** — PostHog here is a processor for product analytics only,
+      the same category as Supabase or Render, not an ad network
+- [ ] `legal/privacy.html` §2.B/§5/§7 already disclose PostHog (2026-09-12) — re-read them before answering the form, they are the source of truth for what actually gets collected
+- [ ] Re-answer this section if analytics is ever turned on for a paid tier with different PostHog terms, same rule as §4.1's Gemini caveat
+
 ---
 
 ## 5. Build and submit mechanics

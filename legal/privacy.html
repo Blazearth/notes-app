@@ -411,10 +411,11 @@ footer.pagefoot {
 
       <h3>B. Information collected automatically</h3>
       <p>
-        Weavr contains <strong>no analytics SDK, no advertising SDK, and no third-party
-        crash-reporting SDK</strong>. We do not build behavioural profiles, and there is no
-        event-tracking pipeline in the app. What is collected automatically is limited to
-        what running a networked service necessarily involves:
+        Weavr uses <strong>PostHog</strong> for product analytics — behavioural metadata
+        only, never the content you save. There is <strong>still no advertising SDK and no
+        third-party crash-reporting SDK</strong> in the app. What is collected automatically
+        is limited to what running a networked service necessarily involves, plus the
+        analytics described below:
       </p>
       <div class="table-scroll">
         <table>
@@ -443,12 +444,19 @@ footer.pagefoot {
               <td><strong>Connectivity state</strong></td>
               <td>The app checks on-device whether you are online, so it can queue work while you are offline. This check stays on your device.</td>
             </tr>
+            <tr>
+              <td><strong>Product analytics events</strong> (PostHog) — app opens, sign-ins, which screens you visit, whether a save reached a usable result, search result counts, whether a shopping list or workout comparison was opened and finished, Space creation and joining, paywall views and purchase attempts, and coarse timing/error-type data</td>
+              <td>To tell whether Weavr's capture-and-organize loop is actually working and where it breaks, and to measure feature adoption. Every event carries only enum-like categories, counts, durations and booleans — never a save's title, extracted text, thumbnail, source URL, a search query string, or the text of a comment, shopping-list item or workout note. Analytics events are keyed to the same account identifier used elsewhere in the app, not to a separate advertising identifier.</td>
+            </tr>
           </tbody>
         </table>
       </div>
       <p>
         We do not collect precise device location. Where a saved place has an address or
-        coordinates, those describe the <em>saved place</em> — not where you are.
+        coordinates, those describe the <em>saved place</em> — not where you are. We do not
+        use session replay: PostHog never records a video or pixel-level reconstruction of
+        your screen, which matters here because your screen can show personal screenshots,
+        photos and PDFs.
       </p>
 
       <h3>C. Information Weavr creates from your content</h3>
@@ -663,6 +671,11 @@ footer.pagefoot {
               <td>Subscription entitlement records</td>
               <td>A customer identifier and subscription status. <em>No purchase flow exists in the app today</em> — this integration is inactive until paid plans launch.</td>
             </tr>
+            <tr>
+              <td><strong>PostHog</strong></td>
+              <td>Product analytics — see section 2.B</td>
+              <td>Behavioural event data (screen views, feature usage, coarse timing and error-type data) keyed to your account identifier; app version and platform. Never a save's content, title, thumbnail, source URL, or a search/comment/list-item string.</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -747,6 +760,7 @@ footer.pagefoot {
         <li><strong>A pending-changes queue</strong> — changes made offline, held until they can be sent.</li>
         <li><strong>Preferences</strong> — theme, accent, font, haptics, and whether the app opens when you share into it.</li>
         <li><strong>A small share-handoff file</strong> — on Android, so the background share handler can identify your account and upload what you shared.</li>
+        <li><strong>Analytics queue</strong> — PostHog briefly queues behavioural events on-device before sending them, and stores the analytics identifier described in section 2.B. It is not an advertising identifier and is not shared with, or readable by, any advertising company.</li>
       </ul>
       <p>
         All of this is removed when you sign out or uninstall the app.

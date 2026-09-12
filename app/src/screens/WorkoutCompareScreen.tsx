@@ -1,8 +1,10 @@
 import { useRouter } from 'expo-router';
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
 import type { SaveResponse } from '@/api/types';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
@@ -172,6 +174,20 @@ export function WorkoutCompareScreen({ ids }: { ids: string[] }) {
   const saves = data ?? EMPTY_SAVES;
   const loaded = !loading;
   const error = loaded && saves.length < ids.length ? 'Could not load these workouts' : null;
+
+  useEffect(() => {
+    track(AnalyticsEvent.ActStarted, { act_type: 'compare_workouts' });
+  }, []);
+
+  // Viewing the comparison *is* completion — there is no further "finish"
+  // action on this screen (§E's note on `act_completed`). Fires once, only
+  // on the success path.
+  const completedFired = useRef(false);
+  useEffect(() => {
+    if (!loaded || error || completedFired.current) return;
+    completedFired.current = true;
+    track(AnalyticsEvent.ActCompleted, { act_type: 'compare_workouts' });
+  }, [loaded, error]);
 
   if (error) {
     return (

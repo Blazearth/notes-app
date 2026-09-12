@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Weavr Analytics Plan</title>
+<style>
+:root{
+  --bg:#f3f4f1;
+  --surface:#ffffff;
+  --surface-2:#eceee9;
+  --border:#d8dbd4;
+  --ink:#1a2220;
+  --ink-soft:#4b5650;
+  --ink-faint:#7c8880;
+  --accent:#1c6f66;
+  --accent-strong:#0f4d46;
+  --accent-tint:#e3efec;
+  --warn:#a8531b;
+  --warn-tint:#f7e9dd;
+  --warn-strong:#7a3c12;
+  --tag-p0:#8f2d2d;
+  --tag-p0-tint:#f6e3e1;
+  --tag-p1:#1c6f66;
+  --tag-p1-tint:#e3efec;
+  --tag-p2:#8a6d1c;
+  --tag-p2-tint:#f4edd9;
+  --tag-avoid:#5a5f68;
+  --tag-avoid-tint:#e9e9ec;
+  --mono-num:#0f4d46;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121614;
+    --surface:#181e1b;
+    --surface-2:#1f2622;
+    --border:#2c342f;
+    --ink:#e7ece9;
+    --ink-soft:#b3beb8;
+    --ink-faint:#7c8880;
+    --accent:#4fb3a4;
+    --accent-strong:#7fcabe;
+    --accent-tint:#1b2e2a;
+    --warn:#d98b4f;
+    --warn-tint:#2e2016;
+    --warn-strong:#f0ad78;
+    --tag-p0:#e08a8a;
+    --tag-p0-tint:#332020;
+    --tag-p1:#4fb3a4;
+    --tag-p1-tint:#1b2e2a;
+    --tag-p2:#d6bd6a;
+    --tag-p2-tint:#2f2a17;
+    --tag-avoid:#9aa0a8;
+    --tag-avoid-tint:#22262b;
+    --mono-num:#7fcabe;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121614;
+  --surface:#181e1b;
+  --surface-2:#1f2622;
+  --border:#2c342f;
+  --ink:#e7ece9;
+  --ink-soft:#b3beb8;
+  --ink-faint:#7c8880;
+  --accent:#4fb3a4;
+  --accent-strong:#7fcabe;
+  --accent-tint:#1b2e2a;
+  --warn:#d98b4f;
+  --warn-tint:#2e2016;
+  --warn-strong:#f0ad78;
+  --tag-p0:#e08a8a;
+  --tag-p0-tint:#332020;
+  --tag-p1:#4fb3a4;
+  --tag-p1-tint:#1b2e2a;
+  --tag-p2:#d6bd6a;
+  --tag-p2-tint:#2f2a17;
+  --tag-avoid:#9aa0a8;
+  --tag-avoid-tint:#22262b;
+  --mono-num:#7fcabe;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:"Source Sans 3","Public Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:16px;
+  line-height:1.6;
+  padding-inline:20px;
+}
+h1,h2,h3{
+  font-family:"Fraunces","Iowan Old Style",Georgia,serif;
+  text-wrap:balance;
+  color:var(--ink);
+  font-weight:600;
+}
+::selection{background:var(--accent-tint);color:var(--accent-strong);}
+a{color:var(--accent-strong);}
+a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+.wrap{max-width:800px;margin:0 auto;}
+
+.topnav{
+  position:sticky; top:0; z-index:20;
+  background:color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--border);
+  margin-inline:-20px; padding-inline:20px;
+}
+.topnav-inner{
+  max-width:800px;margin:0 auto;
+  display:flex; align-items:center; gap:14px;
+  padding-block:10px;
+}
+.topnav-title{
+  font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:0.95rem;
+  white-space:nowrap; color:var(--ink);
+}
+.topnav-links{
+  display:flex; gap:2px; overflow-x:auto; scrollbar-width:none;
+}
+.topnav-links::-webkit-scrollbar{display:none;}
+.topnav-links a{
+  flex:none;
+  font-size:0.74rem; letter-spacing:.02em; text-transform:uppercase;
+  color:var(--ink-soft); text-decoration:none;
+  padding:6px 8px; border-radius:6px; white-space:nowrap;
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+}
+.topnav-links a:hover{background:var(--surface-2); color:var(--ink);}
+
+.hero{padding-block:38px 22px;}
+.eyebrow{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:0.72rem; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--accent-strong); margin:0 0 12px;
+}
+.hero h1{font-size:2.05rem; line-height:1.16; margin:0 0 14px;}
+.hero p.lede{font-size:1.06rem; color:var(--ink-soft); max-width:62ch; margin:0;}
+
+.callout{
+  border:1px solid var(--border);
+  background:var(--surface);
+  border-left:4px solid var(--warn);
+  border-radius:8px;
+  padding:16px 18px;
+  margin-block:24px;
+}
+.callout.accent{border-left-color:var(--accent);}
+.callout h3{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:0.75rem; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--warn-strong); margin:0 0 8px; font-weight:600;
+}
+.callout.accent h3{color:var(--accent-strong);}
+.callout p{margin:0 0 8px; color:var(--ink-soft);}
+.callout p:last-child{margin-bottom:0;}
+.callout ul{margin:8px 0 0; padding-left:1.2em; color:var(--ink-soft);}
+.callout li{margin-bottom:4px;}
+.callout code{background:var(--surface-2); padding:1px 5px; border-radius:4px; font-size:0.85em;}
+
+section.block{padding-block:34px; border-top:1px solid var(--border);}
+.sec-head{display:flex; align-items:baseline; gap:12px; margin-bottom:6px;}
+.sec-num{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  color:var(--mono-num); font-size:1rem; font-weight:600;
+}
+.sec-head h2{font-size:1.5rem; margin:0;}
+.sec-dek{color:var(--ink-faint); font-size:0.94rem; margin:0 0 20px; max-width:62ch;}
+
+h3.sub{font-size:1.04rem; margin:24px 0 10px; color:var(--ink);}
+p{max-width:68ch;}
+.wide p{max-width:none;}
+code{background:var(--surface-2); padding:1px 5px; border-radius:4px; font-size:0.88em; font-family:"IBM Plex Mono",ui-monospace,monospace;}
+
+.pill{
+  display:inline-block; font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:0.66rem; letter-spacing:.03em; text-transform:uppercase;
+  padding:2px 8px; border-radius:999px; font-weight:600; white-space:nowrap;
+}
+.pill-essential{background:var(--tag-p1-tint); color:var(--tag-p1);}
+.pill-optional{background:var(--tag-p2-tint); color:var(--tag-p2);}
+.pill-server{background:var(--accent-tint); color:var(--accent-strong);}
+.pill-client{background:var(--tag-avoid-tint); color:var(--tag-avoid);}
+.pill-dont{background:var(--tag-p0-tint); color:var(--tag-p0);}
+
+.tblwrap{overflow-x:auto; margin:14px 0 22px; border:1px solid var(--border); border-radius:10px;}
+table{border-collapse:collapse; width:100%; min-width:600px; font-size:0.9rem; background:var(--surface);}
+th,td{text-align:left; padding:10px 12px; border-bottom:1px solid var(--border); vertical-align:top;}
+thead th{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:0.7rem;
+  text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint);
+  background:var(--surface-2);
+}
+tbody tr:last-child td{border-bottom:none;}
+td.num, th.num{font-variant-numeric:tabular-nums; font-family:"IBM Plex Mono",ui-monospace,monospace;}
+.strong-row td:first-child{font-weight:600; color:var(--ink);}
+table code{white-space:nowrap;}
+
+ul.plain{padding-left:1.15em; margin:10px 0;}
+ul.plain li{margin-bottom:8px; color:var(--ink-soft);}
+ul.plain li strong{color:var(--ink);}
+ol.steps{padding-left:1.3em; margin:10px 0;}
+ol.steps li{margin-bottom:10px; color:var(--ink-soft);}
+ol.steps li strong{color:var(--ink);}
+
+.cardgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:14px 0 22px;}
+@media (max-width:680px){.cardgrid{grid-template-columns:1fr;}}
+.ns-card{border:1px solid var(--border); background:var(--surface); border-radius:10px; padding:14px 16px;}
+.ns-card h4{margin:0 0 6px; font-size:0.95rem; font-family:"Source Sans 3",sans-serif; font-weight:700;}
+.ns-card p{margin:0; font-size:0.86rem; color:var(--ink-soft); max-width:none;}
+.ns-card .why{color:var(--accent-strong); font-weight:600; font-size:0.78rem; text-transform:uppercase; letter-spacing:.03em; margin-top:8px; display:block;}
+
+.phase{border:1px solid var(--border); background:var(--surface); border-radius:10px; padding:18px 20px; margin-bottom:14px;}
+.phase-head{display:flex; align-items:baseline; gap:10px; margin-bottom:10px;}
+.phase-head .tag{font-family:"IBM Plex Mono",ui-monospace,monospace; color:var(--mono-num); font-weight:700; font-size:0.85rem;}
+.phase-head h4{margin:0; font-size:1.02rem;}
+.phase ul.plain{margin:0;}
+.phase.dont{border-color:color-mix(in srgb, var(--tag-p0) 40%, var(--border));}
+.phase.dont .phase-head .tag{color:var(--tag-p0);}
+
+footer{padding-block:28px 46px; color:var(--ink-faint); font-size:0.82rem; border-top:1px solid var(--border);}
+
+@media (max-width:480px){
+  .hero h1{font-size:1.6rem;}
+}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Source+Sans+3:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <span class="topnav-title">Weavr</span>
+    <div class="topnav-links">
+      <a href="#a">A Philosophy</a>
+      <a href="#c">C North star</a>
+      <a href="#d">D Activation</a>
+      <a href="#e">E Events</a>
+      <a href="#f">F Identity</a>
+      <a href="#g">G Privacy</a>
+      <a href="#j">J Funnels</a>
+      <a href="#k">K Cohorts</a>
+      <a href="#o">O Architecture</a>
+      <a href="#r">R Don't track</a>
+      <a href="#s">S Priority</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<div class="hero">
+  <p class="eyebrow">Analytics plan · PostHog · Sep 2026</p>
+  <h1>Measuring whether Capture → Extract → Find/Act actually holds.</h1>
+  <p class="lede">Not a plan to collect everything PostHog makes easy — a plan to answer seven specific product questions, built around how Weavr's pipeline and screens actually work today, not a generic mobile-analytics template.</p>
+</div>
+
+<div class="callout">
+  <h3>Read this before anything else</h3>
+  <p>Two places this plan corrects the obvious draft, because the product doesn't match the generic shape:</p>
+  <ul>
+    <li><strong>Most captures never run through the app's JS layer.</strong> Android's silent share-intent receiver enqueues locally and uploads in the background — the app never opens. Capture/extraction/save events are emitted <strong>server-side</strong>, keyed by user id, or the majority of activity is invisible to analytics.</li>
+    <li><strong>The personal library has no "create a collection" action</strong> — groups and collections there are fully derived on-device. An <code>collection_created</code> event would track something that doesn't exist. Real user-driven organizing only happens inside Spaces.</li>
+  </ul>
+</div>
+
+<section class="block" id="a">
+  <div class="sec-head"><span class="sec-num">A</span><h2>Analytics philosophy</h2></div>
+  <p>Three rules govern every decision in this document:</p>
+  <ol class="steps">
+    <li><strong>An event answers one of the seven questions in the brief, or it doesn't ship.</strong> "We could track this" is never sufficient reason.</li>
+    <li><strong>Server truth beats client-reported truth wherever both exist.</strong> Weavr already treats the job queue and the RevenueCat webhook as the source of truth for save status and entitlement — analytics keys off the same source, not a client's optimistic guess.</li>
+    <li><strong>An analytics property is never a second copy of user content.</strong> The privacy policy currently promises zero event-tracking; the surviving promise once that changes is "behavioral metadata only," never "the content, tagged."</li>
+  </ol>
+</section>
+
+<section class="block" id="c">
+  <div class="sec-head"><span class="sec-num">C</span><h2>North Star metric candidates</h2></div>
+  <p class="sec-dek">There isn't enough evidence yet to lock one in — picking now would mean justifying it backwards. Three candidates, ordered by how soon they're trustworthy.</p>
+  <div class="cardgrid">
+    <div class="ns-card">
+      <h4>Week-1 second-capture rate</h4>
+      <p>% of newly activated users who capture a second time within 7 days. Cheapest to trust at low post-launch volume; isolates habit formation from just reopening the app.</p>
+      <span class="why">Recommended starting metric</span>
+    </div>
+    <div class="ns-card">
+      <h4>Saves revisited / active user / week</h4>
+      <p><code>save_viewed</code> where the save is &gt;24h old. Tests whether Extract→Organize→Find delivers — not just whether Capture does.</p>
+      <span class="why">Fallback if #1 doesn't predict D30</span>
+    </div>
+    <div class="ns-card">
+      <h4>Weekly successful captures / retained user</h4>
+      <p>Combines quality and volume into one number. Good exec-summary metric once mature — too composite for day-to-day steering.</p>
+      <span class="why">Revisit once mature</span>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="d">
+  <div class="sec-head"><span class="sec-num">D</span><h2>Activation definition</h2></div>
+  <ul class="plain">
+    <li><strong>Activation event:</strong> <code>save_ready</code> with <code>is_first_save = true</code> — not sign-in (no value delivered) and not <code>capture_received</code> (a failed extraction never delivers the "aha" moment).</li>
+    <li><strong>Activation window:</strong> 24 hours from <code>sign_in_completed</code> — generous enough to absorb a busy-queue day, tight enough that a multi-day gap is a real problem.</li>
+    <li><strong>Drop-off points, in order:</strong> sign-in→first capture (discovery problem) · capture→extraction (pipeline reliability) · extraction→ready (should be ~100%; any gap is a bug) · ready→viewed (did the notification close the loop).</li>
+    <li><strong>Time-to-value:</strong> median and p90 of sign-in → first <code>save_ready</code>.</li>
+  </ul>
+</section>
+
+<section class="block" id="e">
+  <div class="sec-head"><span class="sec-num">E</span><h2>Event taxonomy</h2></div>
+  <p class="sec-dek">Capture/extraction/save events are emitted server-side (Spring Boot, reusing pipeline state that already exists in Postgres). Screen, search, Act and Space events are client-only via the React Native SDK.</p>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>Event</th><th>Fires when</th><th>By</th><th>Priority</th></tr></thead>
+    <tbody>
+      <tr><td><code>app_opened</code></td><td>App reaches foreground</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>sign_in_completed</code></td><td>Supabase session established; <code>identify()</code> fires here</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>capture_received</code></td><td>API accepts an upload and enqueues a job — identical for silent share-intent and the in-app sheet</td><td><span class="pill pill-server">Server</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>capture_failed</code></td><td>Upload rejected pre-pipeline</td><td><span class="pill pill-server">Server</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>extraction_completed</code></td><td>Job reaches <code>ready</code></td><td><span class="pill pill-server">Server</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>extraction_failed</code></td><td>Job reaches <code>failed</code></td><td><span class="pill pill-server">Server</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>save_ready</code></td><td>Status flips to ready; carries <code>is_first_save</code></td><td><span class="pill pill-server">Server</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>save_viewed</code></td><td>Save-detail screen opened</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>save_deleted</code></td><td>Save removed — bucketed age-since-capture</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>save_field_edited</code></td><td>User corrects an extracted field</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-optional">Optional — not buildable yet</span></td></tr>
+      <tr><td><code>search_performed</code></td><td>Search executed — never the query text</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>search_result_opened</code></td><td>A result tapped</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>act_started</code> / <code>act_completed</code></td><td>Shopping-list / compare-workouts opened and finished</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>group_opened</code> / <code>collection_opened</code></td><td>Drill into a derived Library group</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-optional">Optional</span></td></tr>
+      <tr><td><code>space_created</code> / <code>space_joined</code></td><td>Real, user-driven organizing action</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>item_pinned_to_space</code></td><td>Save pinned into a Space collection</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-optional">Optional</span></td></tr>
+      <tr><td><code>screen_viewed</code></td><td>Home / Library / Spaces / Search / Paywall / Settings only</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential, scoped</span></td></tr>
+      <tr><td><code>paywall_viewed</code> / <code>purchase_started</code></td><td>Paywall shown; purchase flow invoked</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>purchase_confirmed</code></td><td>RevenueCat webhook lands — server truth, not the client's optimistic poll</td><td><span class="pill pill-server">Server</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+      <tr><td><code>purchase_poll_timeout</code></td><td>Client's ~21s bounded poll expires before confirmation</td><td><span class="pill pill-client">Client</span></td><td><span class="pill pill-essential">Essential</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p style="font-size:0.88rem;color:var(--ink-faint);"><code>extraction_completed</code> and <code>save_ready</code> usually fire at the same pipeline moment — kept as two events anyway: one is a pipeline-quality signal, the other only means something with <code>is_first_save</code> attached.</p>
+</section>
+
+<section class="block" id="f">
+  <div class="sec-head"><span class="sec-num">F</span><h2>Identity strategy</h2></div>
+  <ul class="plain">
+    <li><strong>distinct_id = Supabase user id</strong> on both client and server — the same id every API service already authorizes against, so one PostHog person merges both streams for free.</li>
+    <li><strong>Pre-auth window is thin but real</strong> — <code>index.tsx</code> redirects straight to sign-in with no session, so only the sign-in screen itself is anonymous. Use PostHog's anonymous id there, then <code>identify()</code> the moment a session establishes; the standard anonymous→identified merge handles the rest.</li>
+    <li><strong><code>posthog.reset()</code> on sign-out</strong> — skipping this is the most common way a second account on the same device gets mismerged into the first person.</li>
+    <li><strong>Server-side is always authenticated</strong> — every job belongs to a user, so there's no anonymous concept to handle there.</li>
+    <li><strong>Multi-device</strong> — identifying with the same id on every device, every session restore, merges devices automatically. No dedicated "device changed" event needed.</li>
+  </ul>
+</section>
+
+<section class="block" id="g">
+  <div class="sec-head"><span class="sec-num">G</span><h2>Privacy strategy</h2></div>
+  <h3 class="sub">Should collect</h3>
+  <p>Feature usage · screen/flow navigation · success/failure and error <em>type</em> · timing/latency · <code>knowledge_type</code>, <code>model_used</code>, <code>confidence</code>, <code>escalated</code> · app version, platform · coarse buckets.</p>
+  <h3 class="sub">Should never collect</h3>
+  <p>Raw extracted text, save titles/thumbnails, source URLs, search query strings, Space comment text, shopping-list item text, workout notes, auth tokens, anything from a captured file, per-frame OCR/ffmpeg internals.</p>
+  <div class="callout accent">
+    <h3>Make it structurally impossible, not just a review hope</h3>
+    <p>Define every event's property shape as a typed interface with only enum-like/numeric/boolean fields — no free-text field exists in the type to misuse. See §O.</p>
+  </div>
+  <div class="callout">
+    <h3>Phase 1 blocker</h3>
+    <p><code>legal/privacy.html</code> currently states Weavr has <em>"no analytics SDK... no event-tracking pipeline in the app."</em> This plan falsifies that live claim. Updating that page and Play's Data Safety form happens before shipping, not after.</p>
+  </div>
+</section>
+
+<section class="block" id="j">
+  <div class="sec-head"><span class="sec-num">J</span><h2>Funnels</h2></div>
+  <h3 class="sub">Build at launch</h3>
+  <ul class="plain">
+    <li><strong>Activation</strong> — sign-in → capture received → extraction completed → first save ready</li>
+    <li><strong>Capture reliability</strong> (ongoing) — capture received → extraction completed / failed</li>
+    <li><strong>Retrieval</strong> — search performed → result opened</li>
+  </ul>
+  <h3 class="sub">Deferred</h3>
+  <p>A Space-adoption funnel (created/joined → pinned) — Spaces are secondary; the personal capture→retrieval loop needs proving first. The brief's draft "Organization funnel" (<code>item_saved → collection_created → item_added_to_collection</code>) is dropped entirely — nothing in the personal library maps to it.</p>
+</section>
+
+<section class="block" id="k">
+  <div class="sec-head"><span class="sec-num">K</span><h2>Cohorts</h2></div>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>Cohort</th><th>Definition</th></tr></thead>
+    <tbody>
+      <tr><td>Activated</td><td>Has <code>save_ready(is_first_save=true)</code></td></tr>
+      <tr><td>Power users</td><td>≥3 <code>capture_received</code> in trailing 7 days</td></tr>
+      <tr><td>One-and-done</td><td>Exactly one lifetime <code>save_ready</code>, silent for 14+ days</td></tr>
+      <tr><td>Retrievers</td><td>≥2 <code>search_performed</code> in trailing 7 days</td></tr>
+      <tr><td>Space organizers <span style="color:var(--ink-faint);font-weight:400;">(renamed)</span></td><td>≥1 <code>space_created</code> or <code>item_pinned_to_space</code> — the only place a real organizing action exists</td></tr>
+      <tr><td>D7 / D30 retained</td><td>Standard PostHog retention cohort off <code>app_opened</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="block" id="o">
+  <div class="sec-head"><span class="sec-num">O</span><h2>Code architecture</h2></div>
+  <h3 class="sub">app/src/analytics/</h3>
+  <p><code>events.ts</code> — one const per event plus a discriminated union mapping event → property shape, so <code>track()</code> is fully typed and a free-text field cannot compile in. <code>client.ts</code> — thin wrapper over <code>posthog-react-native</code>: init, identify, reset (wired to sign-in/sign-out), one typed <code>track()</code>. No-ops in dev unless a debug flag is set.</p>
+  <h3 class="sub">api/.../analytics/</h3>
+  <p><code>AnalyticsService.java</code> — wraps PostHog's capture endpoint via <code>RestClient</code>, same pattern as the existing Gemini/Groq clients; async fire-and-forget so a PostHog outage never fails a save. <code>AnalyticsEvents.java</code> — event-name constants kept in sync with the TS side by convention. Called from the save-processing handlers, the upload controller, and the RevenueCat webhook handler.</p>
+</section>
+
+<section class="block" id="r">
+  <div class="sec-head"><span class="sec-num">R</span><h2>What NOT to track</h2></div>
+  <ul class="plain">
+    <li>Raw save titles, extracted text, thumbnails, URLs, search query strings, comment/list/exercise text — anything echoing captured content</li>
+    <li>Per-frame OCR/ffmpeg internals — that's log/APM data, not a product event</li>
+    <li>A <code>screen_viewed</code> for every one of the ~19 routes — skip anything already covered by a more specific event</li>
+    <li>Every frame of the tab-swipe gesture animation — UI mechanics, not signal</li>
+    <li>A separate event per settings toggle — bundle the handful that matter</li>
+    <li>Hand-rolled <code>app_crashed</code> from a JS try/catch — pair with a real crash reporter instead</li>
+    <li>Any "collection_created" analogue for the personal library — it isn't a user action there</li>
+    <li>Session replay — Weavr's content is personal screenshots, photos and PDFs</li>
+  </ul>
+</section>
+
+<section class="block" id="s">
+  <div class="sec-head"><span class="sec-num">S</span><h2>Implementation priority</h2></div>
+
+  <div class="phase">
+    <div class="phase-head"><span class="tag">Phase 1</span><h4>Before launch</h4></div>
+    <ul class="plain">
+      <li><strong>Blocking, first:</strong> update <code>legal/privacy.html</code> and Play's Data Safety form</li>
+      <li><code>analytics/{events.ts,client.ts}</code> + identify/reset wiring; <code>AnalyticsService</code>/<code>AnalyticsEvents</code> in the API</li>
+      <li>All 18 essential events above; activation + capture-reliability funnels; dev/prod key separation</li>
+    </ul>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head"><span class="tag">Phase 2</span><h4>First 2 weeks</h4></div>
+    <ul class="plain">
+      <li><code>group_opened</code>, <code>collection_opened</code>, <code>space_created</code>, <code>space_joined</code></li>
+      <li>Retrieval funnel; cohorts; D1/D7/D30 retention report; a real crash reporter</li>
+    </ul>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head"><span class="tag">Phase 3</span><h4>After meaningful usage</h4></div>
+    <ul class="plain">
+      <li><code>save_field_edited</code> once field-editing ships; Space-adoption funnel</li>
+      <li>Feature-adoption-vs-retention analysis; North Star lock-in; first real experiments</li>
+    </ul>
+  </div>
+
+  <div class="phase dont">
+    <div class="phase-head"><span class="tag">Don't yet</span><h4>Not worth building now</h4></div>
+    <ul class="plain">
+      <li>A/B testing / feature flags — no volume to power a result for months</li>
+      <li>Per-button UI interaction tracking; native pre-upload queue-lag instrumentation; session replay</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  Full plan with reasoning, every event's property list, error/performance taxonomy and the QA checklist: <code>docs/weavr-analytics-plan.md</code>.
+</footer>
+
+</div>
+</body>
+</html>
