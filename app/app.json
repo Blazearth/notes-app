@@ -2,7 +2,7 @@
   "expo": {
     "name": "Weavr",
     "slug": "weavr",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "scheme": "weavr",
     "userInterfaceStyle": "automatic",
@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "com.weavr.app",
-      "versionCode": 3,
+      "versionCode": 4,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
@@ -37,6 +37,7 @@
       "expo-router",
       "expo-font",
       "expo-status-bar",
+      "expo-notifications",
       [
         "expo-splash-screen",
         {
