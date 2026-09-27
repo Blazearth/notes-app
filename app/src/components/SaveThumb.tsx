@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import React, { useState } from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 
 import type { GlyphName } from './Glyph';
 import { Glyph } from './Glyph';
@@ -25,6 +25,19 @@ const CACHE_POLICY = 'memory-disk';
  * available almost immediately.
  */
 const TRANSITION_MS = 160;
+
+/**
+ * On web, this crossfade's own opacity animation gets stuck at 0 forever when
+ * the thumbnail sits inside a Reanimated entrance wrapper (`Reveal`'s
+ * `FadeInDown`) — confirmed by inspecting a real stuck save: the `<img>` loads
+ * correctly (`complete: true`, right size and position) but never animates
+ * past `opacity: 0`, leaving only the absolutely-positioned corner pip
+ * visible. The same component outside a `Reveal` (the "You might also like"
+ * rail) crossfades fine, so this is a web-only conflict between the two
+ * animation systems, not a bug in the image load itself. Skipping the
+ * transition on web avoids it entirely; native is unaffected.
+ */
+const IMAGE_TRANSITION = Platform.OS === 'web' ? 0 : TRANSITION_MS;
 
 interface SaveThumbProps {
   thumbnailUrl?: string | null;
@@ -64,7 +77,7 @@ export function SaveThumb({ thumbnailUrl, width = 40, height, radius, tint, glyp
           // is silently ignored, which would leave every thumbnail stretched.
           contentFit="cover"
           cachePolicy={CACHE_POLICY}
-          transition={TRANSITION_MS}
+          transition={IMAGE_TRANSITION}
           onError={() => setFailed(true)}
         />
       ) : glyph && tint ? (

@@ -21,7 +21,9 @@
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnanBpb3JkeXdka2x6aGxobXdxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzNDE1MTgsImV4cCI6MjEwMDkxNzUxOH0.tDJmYzkv2pgF1L0hrqLpVQkbg7AYu7TnGeuEPHaUA1M",
         "EXPO_PUBLIC_API_BASE_URL": "https://weavr-api.onrender.com",
         "EXPO_PUBLIC_REVENUECAT_ANDROID_KEY": "",
-        "EXPO_PUBLIC_REVENUECAT_IOS_KEY": ""
+        "EXPO_PUBLIC_REVENUECAT_IOS_KEY": "",
+        "EXPO_PUBLIC_POSTHOG_KEY": "",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
       }
     },
     "production": {
@@ -33,7 +35,9 @@
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnanBpb3JkeXdka2x6aGxobXdxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzNDE1MTgsImV4cCI6MjEwMDkxNzUxOH0.tDJmYzkv2pgF1L0hrqLpVQkbg7AYu7TnGeuEPHaUA1M",
         "EXPO_PUBLIC_API_BASE_URL": "https://weavr-api.onrender.com",
         "EXPO_PUBLIC_REVENUECAT_ANDROID_KEY": "",
-        "EXPO_PUBLIC_REVENUECAT_IOS_KEY": ""
+        "EXPO_PUBLIC_REVENUECAT_IOS_KEY": "",
+        "EXPO_PUBLIC_POSTHOG_KEY": "",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
       }
     }
   },

@@ -1,8 +1,11 @@
 package com.weavr.api.billing;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
+import com.weavr.api.analytics.AnalyticsEvents;
+import com.weavr.api.analytics.AnalyticsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -116,10 +119,12 @@ public class BillingService {
 
     private final JdbcClient jdbc;
     private final BillingProperties props;
+    private final AnalyticsService analytics;
 
-    BillingService(JdbcClient jdbc, BillingProperties props) {
+    BillingService(JdbcClient jdbc, BillingProperties props, AnalyticsService analytics) {
         this.jdbc = jdbc;
         this.props = props;
+        this.analytics = analytics;
     }
 
     @Transactional
@@ -163,6 +168,16 @@ public class BillingService {
         log.info("Subscription for {} → {} (entitlement={}, expires={})",
                 decision.userId(), decision.active() ? "active" : "inactive",
                 decision.entitlement(), decision.expiresAt());
+
+        // Server truth, not the client's optimistic poll result — mirrors the
+        // "only the server's answer is rendered" design already built into the
+        // paywall (§E). Fires on every applied webhook, not only the first
+        // purchase: a renewal or reactivation is just as much "the server now
+        // agrees" as an initial purchase is.
+        analytics.capture(decision.userId(), AnalyticsEvents.PURCHASE_CONFIRMED, Map.of(
+                "entitlement", decision.entitlement() != null ? decision.entitlement() : "none",
+                "active", decision.active()));
+
         return new Outcome(true, decision.active() ? "active" : "inactive");
     }
 

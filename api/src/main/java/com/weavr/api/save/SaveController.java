@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.weavr.api.analytics.AnalyticsEvents;
+import com.weavr.api.analytics.AnalyticsService;
 import com.weavr.api.auth.CurrentUser;
 import com.weavr.api.save.dto.CreateSaveRequest;
 import com.weavr.api.save.dto.SaveResponse;
@@ -40,13 +42,16 @@ class SaveController {
     private final SaveItemStateService itemStates;
     private final SaveRepository saveRepository;
     private final SearchService searchService;
+    private final AnalyticsService analytics;
 
     SaveController(SaveService saveService, SaveItemStateService itemStates,
-                   SaveRepository saveRepository, SearchService searchService) {
+                   SaveRepository saveRepository, SearchService searchService,
+                   AnalyticsService analytics) {
         this.saveService = saveService;
         this.itemStates = itemStates;
         this.saveRepository = saveRepository;
         this.searchService = searchService;
+        this.analytics = analytics;
     }
 
     /**
@@ -62,7 +67,20 @@ class SaveController {
                                         @Valid @RequestBody CreateSaveRequest request,
                                         @RequestHeader(value = "Idempotency-Key", required = false)
                                         String idempotencyKey) {
-        Save save = saveService.create(userId, request, idempotencyKey);
+        Save save;
+        try {
+            save = saveService.create(userId, request, idempotencyKey);
+        } catch (RuntimeException e) {
+            analytics.capture(userId, AnalyticsEvents.CAPTURE_FAILED, Map.of(
+                    "source_type", request.sourceType().name(),
+                    "error_type", e.getClass().getSimpleName()));
+            throw e;
+        }
+        // The true "a capture happened" signal — identical for a silent
+        // share-intent upload and the in-app sheet, which a client event
+        // structurally cannot be (§E).
+        analytics.capture(userId, AnalyticsEvents.CAPTURE_RECEIVED,
+                Map.of("source_type", request.sourceType().name()));
         return ResponseEntity
                 .accepted()
                 .location(URI.create("/v1/saves/" + save.getId()))
@@ -91,7 +109,15 @@ class SaveController {
             return ResponseEntity.badRequest().build();
         }
         String mimeType = image.getContentType() != null ? image.getContentType() : "image/jpeg";
-        Save save = saveService.createFromImage(userId, image.getBytes(), mimeType, spaceId);
+        Save save;
+        try {
+            save = saveService.createFromImage(userId, image.getBytes(), mimeType, spaceId);
+        } catch (RuntimeException | java.io.IOException e) {
+            analytics.capture(userId, AnalyticsEvents.CAPTURE_FAILED,
+                    Map.of("source_type", "image", "error_type", e.getClass().getSimpleName()));
+            throw e;
+        }
+        analytics.capture(userId, AnalyticsEvents.CAPTURE_RECEIVED, Map.of("source_type", "image"));
         return ResponseEntity
                 .accepted()
                 .location(URI.create("/v1/saves/" + save.getId()))

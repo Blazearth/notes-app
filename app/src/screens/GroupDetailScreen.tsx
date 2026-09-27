@@ -1,8 +1,10 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
 import type { SaveResponse } from '@/api/types';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { useLive, useLiveValue } from '@/local';
 import { DERIVED_TABLES, readGroup, readGroupSaves } from '@/local/derived';
 import { useTaskStatus } from '@/local/useSync';
@@ -145,6 +147,11 @@ export function GroupDetailScreen({ id }: { id: string }) {
   const error = !loading && group == null && savesTask.completed ? 'That group no longer exists.' : null;
 
   const isWorkoutGroup = id === 'workout' || id.startsWith('workout~');
+
+  useEffect(() => {
+    track(AnalyticsEvent.GroupOpened, { group_key: id });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   const toggleCompareSelection = useCallback((saveId: string) => {
     setCompareIds((current) => {

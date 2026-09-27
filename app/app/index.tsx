@@ -12,6 +12,8 @@ import Animated, {
   withSpring,
 } from 'react-native-reanimated';
 
+import { track } from '@/analytics/client';
+import { AnalyticsEvent, type ScreenName } from '@/analytics/events';
 import { useSession } from '@/auth/SessionProvider';
 import { AppText } from '@/components/AppText';
 import { BottomNav, type NavItem } from '@/components/BottomNav';
@@ -199,6 +201,13 @@ export default function TabShell() {
     activeRef.current = active;
   }, [active]);
 
+  // `screen_viewed`, scoped to Home/Library/Spaces per §G — the tab shell is
+  // its own navigation model (a swipeable pane, not a route), so nothing at
+  // the router level would ever see these transitions.
+  useEffect(() => {
+    track(AnalyticsEvent.ScreenViewed, { screen_name: 'home' });
+  }, []);
+
   // ── Callbacks ──────────────────────────────────────────────────────────────
 
   /**
@@ -209,6 +218,9 @@ export default function TabShell() {
     (key: string) => {
       const idx = TAB_KEYS.indexOf(key);
       if (idx === -1) return;
+      if (key !== activeRef.current) {
+        track(AnalyticsEvent.ScreenViewed, { screen_name: key as ScreenName });
+      }
       setActive(key);
       activeRef.current = key;
       activeIndexSV.value = idx;
@@ -226,6 +238,9 @@ export default function TabShell() {
    */
   const setActiveFromIndex = useCallback((idx: number) => {
     const key = TAB_KEYS[idx];
+    if (key !== activeRef.current) {
+      track(AnalyticsEvent.ScreenViewed, { screen_name: key as ScreenName });
+    }
     setActive(key);
     activeRef.current = key;
   }, []);

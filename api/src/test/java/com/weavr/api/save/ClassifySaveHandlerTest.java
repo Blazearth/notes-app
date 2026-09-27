@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.weavr.api.analytics.AnalyticsService;
 import com.weavr.api.billing.UsageService;
 import com.weavr.api.gemini.BudgetApproved;
 import com.weavr.api.gemini.GeminiBudgetService;
@@ -85,9 +86,27 @@ class ClassifySaveHandlerTest {
 
         stubStageLookup();
         stubSavesUpdate();
+        stubFirstSaveCheck();
 
         handler = new ClassifySaveHandler(saves, stages, geminiClient, budgetService, PROPS,
-                jobQueue, jdbc, MAPPER, usage, mock(com.weavr.api.pipeline.SafeUrlFetcher.class));
+                jobQueue, jdbc, MAPPER, usage, mock(com.weavr.api.pipeline.SafeUrlFetcher.class),
+                mock(AnalyticsService.class));
+    }
+
+    /**
+     * {@code emitExtractionAnalytics}'s {@code isFirstReadySave} check runs on
+     * every successful classify — a distinct SQL text from the two stubbed
+     * above, so it needs its own stub or every happy-path test NPEs on an
+     * unstubbed {@code jdbc.sql(...)} returning null.
+     */
+    @SuppressWarnings("unchecked")
+    private void stubFirstSaveCheck() {
+        JdbcClient.StatementSpec spec = mock(JdbcClient.StatementSpec.class);
+        when(jdbc.sql(contains("exists"))).thenReturn(spec);
+        when(spec.param(any())).thenReturn(spec);
+        JdbcClient.MappedQuerySpec<Boolean> mapped = mock(JdbcClient.MappedQuerySpec.class);
+        when(spec.query(Boolean.class)).thenReturn(mapped);
+        when(mapped.single()).thenReturn(false);
     }
 
     /**

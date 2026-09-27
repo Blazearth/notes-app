@@ -97,6 +97,28 @@ public class SaveService {
             }
         }
 
+        // Content-level dedup for personal saves: a caller with no idempotency
+        // key (the app's own Paste Link tile, today) previously got no
+        // protection at all against saving the same URL twice. Scoped to
+        // personal saves only (spaceId == null) — a Space save goes through
+        // DuplicateDetector's embedding-based suggestion instead, which is
+        // deliberately a suggestion rather than a silent merge because it
+        // compares different people's saves; here it's the same person
+        // re-saving the same URL, so returning the existing row outright is
+        // the same "the retried request already happened" shape as the
+        // idempotency-key check above, just keyed on content instead of a
+        // header.
+        String url = blankToNull(request.sourceUrl());
+        if (request.spaceId() == null && url != null) {
+            Optional<Save> existing = saves.findFirstByUserIdAndSourceUrlAndSpaceIdIsNullAndArchivedFalseOrderByCreatedAtDesc(
+                    userId, url);
+            if (existing.isPresent()) {
+                log.info("Duplicate URL save by user={}, returning existing save {}",
+                        userId, existing.get().getId());
+                return existing.get();
+            }
+        }
+
         Save save;
         try {
             save = saves.save(Save.accepted(

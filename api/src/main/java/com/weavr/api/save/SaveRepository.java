@@ -28,6 +28,16 @@ public interface SaveRepository extends JpaRepository<Save, UUID> {
     Optional<Save> findByUserIdAndIdempotencyKey(UUID userId, String idempotencyKey);
 
     /**
+     * Backs the exact-URL dedup check on {@code POST /v1/saves}: re-saving a
+     * URL already in the personal library (not archived, not in a Space —
+     * Space saves get the embedding-based {@code DuplicateDetector} instead)
+     * returns the existing save rather than creating a second row. Most
+     * recent first, in case more than one somehow already exists.
+     */
+    Optional<Save> findFirstByUserIdAndSourceUrlAndSpaceIdIsNullAndArchivedFalseOrderByCreatedAtDesc(
+            UUID userId, String sourceUrl);
+
+    /**
      * Backs the "Continue" rail: what the user has started but not finished.
      *
      * <p>Ordered by {@code updated_at} rather than {@code created_at} — the rail

@@ -4,6 +4,8 @@ import { ActivityIndicator, KeyboardAvoidingView, Linking, Modal, Platform, Pres
 
 import type { MeResponse } from '@/api/types';
 import { ApiError, patchUsername } from '@/api/client';
+import { track } from '@/analytics/client';
+import { AnalyticsEvent } from '@/analytics/events';
 import { repo } from '@/data';
 import { KV, useLiveValue } from '@/local';
 import { sync } from '@/local/sync';
@@ -169,6 +171,10 @@ export function SettingsScreen() {
   // than the morph — a deep link — where an ordinary back is the right answer.
   const morphDismiss = useMorphDismiss();
   const goBack = morphDismiss ?? (() => router.back());
+
+  useEffect(() => {
+    track(AnalyticsEvent.ScreenViewed, { screen_name: 'settings' });
+  }, []);
 
   /**
    * Settings is a modal presented *on top of* `index` (`MorphPresentation`),
@@ -358,7 +364,10 @@ export function SettingsScreen() {
         </View>
       </Card>
 
-      <PlanCard me={me} onUpgrade={() => router.push('/paywall')} />
+      <PlanCard
+        me={me}
+        onUpgrade={() => router.push({ pathname: '/paywall', params: { trigger: 'settings' } })}
+      />
 
       {/* Renders nothing unless the outbox has something to report — see
           `PendingWrites` for why a rejected write is shown rather than

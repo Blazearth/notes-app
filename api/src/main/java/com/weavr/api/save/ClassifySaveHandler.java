@@ -1,9 +1,13 @@
 package com.weavr.api.save;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import com.weavr.api.analytics.AnalyticsEvents;
+import com.weavr.api.analytics.AnalyticsService;
 import com.weavr.api.billing.UsageService;
 import com.weavr.api.gemini.BudgetApproved;
 import com.weavr.api.gemini.GeminiBudgetService;
@@ -69,12 +73,13 @@ class ClassifySaveHandler implements JobHandler {
     private final ObjectMapper objectMapper;
     private final UsageService usage;
     private final com.weavr.api.pipeline.SafeUrlFetcher fetcher;
+    private final AnalyticsService analytics;
 
     ClassifySaveHandler(SaveRepository saves, SaveStageWriter stages,
                         GeminiClient geminiClient, GeminiBudgetService budgetService,
                         GeminiProperties geminiProps, JobQueue jobQueue, JdbcClient jdbc,
                         ObjectMapper objectMapper, UsageService usage,
-                        com.weavr.api.pipeline.SafeUrlFetcher fetcher) {
+                        com.weavr.api.pipeline.SafeUrlFetcher fetcher, AnalyticsService analytics) {
         this.saves = saves;
         this.stages = stages;
         this.geminiClient = geminiClient;
@@ -85,6 +90,7 @@ class ClassifySaveHandler implements JobHandler {
         this.objectMapper = objectMapper;
         this.usage = usage;
         this.fetcher = fetcher;
+        this.analytics = analytics;
     }
 
     @Override
@@ -95,6 +101,7 @@ class ClassifySaveHandler implements JobHandler {
     @Override
     public void handle(JobRecord job) {
         UUID saveId = job.uuidParam("saveId");
+        Instant stageStart = Instant.now();
 
         Save save = saves.findById(saveId).orElseThrow(() ->
                 new PermanentJobException("save_deleted", "This save no longer exists."));
@@ -153,6 +160,7 @@ class ClassifySaveHandler implements JobHandler {
         }
 
         // If primary confidence is below threshold and we can afford fallback, retry.
+        boolean escalated = false;
         if (response.confidence() < geminiProps.confidenceThreshold()
                 && !budget.model().equals(geminiProps.fallbackModel())) {
             log.info("Save {} low confidence ({}) on primary, trying fallback model",
@@ -169,6 +177,7 @@ class ClassifySaveHandler implements JobHandler {
                 // Use fallback result if it's more confident.
                 if (fallback.confidence() >= response.confidence()) {
                     response = fallback;
+                    escalated = true;
                 }
             } catch (Exception e) {
                 // Fallback budget exhausted or failed — use the primary result anyway.
@@ -194,6 +203,8 @@ class ClassifySaveHandler implements JobHandler {
 
         log.info("Save {} classified → type={} confidence={} model={}",
                 saveId, response.knowledgeType(), response.confidence(), response.model());
+
+        emitExtractionAnalytics(save, response, escalated, stageStart);
 
         // The save is already `ready` at this point. Enrichment and embedding
         // are enhancements on top of that, so they get their own jobs rather
@@ -307,6 +318,43 @@ class ClassifySaveHandler implements JobHandler {
     }
 
     /**
+     * {@code extraction_completed} (pipeline quality, fires on every job) and
+     * {@code save_ready} (activation, meaningful only with {@code is_first_save}
+     * attached) — kept as two events per §E rather than one, so the activation
+     * funnel never has to filter a generic pipeline event by a property that
+     * doesn't belong on it.
+     */
+    private void emitExtractionAnalytics(Save save, GeminiResponse response, boolean escalated,
+                                         Instant stageStart) {
+        long latencyMs = Duration.between(stageStart, Instant.now()).toMillis();
+        analytics.capture(save.getUserId(), AnalyticsEvents.EXTRACTION_COMPLETED, Map.of(
+                "knowledge_type", response.knowledgeType(),
+                "confidence", response.confidence(),
+                "model_used", response.model(),
+                "escalated", escalated,
+                "latency_ms", latencyMs));
+
+        analytics.capture(save.getUserId(), AnalyticsEvents.SAVE_READY, Map.of(
+                "knowledge_type", response.knowledgeType(),
+                "is_first_save", isFirstReadySave(save.getUserId(), save.getId()),
+                "time_to_ready_ms", Duration.between(save.getCreatedAt(), Instant.now()).toMillis()));
+    }
+
+    /** Approximate by design: a race with a second concurrent first save is not worth guarding against for an analytics property. */
+    private boolean isFirstReadySave(UUID userId, UUID saveId) {
+        Boolean anyOtherReady = jdbc.sql("""
+                        select exists(
+                            select 1 from saves where user_id = ? and status = 'ready' and id <> ?
+                        )
+                        """)
+                .param(userId)
+                .param(saveId)
+                .query(Boolean.class)
+                .single();
+        return !Boolean.TRUE.equals(anyOtherReady);
+    }
+
+    /**
      * The image bytes for a screenshot save, from whichever shape its stage row
      * uses.
      *
@@ -395,5 +443,10 @@ class ClassifySaveHandler implements JobHandler {
                 .param(userMessage)
                 .param(saveId)
                 .update();
+
+        saves.findById(saveId).ifPresent(save -> analytics.capture(save.getUserId(),
+                AnalyticsEvents.EXTRACTION_FAILED,
+                Map.of("stage", "classify", "error_type", errorCode,
+                        "source_type", save.getSourceType().name())));
     }
 }
