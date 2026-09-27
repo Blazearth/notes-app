@@ -2,7 +2,7 @@
   "expo": {
     "name": "Weavr",
     "slug": "weavr",
-    "version": "0.2.0",
+    "version": "4.1",
     "orientation": "portrait",
     "scheme": "weavr",
     "userInterfaceStyle": "automatic",
@@ -22,8 +22,7 @@
     },
     "android": {
       "package": "com.weavr.app",
-      "versionCode": 4,
-      "edgeToEdgeEnabled": true,
+      "versionCode": 5,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon-foreground.png",
