@@ -47,3 +47,10 @@ tmp/
 # --- local scratch docs with credentials, never commit ------------------------
 BACKEND_WORK_GUIDE.md
 QUICK_REFERENCE.md
+
+# --- local agent tooling and private strategy docs, never commit ------------
+.agents/
+.claude/
+docs/weavr-strategy.html
+docs/weavr-strategy.md
+skills-lock.json
