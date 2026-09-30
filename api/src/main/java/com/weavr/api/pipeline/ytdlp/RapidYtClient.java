@@ -6,9 +6,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
+import com.weavr.api.pipeline.health.ExtractionFailureCategory;
+import com.weavr.api.pipeline.health.ExtractionFailureClassifier;
+import com.weavr.api.pipeline.youtube.YouTubeVideoIds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -61,12 +62,6 @@ public class RapidYtClient {
 
     private static final Logger log = LoggerFactory.getLogger(RapidYtClient.class);
 
-    // Matches youtube.com/watch?v=ID, youtu.be/ID, youtube.com/shorts/ID,
-    // youtube.com/live/ID (also covers m.youtube.com and music.youtube.com,
-    // since the match isn't anchored to the start of the string — F8).
-    private static final Pattern YT_ID = Pattern.compile(
-            "(?:youtube\\.com/(?:watch\\?v=|shorts/|embed/|live/)|youtu\\.be/)([A-Za-z0-9_-]{11})");
-
     /** 1 initial attempt + at most 2 retries, matching the doc's own retry bound for this call. */
     private static final int MAX_ATTEMPTS = 3;
     private static final Duration RETRY_BASE_DELAY = Duration.ofMillis(200);
@@ -80,8 +75,8 @@ public class RapidYtClient {
     private final RestClient captionHttp; // plain, no RapidAPI headers
     private final ObjectMapper objectMapper;
 
-    RapidYtClient(RapidYtProperties props, @Qualifier("rapidYt") RestClient.Builder builder,
-                 ObjectMapper objectMapper) {
+    public RapidYtClient(RapidYtProperties props, @Qualifier("rapidYt") RestClient.Builder builder,
+                         ObjectMapper objectMapper) {
         this.props = props;
         this.objectMapper = objectMapper;
         this.http = builder.clone()
@@ -93,29 +88,50 @@ public class RapidYtClient {
         this.captionHttp = builder.clone().build();
     }
 
+    public boolean enabled() {
+        return props.enabled();
+    }
+
     /** @return empty if disabled, video not found, or every retry attempt failed */
     public Optional<ProbeResult> probe(String url) {
-        if (!props.enabled()) return Optional.empty();
+        return probeDetailed(url).result();
+    }
+
+    /**
+     * {@link #probe}, plus <em>why</em> it came back empty — the answer
+     * {@code probe} deliberately throws away so the cascade can fall back
+     * silently. Same retries, same behaviour; only the reporting is new.
+     */
+    public ProbeOutcome probeDetailed(String url) {
+        if (!props.enabled()) return ProbeOutcome.notAttempted();
 
         String videoId = extractVideoId(url);
-        if (videoId == null) return Optional.empty();
+        if (videoId == null) return ProbeOutcome.notAttempted();
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
-                return doProbe(videoId);
+                Optional<ProbeResult> result = doProbe(videoId);
+                // doProbe is empty only when RapidAPI answered 200 with a
+                // non-"OK" status (or no body) — it answered, but not usefully.
+                return result.map(ProbeOutcome::success)
+                        .orElseGet(() -> ProbeOutcome.failed(ExtractionFailureCategory.PROVIDER_ERROR, 200));
             } catch (Exception e) {
                 boolean lastAttempt = attempt == MAX_ATTEMPTS;
                 if (!isRetryable(e) || lastAttempt) {
                     log.warn("RapidAPI YouTube probe failed for {} (attempt {}/{}): {}",
                             videoId, attempt, MAX_ATTEMPTS, e.getMessage());
-                    return Optional.empty();
+                    if (e instanceof RapidApiStatusException status) {
+                        return ProbeOutcome.failed(
+                                ExtractionFailureClassifier.fromHttpStatus(status.status), status.status);
+                    }
+                    return ProbeOutcome.failed(ExtractionFailureClassifier.fromException(e), null);
                 }
                 log.debug("RapidAPI YouTube probe attempt {}/{} failed for {}, retrying: {}",
                         attempt, MAX_ATTEMPTS, videoId, e.getMessage());
                 sleepWithJitter(attempt);
             }
         }
-        return Optional.empty();
+        return ProbeOutcome.failed(ExtractionFailureCategory.UNKNOWN, null);
     }
 
     private Optional<ProbeResult> doProbe(String videoId) {
@@ -260,9 +276,7 @@ public class RapidYtClient {
     }
 
     public static String extractVideoId(String url) {
-        if (url == null) return null;
-        Matcher m = YT_ID.matcher(url);
-        return m.find() ? m.group(1) : null;
+        return YouTubeVideoIds.parse(url);
     }
 
     private static String text(JsonNode node, String field) {
@@ -319,4 +333,25 @@ public class RapidYtClient {
      * a caption track was available and successfully fetched.
      */
     public record ProbeResult(SourceMetadata metadata, Optional<String> transcript) {}
+
+    /**
+     * @param attempted false when no request was made at all (no key configured,
+     *                  or not a YouTube URL) — nothing to record
+     * @param httpStatus the final status RapidAPI answered with, or null if it never answered
+     */
+    public record ProbeOutcome(boolean attempted, Optional<ProbeResult> result,
+                               ExtractionFailureCategory category, Integer httpStatus) {
+
+        public static ProbeOutcome notAttempted() {
+            return new ProbeOutcome(false, Optional.empty(), ExtractionFailureCategory.UNKNOWN, null);
+        }
+
+        public static ProbeOutcome success(ProbeResult result) {
+            return new ProbeOutcome(true, Optional.of(result), ExtractionFailureCategory.SUCCESS, 200);
+        }
+
+        public static ProbeOutcome failed(ExtractionFailureCategory category, Integer httpStatus) {
+            return new ProbeOutcome(true, Optional.empty(), category, httpStatus);
+        }
+    }
 }

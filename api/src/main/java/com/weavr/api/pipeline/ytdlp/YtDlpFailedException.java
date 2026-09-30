@@ -16,4 +16,12 @@ public class YtDlpFailedException extends RuntimeException {
     public String stderr() {
         return stderr;
     }
+
+    /** True when our own process bound fired, as opposed to yt-dlp exiting with an error. */
+    public boolean timedOut() {
+        return TIMED_OUT_MESSAGE.equals(getMessage());
+    }
+
+    /** What {@code YtDlpClient.describe} says for a timed-out run; the one place both sides agree on it. */
+    static final String TIMED_OUT_MESSAGE = "yt-dlp timed out";
 }

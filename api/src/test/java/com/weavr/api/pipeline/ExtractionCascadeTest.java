@@ -11,7 +11,11 @@ import java.util.concurrent.TimeUnit;
 import com.weavr.api.job.PermanentJobException;
 import com.weavr.api.job.RetryableJobException;
 import com.weavr.api.pipeline.audio.AsrTranscriber;
+import com.weavr.api.pipeline.health.ExtractionAttempt;
+import com.weavr.api.pipeline.health.ExtractionAttemptRecorder;
+import com.weavr.api.pipeline.health.ExtractionFailureCategory;
 import com.weavr.api.pipeline.ocr.VisualTextExtractor;
+import com.weavr.api.pipeline.youtube.YouTubeDataApiClient;
 import com.weavr.api.pipeline.ytdlp.RapidYtClient;
 import com.weavr.api.pipeline.ytdlp.SourceMetadata;
 import com.weavr.api.pipeline.ytdlp.YtDlpClient;
@@ -41,12 +45,27 @@ class ExtractionCascadeTest {
 
     private final YtDlpClient ytDlp = mock(YtDlpClient.class);
     private final RapidYtClient rapidYt = mock(RapidYtClient.class);
+    private final YouTubeDataApiClient youtubeData = mock(YouTubeDataApiClient.class);
     private final AsrTranscriber asr = mock(AsrTranscriber.class);
     private final VisualTextExtractor visual = mock(VisualTextExtractor.class);
     private final LinkExtractor linkExtractor = mock(LinkExtractor.class);
     private final PdfExtractor pdfExtractor = mock(PdfExtractor.class);
-    private final ExtractionCascade cascade =
-            new ExtractionCascade(ytDlp, rapidYt, asr, visual, linkExtractor, pdfExtractor);
+    private final ExtractionAttemptRecorder attempts = new ExtractionAttemptRecorder();
+    private final ExtractionCascade cascade = new ExtractionCascade(
+            ytDlp, rapidYt, youtubeData, asr, visual, linkExtractor, pdfExtractor, attempts);
+
+    {
+        // The Data API is unconfigured unless a test says otherwise — the
+        // pre-existing behaviour every test below was written against.
+        when(youtubeData.fetch(anyString())).thenReturn(YouTubeDataApiClient.Outcome.notAttempted("not_configured"));
+    }
+
+    /** RapidAPI answers with this result; an empty one reads as a rate-limited failure. */
+    private void stubRapid(Optional<RapidYtClient.ProbeResult> result) {
+        when(rapidYt.probeDetailed(anyString())).thenReturn(result
+                .map(RapidYtClient.ProbeOutcome::success)
+                .orElseGet(() -> RapidYtClient.ProbeOutcome.failed(ExtractionFailureCategory.HTTP_429, 429)));
+    }
 
     private static SourceMetadata metadata(String title, String description, List<String> autoCaptions) {
         return new SourceMetadata("vid1", title, description, "someone", 42.0,
@@ -330,7 +349,7 @@ class ExtractionCascadeTest {
     @Test
     void usesRapidApiTranscriptWhenPresentAndLongEnough() {
         SourceMetadata meta = metadata("Never Gonna Give You Up", "The official video", List.of("en"));
-        when(rapidYt.probe(anyString())).thenReturn(Optional.of(new RapidYtClient.ProbeResult(
+        stubRapid(Optional.of(new RapidYtClient.ProbeResult(
                 meta, Optional.of("we're no strangers to love you know the rules and so do i"))));
 
         ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
@@ -344,7 +363,7 @@ class ExtractionCascadeTest {
     void usesRapidApiMetadataWhenTranscriptIsMissingButMetadataIsRich() {
         SourceMetadata meta = metadata("Kyoto travel guide",
                 "Twelve cafes worth the detour, with addresses and opening hours.", List.of());
-        when(rapidYt.probe(anyString())).thenReturn(Optional.of(
+        stubRapid(Optional.of(
                 new RapidYtClient.ProbeResult(meta, Optional.empty())));
 
         ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
@@ -362,7 +381,7 @@ class ExtractionCascadeTest {
     @Test
     void failsFastWhenRapidApiSucceedsButEverythingIsTooThin() {
         SourceMetadata meta = metadata("Reel", "", List.of());
-        when(rapidYt.probe(anyString())).thenReturn(Optional.of(
+        stubRapid(Optional.of(
                 new RapidYtClient.ProbeResult(meta, Optional.empty())));
 
         assertThatThrownBy(() -> cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID))
@@ -385,7 +404,7 @@ class ExtractionCascadeTest {
     @Test
     void mergesASupplementalPinnedCommentIntoTheRapidApiTranscript() {
         SourceMetadata meta = metadata("Homemade Snickers Bar", "Try it or trash it", List.of("en"));
-        when(rapidYt.probe(anyString())).thenReturn(Optional.of(new RapidYtClient.ProbeResult(
+        stubRapid(Optional.of(new RapidYtClient.ProbeResult(
                 meta, Optional.of("today we're making a snickers bar with honey instead of maple syrup"))));
         when(ytDlp.fetchPinnedComment(anyString()))
                 .thenReturn(Optional.of("Recipe: 1/2 cup cashews, 2 tbsp honey, a pinch of salt"));
@@ -410,7 +429,7 @@ class ExtractionCascadeTest {
     @Test
     void rapidApiExtractionSurvivesAFailedSupplementalCommentFetch() {
         SourceMetadata meta = metadata("Never Gonna Give You Up", "The official video", List.of("en"));
-        when(rapidYt.probe(anyString())).thenReturn(Optional.of(new RapidYtClient.ProbeResult(
+        stubRapid(Optional.of(new RapidYtClient.ProbeResult(
                 meta, Optional.of("we're no strangers to love you know the rules and so do i"))));
         when(ytDlp.fetchPinnedComment(anyString())).thenReturn(Optional.empty());
 
@@ -429,7 +448,7 @@ class ExtractionCascadeTest {
     @Test
     void aPinnedCommentCanRescueAnOtherwiseTooThinRapidApiResult() {
         SourceMetadata meta = metadata("Reel", "", List.of());
-        when(rapidYt.probe(anyString())).thenReturn(Optional.of(
+        stubRapid(Optional.of(
                 new RapidYtClient.ProbeResult(meta, Optional.empty())));
         when(ytDlp.fetchPinnedComment(anyString())).thenReturn(Optional.of(
                 "Full recipe: two cups flour, one cup sugar, three eggs, bake at 350F for 25 minutes"));
@@ -451,7 +470,7 @@ class ExtractionCascadeTest {
     @Test
     void givesUpOnASlowSupplementalCommentFetchAndForwardsThePipeline() throws Exception {
         SourceMetadata meta = metadata("Never Gonna Give You Up", "The official video", List.of("en"));
-        when(rapidYt.probe(anyString())).thenReturn(Optional.of(new RapidYtClient.ProbeResult(
+        stubRapid(Optional.of(new RapidYtClient.ProbeResult(
                 meta, Optional.of("we're no strangers to love you know the rules and so do i"))));
         CountDownLatch fetchStarted = new CountDownLatch(1);
         when(ytDlp.fetchPinnedComment(anyString())).thenAnswer(invocation -> {
@@ -478,7 +497,7 @@ class ExtractionCascadeTest {
 
     @Test
     void fallsBackToYtDlpWhenRapidApiProbeIsEmpty() {
-        when(rapidYt.probe(anyString())).thenReturn(Optional.empty());
+        stubRapid(Optional.empty());
         when(ytDlp.probe(anyString()))
                 .thenReturn(metadata("Miso ramen", "A quick weeknight bowl", List.of("en")));
         when(ytDlp.fetchCaptions(anyString(), any(Path.class)))
@@ -488,5 +507,186 @@ class ExtractionCascadeTest {
 
         assertThat(extraction.source()).isEqualTo("captions");
         verify(ytDlp).probe(anyString());
+    }
+
+    // --- Provider fallback: RapidAPI → YouTube Data API → yt-dlp ---
+
+    private static final SourceMetadata RICH_DATA_API_METADATA = new SourceMetadata("dQw4w9WgXcQ",
+            "One-pan lemon chicken",
+            "4 chicken thighs, 1 lemon, 3 garlic cloves. Roast at 220C for 35 minutes, rest 5.",
+            "Weeknight Kitchen", 253.0, "https://i.ytimg.com/vi/x/maxresdefault.jpg", List.of(), List.of(), null);
+
+    private void stubDataApi(YouTubeDataApiClient.Outcome outcome) {
+        when(youtubeData.fetch(anyString())).thenReturn(outcome);
+    }
+
+    private List<ExtractionAttempt> attemptsBy(String provider) {
+        return attempts.recent().stream().filter(a -> a.provider().equals(provider)).toList();
+    }
+
+    @Test
+    void rapidApiSuccessNeverTouchesTheDataApi() {
+        stubRapid(Optional.of(new RapidYtClient.ProbeResult(
+                metadata("Never Gonna Give You Up", "The official video", List.of("en")),
+                Optional.of("we're no strangers to love you know the rules and so do i"))));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        verify(youtubeData, never()).fetch(anyString());
+        assertThat(ExtractionCascade.stagePayload(extraction)).containsEntry("provider", "rapidapi");
+        assertThat(attemptsBy("rapidapi")).singleElement()
+                .satisfies(a -> assertThat(a.category()).isEqualTo(ExtractionFailureCategory.SUCCESS));
+    }
+
+    @Test
+    void rapidApiFailsThenTheDataApiCarriesTheSave() {
+        stubRapid(Optional.empty());
+        stubDataApi(YouTubeDataApiClient.Outcome.success(RICH_DATA_API_METADATA));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("metadata");
+        assertThat(extraction.text()).contains("Roast at 220C");
+        assertThat(extraction.metadata().thumbnailUrl()).isEqualTo("https://i.ytimg.com/vi/x/maxresdefault.jpg");
+        assertThat(ExtractionCascade.stagePayload(extraction)).containsEntry("provider", "youtube_data_api");
+        verify(youtubeData).fetch("dQw4w9WgXcQ");
+        // The bot-blocked path is never reached when the legitimate one worked.
+        verify(ytDlp, never()).probe(anyString());
+
+        assertThat(attemptsBy("rapidapi")).singleElement().satisfies(a -> {
+            assertThat(a.category()).isEqualTo(ExtractionFailureCategory.HTTP_429);
+            assertThat(a.httpStatus()).isEqualTo(429);
+            assertThat(a.platform()).isEqualTo("youtube");
+        });
+        assertThat(attemptsBy("youtube_data_api")).singleElement()
+                .satisfies(a -> assertThat(a.success()).isTrue());
+    }
+
+    @Test
+    void rapidApiFailsAndTheDataApiFailsSoYtDlpRunsAsBefore() {
+        stubRapid(Optional.empty());
+        stubDataApi(YouTubeDataApiClient.Outcome.failed(ExtractionFailureCategory.HTTP_429, 403, "quotaExceeded"));
+        when(ytDlp.probe(anyString()))
+                .thenReturn(metadata("Miso ramen", "A quick weeknight bowl", List.of("en")));
+        when(ytDlp.fetchCaptions(anyString(), any(Path.class)))
+                .thenReturn(Optional.of("first brown the onions then add the stock and simmer"));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("captions");
+        assertThat(ExtractionCascade.stagePayload(extraction)).containsEntry("provider", "ytdlp");
+        assertThat(attemptsBy("youtube_data_api")).singleElement().satisfies(a -> {
+            assertThat(a.category()).isEqualTo(ExtractionFailureCategory.HTTP_429);
+            assertThat(a.detail()).isEqualTo("quotaExceeded");
+        });
+        assertThat(attemptsBy("ytdlp")).singleElement().satisfies(a -> assertThat(a.success()).isTrue());
+    }
+
+    /** Thin metadata is not a reason to stop: yt-dlp might still find captions (e.g. from a residential host). */
+    @Test
+    void thinDataApiMetadataFallsThroughToYtDlp() {
+        stubRapid(Optional.empty());
+        stubDataApi(YouTubeDataApiClient.Outcome.success(new SourceMetadata("dQw4w9WgXcQ", "Short",
+                "#shorts #food", "Someone", 20.0, null, List.of(), List.of(), null)));
+        when(ytDlp.probe(anyString()))
+                .thenReturn(metadata("Miso ramen", "A quick weeknight bowl", List.of("en")));
+        when(ytDlp.fetchCaptions(anyString(), any(Path.class)))
+                .thenReturn(Optional.of("first brown the onions then add the stock and simmer"));
+
+        ExtractionCascade.Extraction extraction = cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(extraction.source()).isEqualTo("captions");
+        verify(ytDlp).probe(anyString());
+    }
+
+    /**
+     * Google saying "no such public video" is authoritative. Falling through
+     * would turn a deleted video into a bot-check error on Render, which the
+     * queue would then retry for hours.
+     */
+    @Test
+    void theDataApiSayingTheVideoIsGoneEndsTheSaveHonestly() {
+        stubRapid(Optional.empty());
+        stubDataApi(YouTubeDataApiClient.Outcome.failed(
+                ExtractionFailureCategory.CONTENT_UNAVAILABLE, 200, "no_such_video"));
+
+        assertThatThrownBy(() -> cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID))
+                .isInstanceOf(PermanentJobException.class)
+                .hasMessageContaining("content_unavailable");
+        verify(ytDlp, never()).probe(anyString());
+    }
+
+    @Test
+    void anUnconfiguredDataApiIsNotRecordedAsAnAttempt() {
+        stubRapid(Optional.empty());
+        when(ytDlp.probe(anyString())).thenReturn(metadata("Sourdough starter guide",
+                "Day 1: mix 50g flour with 50g water. Day 2: discard half and feed again.", List.of()));
+
+        cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID);
+
+        assertThat(attemptsBy("youtube_data_api")).isEmpty();
+    }
+
+    // --- Attempt records on the yt-dlp path ---
+
+    @Test
+    void recordsABotCheckAsBotCheckNotAsAGenericFailure() {
+        stubRapid(Optional.empty());
+        when(ytDlp.probe(anyString())).thenThrow(new YtDlpFailedException("yt-dlp exited 1",
+                "ERROR: [youtube] dQw4w9WgXcQ: Sign in to confirm you're not a bot."));
+
+        assertThatThrownBy(() -> cascade.extractFromUrl(YOUTUBE_URL, SAVE_ID))
+                .isInstanceOf(RetryableJobException.class);
+
+        assertThat(attemptsBy("ytdlp")).singleElement().satisfies(a -> {
+            assertThat(a.category()).isEqualTo(ExtractionFailureCategory.BOT_CHECK);
+            assertThat(a.detail()).isEqualTo("source_blocked");
+            assertThat(a.platform()).isEqualTo("youtube");
+        });
+    }
+
+    @Test
+    void recordsInstagramAndTikTokAttemptsUnderTheirOwnPlatform() {
+        when(ytDlp.probe(anyString())).thenReturn(metadata("Reel",
+                "Full routine: 3 rounds of 12 squats, 10 push-ups, 30s plank, 60s rest between rounds.", List.of()));
+        when(ytDlp.version()).thenReturn("2026.07.04");
+
+        cascade.extractFromUrl("https://www.instagram.com/reel/DAbc123xyz/", SAVE_ID);
+        cascade.extractFromUrl("https://www.tiktok.com/@someone/video/7123456789012345678", SAVE_ID);
+
+        assertThat(attemptsBy("ytdlp")).extracting(ExtractionAttempt::platform)
+                .containsExactly("instagram", "tiktok");
+        assertThat(attemptsBy("ytdlp")).allSatisfy(a -> {
+            assertThat(a.ytDlpVersion()).isEqualTo("2026.07.04");
+            assertThat(a.success()).isTrue();
+        });
+        verify(rapidYt, never()).probeDetailed(anyString());
+        verify(youtubeData, never()).fetch(anyString());
+    }
+
+    @Test
+    void recordsAFailedCaptionFetchWithoutFailingTheSave() {
+        when(ytDlp.probe(anyString())).thenReturn(metadata(
+                "Resistance band workout",
+                "Three sets of twelve for each movement, ninety seconds rest between rounds.",
+                List.of("en")));
+        when(ytDlp.fetchCaptions(anyString(), any(Path.class)))
+                .thenThrow(new YtDlpFailedException("yt-dlp exited 1", "ERROR: HTTP Error 429: Too Many Requests"));
+
+        assertThat(cascade.extractFromUrl("https://example.com/v", SAVE_ID).source()).isEqualTo("metadata");
+        assertThat(attemptsBy("ytdlp_captions")).singleElement()
+                .satisfies(a -> assertThat(a.category()).isEqualTo(ExtractionFailureCategory.HTTP_429));
+    }
+
+    /** Records must never carry the URL, a key or stderr — only the declared fields. */
+    @Test
+    void attemptRecordsCarryNoUrlOrRawStderr() {
+        when(ytDlp.probe(anyString())).thenThrow(new YtDlpFailedException("yt-dlp exited 1",
+                "ERROR: [instagram] secret-path: HTTP Error 403: Forbidden --cookies /tmp/yt-dlp-cookies-123.txt"));
+
+        assertThatThrownBy(() -> cascade.extractFromUrl("https://www.instagram.com/reel/DAbc123xyz/?igsh=tok", SAVE_ID));
+
+        assertThat(attempts.recent()).singleElement().satisfies(a ->
+                assertThat(a.toString()).doesNotContain("igsh", "cookies", "secret-path", "DAbc123xyz"));
     }
 }

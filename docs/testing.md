@@ -284,11 +284,11 @@ repair, and the fast English model is ~2 MB against ~15 MB for the accurate one.
 
 ```bash
 cd api
-./mvnw test           # 431 tests, ~30s, NO database or .env needed (6 skip: see below)
+./mvnw test           # 595 tests, NO database or .env needed (8 skip: see below)
 ./mvnw clean verify   # the above plus packaging
 ```
 
-Six tests skip by default, in three opt-in groups. All are gated rather than
+Eight tests skip by default, in five opt-in groups. All are gated rather than
 deleted because a red build caused by a third party rate-limiting us is worse
 than no signal — but an ungated *absence* of the check is worse than either.
 
@@ -316,6 +316,25 @@ first fail:
 ```bash
 WEAVR_LIVE_GEMINI=1 ./mvnw test -Dtest=KnowledgeTypeRegistrySchemaLiveTest
 ```
+
+`ExtractionCanaryLiveTest` (1) runs the canary for real — every default target
+through every configured provider — and prints a table. `ExtractionCascadeLiveTest`
+(1) runs the real production cascade on one URL through the free tiers (RapidAPI,
+Data API, yt-dlp probe + captions); ASR/OCR/link/PDF are **not** wired and throw if
+reached, so a pass means captions or metadata alone carried the save. Keys are read
+from the environment; a missing one leaves that provider off rather than mocked:
+
+```bash
+WEAVR_LIVE_CANARY=1 ./mvnw test -Dtest=ExtractionCanaryLiveTest
+WEAVR_LIVE_CASCADE=1 WEAVR_LIVE_URL=https://... ./mvnw test -Dtest=ExtractionCascadeLiveTest
+```
+
+**Both measure the machine they run on.** From a dev box that's a residential IP —
+not Render's datacenter IP — and from this team's machine in India, TikTok is
+unreachable at the network level (national ban), so a TikTok `TIMEOUT` from here
+says nothing about TikTok. First run, 2026-10-01, residential IP: YouTube via
+RapidAPI ✅ (captions, 5,142 chars, 5.7s), YouTube via yt-dlp ✅ (3.5s), Instagram
+via yt-dlp ✅ (metadata, 436 chars, 4.8s), TikTok ❌ `TIMEOUT` (network block, 21.8s).
 
 Run the yt-dlp pair after touching anything under `pipeline/ytdlp/` and expect
 an occasional 429 that is not your fault; run the OCR trio after touching
