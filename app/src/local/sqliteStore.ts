@@ -370,7 +370,8 @@ export function createSqliteStore(): LocalStore {
       // Exclude saves created by other users (e.g. space-mates).
       // We use json_extract so no schema migration is needed.
       if (query.ownedByUserId !== undefined) {
-        where.push("json_extract(json, '$.userId') = ?");
+        // `local:` rows have no userId yet — see `matchesQuery`.
+        where.push("(json_extract(json, '$.userId') = ? OR id LIKE 'local:%')");
         params.push(query.ownedByUserId);
       }
       const sql =

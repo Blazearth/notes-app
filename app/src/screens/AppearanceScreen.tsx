@@ -481,7 +481,14 @@ export function AppearanceScreen() {
           </View>
           <Touchable
             accessibilityRole="button"
-            onPress={() => void signOut()}
+            onPress={() => {
+              // Appearance sits on top of Settings, which sits on top of
+              // `index` — and `index` holds the only redirect to sign-in. A bare
+              // sign-out left the user here, signed in as nobody. Pop back to
+              // `index` first, as Settings' own "Log out" does.
+              if (router.canDismiss()) router.dismissAll();
+              void signOut();
+            }}
             haptic="medium"
             style={{
               alignSelf: 'flex-start',

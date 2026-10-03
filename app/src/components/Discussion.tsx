@@ -61,12 +61,13 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
     // Shown immediately and queued for delivery. The old version awaited the
     // POST and kept the draft on failure, which was the best it could do without
     // a queue — but "the request failed, here is your text back" still loses a
-    // comment typed on a train. `pendingId` marks it as not-yet-confirmed; the
-    // next successful load replaces it with the server's own copy.
+    // comment typed on a train. The `local:` id marks it as not-yet-confirmed;
+    // the next successful load replaces it with the server's own copy.
+    const localId = writeComment(saveId, body);
     setComments((current) => [
       ...current,
       {
-        id: `pending:${Date.now()}`,
+        id: localId,
         userId: 'me',
         displayName: 'You',
         body,
@@ -75,15 +76,14 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
       },
     ]);
     setDraft('');
-    writeComment(saveId, body);
   }, [saveId, draft]);
 
   const onDelete = useCallback(
     (commentId: string) => {
       setComments((current) => current.filter((c) => c.id !== commentId));
-      // A comment that never reached the server has nothing to delete there, so
-      // dropping it locally is the whole operation.
-      if (commentId.startsWith('pending:')) return;
+      // Queued even for a `local:` comment: its create is still on its way, and
+      // dropping it here alone would let the create post it anyway. The queue
+      // sends the delete after the create and resolves the real id.
       writeDeleteComment(saveId, commentId);
     },
     [saveId],

@@ -669,9 +669,10 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
   /**
    * S4: pinning and unpinning, optimistic and queued.
    *
-   * The local id for a pin the server has not confirmed is `pending:` prefixed
-   * — the same convention `Discussion` uses — and the next successful load
-   * replaces it with the real row. There is no rollback, per `@/local/writes`:
+   * The id for a pin the server has not confirmed is the `local:` one
+   * `writePin` returns (the same convention `Discussion` uses), and the next
+   * successful load replaces it with the real row. Pin and unpin of one
+   * subject share a queue key, so they reach the server in tap order. There is no rollback, per `@/local/writes`:
    * a write the server rejects is surfaced on Settings rather than silently
    * undone.
    */
@@ -680,13 +681,16 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       const existing = pins.find((p) => p.kind === kind && p.subject === subject);
       if (existing) {
         setPins((current) => current.filter((p) => p.id !== existing.id));
-        if (!existing.id.startsWith('pending:')) writeUnpin(spaceId, existing.id);
+        // Queued even for an unconfirmed pin: its pin request is still on its
+        // way, and skipping the unpin left it pinned on the server.
+        writeUnpin(spaceId, existing.id, kind, subject);
         return;
       }
+      const localId = writePin(spaceId, kind, subject);
       setPins((current) => [
         ...current,
         {
-          id: `pending:${Date.now()}`,
+          id: localId,
           kind,
           subject,
           label,
@@ -697,7 +701,6 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
           createdAt: new Date().toISOString(),
         },
       ]);
-      writePin(spaceId, kind, subject);
     },
     [spaceId, pins],
   );

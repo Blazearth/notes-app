@@ -30,7 +30,7 @@
 
 import type { CreateSaveRequest, LifecycleStatus, SaveResponse, ShoppingListItem } from '@/api/types';
 import { getStore } from './index';
-import { newLocalId } from './outbox';
+import { isLocalId, newLocalId, shoppingListKey } from './outbox';
 import { sync } from './sync';
 
 // ------------------------------------------------------------------- saves
@@ -160,7 +160,7 @@ export function writeConvertToShoppingList(saveId: string): void {
  */
 export function writeShoppingItemChecked(itemId: string, checked: boolean): void {
   void getStore().patchShoppingItem(itemId, { checked });
-  void sync.enqueue('setShoppingItemChecked', { itemId, checked }, itemId);
+  void sync.enqueue('setShoppingItemChecked', { itemId, checked }, shoppingListKey());
 }
 
 /** "I've been shopping" — drops everything ticked, keeps the rest. */
@@ -168,9 +168,9 @@ export function writeClearCheckedShoppingItems(items: readonly ShoppingListItem[
   const removed = items.filter((item) => item.checked).map((item) => item.id);
   if (removed.length === 0) return;
   void getStore().removeShoppingItems(removed);
-  // No `entityId`: this is about the list, not one item. Queueing it against a
-  // single item's id would make it wait behind that item's own backoff.
-  void sync.enqueue('clearCheckedShoppingItems', {}, null);
+  // The list's key, shared with every tick on it: the clear has to wait for a
+  // tick still in backoff, or the server clears without that item.
+  void sync.enqueue('clearCheckedShoppingItems', {}, shoppingListKey());
 }
 
 // ------------------------------------------------- S4: a Space's shared list
@@ -192,12 +192,12 @@ export function writeClearCheckedShoppingItems(items: readonly ShoppingListItem[
  * row on exactly one list, and the server proves access per statement — so
  * there is no Space variant to write, here or on the server.
  */
-export function writeSpaceShoppingItemChecked(itemId: string, checked: boolean): void {
-  void sync.enqueue('setShoppingItemChecked', { itemId, checked }, itemId);
+export function writeSpaceShoppingItemChecked(spaceId: string, itemId: string, checked: boolean): void {
+  void sync.enqueue('setShoppingItemChecked', { itemId, checked }, shoppingListKey(spaceId));
 }
 
 export function writeClearCheckedSpaceShoppingItems(spaceId: string): void {
-  void sync.enqueue('clearCheckedShoppingItems', { spaceId }, null);
+  void sync.enqueue('clearCheckedShoppingItems', { spaceId }, shoppingListKey(spaceId));
 }
 
 // ------------------------------------------------------------------- S4: pins
@@ -215,12 +215,23 @@ export function writePin(
   kind: string,
   subject: string,
   payload: Record<string, unknown> = {},
-): void {
-  void sync.enqueue('pinInSpace', { spaceId, kind, subject, payload }, `${spaceId}|${kind}|${subject}`);
+): string {
+  const localId = newLocalId();
+  void sync.enqueue('pinInSpace', { spaceId, kind, subject, payload, localId }, pinKey(spaceId, kind, subject));
+  return localId;
 }
 
-export function writeUnpin(spaceId: string, pinId: string): void {
-  void sync.enqueue('unpinInSpace', { spaceId, pinId }, pinId);
+/**
+ * Same queue key as the pin, so a pin and an unpin of one subject always reach
+ * the server in the order they were tapped. `pinId` may be the `local:` id
+ * {@link writePin} returned — the sender resolves it once the pin has landed.
+ */
+export function writeUnpin(spaceId: string, pinId: string, kind: string, subject: string): void {
+  void sync.enqueue('unpinInSpace', { spaceId, pinId }, pinKey(spaceId, kind, subject));
+}
+
+function pinKey(spaceId: string, kind: string, subject: string): string {
+  return `${spaceId}|${kind}|${subject}`;
 }
 
 // ------------------------------------------------------------- discussion
@@ -236,12 +247,20 @@ export function writeUnpin(spaceId: string, pinId: string): void {
  * What they gain from the queue is delivery: a comment typed on a train is sent
  * when there is a network, instead of being dropped with the draft.
  */
-export function writeComment(saveId: string, body: string): void {
-  void sync.enqueue('addComment', { saveId, body }, saveId);
+/** Returns the `local:` id to show the comment under until a reload replaces it. */
+export function writeComment(saveId: string, body: string): string {
+  const localId = newLocalId();
+  void sync.enqueue('addComment', { saveId, body, localId }, saveId);
+  return localId;
 }
 
+/**
+ * A `local:` comment is queued under the save, behind its own `addComment`, so
+ * the delete cannot run first; the sender resolves it to the real id. Dropping
+ * it locally and sending nothing — what this used to do — still posted it.
+ */
 export function writeDeleteComment(saveId: string, commentId: string): void {
-  void sync.enqueue('deleteComment', { saveId, commentId }, commentId);
+  void sync.enqueue('deleteComment', { saveId, commentId }, isLocalId(commentId) ? saveId : commentId);
 }
 
 export function writeVote(saveId: string, value: 1 | -1 | 0): void {
@@ -263,10 +282,17 @@ export function writeVote(saveId: string, value: 1 | -1 | 0): void {
  * about Frieren have nothing to do with each other and must not queue behind
  * one another's backoff.
  */
-export function writeEntityComment(spaceId: string, entityKey: string, body: string): void {
-  void sync.enqueue('addEntityComment', { spaceId, entityKey, body }, entityKey);
+export function writeEntityComment(spaceId: string, entityKey: string, body: string): string {
+  const localId = newLocalId();
+  void sync.enqueue('addEntityComment', { spaceId, entityKey, body, localId }, entityKey);
+  return localId;
 }
 
-export function writeDeleteEntityComment(spaceId: string, commentId: string): void {
-  void sync.enqueue('deleteEntityComment', { spaceId, commentId }, commentId);
+/** Same ordering rule as {@link writeDeleteComment}, under the entity's key. */
+export function writeDeleteEntityComment(spaceId: string, entityKey: string, commentId: string): void {
+  void sync.enqueue(
+    'deleteEntityComment',
+    { spaceId, commentId },
+    isLocalId(commentId) ? entityKey : commentId,
+  );
 }

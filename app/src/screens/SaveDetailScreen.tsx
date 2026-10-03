@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -1167,16 +1167,38 @@ export function SaveDetailScreen({ id }: { id: string }) {
   const [noteBody, setNoteBody] = useState('');
   const [noteSaving, setNoteSaving] = useState(false);
 
-  // Sync editor fields whenever the underlying save changes.
+  // Re-seed the editor only when the *stored text* changes, and never over
+  // unsaved typing. Keying this on `save` itself wiped the draft every time any
+  // save in the store was written — `readSave` hands back a new object on every
+  // `saves`/`item_states` change, and the processing poll alone writes every 2s.
+  const storedTitle =
+    save?.sourceType === 'text' ? ((save.structuredData?.title as string | undefined) ?? '') : null;
+  const storedBody =
+    save?.sourceType === 'text'
+      ? ((save.structuredData?.body as string | undefined) ?? save.rawCaption ?? '')
+      : null;
+  const seeded = useRef<{ title: string; body: string } | null>(null);
+  const editorRef = useRef({ title: noteTitle, body: noteBody });
+  editorRef.current = { title: noteTitle, body: noteBody };
+
   useEffect(() => {
-    if (!save || save.sourceType !== 'text') return;
-    setNoteTitle((save.structuredData?.title as string | undefined) ?? '');
-    setNoteBody(
-      (save.structuredData?.body as string | undefined) ??
-      save.rawCaption ??
-      '',
-    );
-  }, [save]);
+    if (storedTitle === null || storedBody === null) return;
+    const editor = editorRef.current;
+    const prev = seeded.current;
+    // Unsaved edits: the editor has moved away from what it was last seeded with.
+    const dirty = prev !== null && (editor.title !== prev.title || editor.body !== prev.body);
+    // A save the user just made lands here as the stored text catching up with
+    // the editor. Adopt what is on screen as the new baseline without touching
+    // it — re-seeding would strip a trailing space typed a moment ago.
+    if (editor.title.trim() === storedTitle && editor.body.trim() === storedBody) {
+      seeded.current = editor;
+      return;
+    }
+    if (dirty) return;
+    seeded.current = { title: storedTitle, body: storedBody };
+    setNoteTitle(storedTitle);
+    setNoteBody(storedBody);
+  }, [storedTitle, storedBody]);
 
   const load = useCallback(async () => {
     const pulled = await sync.pullSave(id);

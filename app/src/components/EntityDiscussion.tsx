@@ -68,13 +68,14 @@ export function EntityDiscussion({
   const onSend = useCallback(() => {
     const body = draft.trim();
     if (!body) return;
-    // Shown immediately, queued for delivery. `pending:` marks it as
+    // Shown immediately, queued for delivery. The `local:` id marks it as
     // not-yet-confirmed; the next successful load replaces it with the server's
     // own copy, which is also where the real id comes from.
+    const localId = writeEntityComment(spaceId, entityKey, body);
     setComments((current) => [
       ...(current ?? []),
       {
-        id: `pending:${Date.now()}`,
+        id: localId,
         entityKey,
         userId: 'me',
         displayName: 'You',
@@ -85,18 +86,16 @@ export function EntityDiscussion({
     ]);
     setDraft('');
     onCountChange?.(1);
-    writeEntityComment(spaceId, entityKey, body);
   }, [spaceId, entityKey, draft, onCountChange]);
 
   const onDelete = useCallback(
     (commentId: string) => {
       setComments((current) => (current ?? []).filter((c) => c.id !== commentId));
       onCountChange?.(-1);
-      // A comment that never reached the server has nothing to delete there.
-      if (commentId.startsWith('pending:')) return;
-      writeDeleteEntityComment(spaceId, commentId);
+      // Queued even for a `local:` comment — see `Discussion`'s onDelete.
+      writeDeleteEntityComment(spaceId, entityKey, commentId);
     },
-    [spaceId, onCountChange],
+    [spaceId, entityKey, onCountChange],
   );
 
   return (
