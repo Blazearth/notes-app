@@ -48,6 +48,7 @@ import { useTheme } from '@/theme/ThemeProvider';
  * rather than like a loading spinner with a Space in it.
  */
 const EMPTY_ENTITIES: CollectionEntityResponse[] = [];
+const EMPTY_STATES: Record<string, Record<string, unknown>> = {};
 
 function capitalise(value: string): string {
   return value ? value[0].toUpperCase() + value.slice(1) : value;
@@ -199,6 +200,10 @@ function SpaceEntityRow({
   onToggleDone,
   onRate,
   onOpenSave,
+  open,
+  onToggleOpen,
+  count,
+  onCountChange,
 }: {
   entity: Entity;
   type: string;
@@ -209,6 +214,11 @@ function SpaceEntityRow({
   onToggleDone: () => void;
   onRate: (rating: number) => void;
   onOpenSave: (saveId: string) => void;
+  /** Held by the screen, not the row — see `SpaceCollectionScreen`'s `openKeys`. */
+  open: boolean;
+  onToggleOpen: () => void;
+  count: number | null;
+  onCountChange: (count: number) => void;
 }) {
   const { palette, radius, spacing } = useTheme();
   /**
@@ -223,8 +233,6 @@ function SpaceEntityRow({
    * remark updates the row it came from rather than waiting for a refetch that
    * offline never arrives.
    */
-  const [open, setOpen] = useState(false);
-  const [count, setCount] = useState<number | null>(null);
   const commentCount = count ?? entity.commentCount ?? 0;
   const typeMeta = saveTypeMeta(type);
   const collMeta = collectionTypeMeta(type);
@@ -311,7 +319,7 @@ function SpaceEntityRow({
                   ? `${commentCount} ${commentCount === 1 ? 'comment' : 'comments'} on ${entity.name}`
                   : `Discuss ${entity.name}`
             }
-            onPress={() => setOpen((current) => !current)}
+            onPress={onToggleOpen}
             haptic="selection"
             style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
           >
@@ -334,7 +342,7 @@ function SpaceEntityRow({
             spaceId={spaceId}
             entityKey={entity.entityKey}
             entityName={entity.name}
-            onCountChange={(delta) => setCount((current) => (current ?? commentCount) + delta)}
+            onCountChange={(delta) => onCountChange(commentCount + delta)}
           />
         ) : null}
       </View>
@@ -381,10 +389,39 @@ export function SpaceCollectionScreen({ spaceId, nodeId }: { spaceId: string; no
     () => new Map(local.map((entity) => [entity.entityKey, entity.state])),
     [local],
   );
+  // `entity_states` itself, not only the states of entities derived from saves
+  // stored locally. A teammate's save that arrived through `load()` (and was
+  // never pulled into the store) has no derived entity, so a tap on it wrote
+  // `entity_states` and the row kept showing the server's old state.
+  const storedStates = useLiveValue<Record<string, Record<string, unknown>>>(
+    ['entity_states'],
+    (store) => store.readEntityStates(),
+    EMPTY_STATES,
+  );
   const entities: Entity[] = useMemo(() => {
     if (!remote) return local;
-    return remote.map((entity) => ({ ...entity, state: localStates.get(entity.entityKey) ?? entity.state }));
-  }, [remote, local, localStates]);
+    return remote.map((entity) => ({
+      ...entity,
+      state: storedStates[entity.entityKey] ?? localStates.get(entity.entityKey) ?? entity.state,
+    }));
+  }, [remote, local, localStates, storedStates]);
+
+  /**
+   * Which rows have their discussion open, and their optimistic comment counts.
+   * Held here rather than in each row: a status change moves the row into a
+   * different section, which remounts it, and row-local state collapsed the
+   * thread and reverted the count mid-conversation.
+   */
+  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const [counts, setCounts] = useState<Readonly<Record<string, number>>>({});
+  const toggleOpen = useCallback((key: string) => {
+    setOpenKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -600,6 +637,12 @@ export function SpaceCollectionScreen({ spaceId, nodeId }: { spaceId: string; no
                   onRate={(rating) => setEntityState(entity, { ...entity.state, rating })}
                   onOpenSave={(saveId) =>
                     router.push({ pathname: '/save/[id]', params: { id: saveId } })
+                  }
+                  open={openKeys.has(entity.entityKey)}
+                  onToggleOpen={() => toggleOpen(entity.entityKey)}
+                  count={counts[entity.entityKey] ?? null}
+                  onCountChange={(next) =>
+                    setCounts((current) => ({ ...current, [entity.entityKey]: next }))
                   }
                 />
               ))}

@@ -14,6 +14,7 @@ import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
 import { Glyph } from '@/components/Glyph';
 import { PendingWrites } from '@/components/PendingWrites';
+import { useGuardedSignOut } from '@/components/useGuardedSignOut';
 import { Screen } from '@/components/Screen';
 import { SectionLabel } from '@/components/SectionLabel';
 import { SettingLink, SettingSwitch } from '@/components/SettingRow';
@@ -191,10 +192,8 @@ export function SettingsScreen() {
     goBack();
     void signOut();
   };
+  const { requestSignOut, signOutSheet } = useGuardedSignOut(leaveAndSignOut);
 
-  // Not backed by an endpoint yet — mirrors the mockup's toggled-on defaults.
-  const [pushNotifications, setPushNotifications] = useState(true);
-  const [weeklyDigestEmail, setWeeklyDigestEmail] = useState(true);
 
   // Null until the store has one, and null on a genuinely first run. PlanCard
   // renders the heading either way — a settings screen that shows nothing
@@ -376,20 +375,11 @@ export function SettingsScreen() {
 
       <SectionLabel>Preferences</SectionLabel>
       <View style={{ marginBottom: spacing.xxl }}>
-        <Row>
-          <SettingSwitch
-            title="Push notifications"
-            value={pushNotifications}
-            onValueChange={setPushNotifications}
-          />
-        </Row>
-        <Row>
-          <SettingSwitch
-            title="Weekly digest email"
-            value={weeklyDigestEmail}
-            onValueChange={setWeeklyDigestEmail}
-          />
-        </Row>
+        {/* "Push notifications" and "Weekly digest email" switches lived here,
+            backed by nothing: they flipped, saved nowhere, and showed ON again
+            next visit — so a user opting out of email got no opt-out. Removed
+            until there is an endpoint to store the choice, the same rule the
+            haptics row follows on web. */}
         {/* No haptics API on web, so the toggle would be a control that
             demonstrably does nothing. Hide it rather than explain it. */}
         {Platform.OS === 'web' ? null : (
@@ -435,9 +425,6 @@ export function SettingsScreen() {
             />
           </Row>
         ) : null}
-        <Row>
-          <SettingLink title="Help & support" onPress={() => {}} />
-        </Row>
       </View>
 
       {/* Visually separated from ordinary settings, per the spec's own
@@ -466,7 +453,7 @@ export function SettingsScreen() {
 
       <Touchable
         accessibilityRole="button"
-        onPress={leaveAndSignOut}
+        onPress={requestSignOut}
         // Signing out is destructive and unprompted — it earns the heavier tap.
         haptic="medium"
         style={{ paddingVertical: spacing.md, alignItems: 'center' }}
@@ -475,6 +462,7 @@ export function SettingsScreen() {
           Log out
         </AppText>
       </Touchable>
+      {signOutSheet}
       {/* ---- Username Modal (cross-platform, works on Android) ---- */}
       <Modal
         visible={showUsernameModal}

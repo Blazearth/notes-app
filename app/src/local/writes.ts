@@ -109,9 +109,25 @@ export function writeSaveItemState(
  * detail screen all read `entity_states`.
  */
 export function writeEntityState(entityKey: string, state: Record<string, unknown>): void {
-  void getStore().putEntityStates({ [entityKey]: state });
-  void sync.enqueue('setEntityState', { entityKey, state }, entityKey);
+  // Merged onto what the store holds *now*, one write at a time. Callers build
+  // `state` from the copy they last rendered, so two quick taps (Pin, then Done)
+  // both started from the same stale copy and the second silently dropped the
+  // first — locally and, since the server's write is a full replace, there too.
+  entityWrites = entityWrites
+    .then(async () => {
+      const store = getStore();
+      const next = { ...((await store.readEntityStates())[entityKey] ?? {}), ...state };
+      await store.putEntityStates({ [entityKey]: next });
+      await sync.enqueue('setEntityState', { entityKey, state: next }, entityKey);
+    })
+    .catch(() => {
+      // A local write that throws is a store bug, not a network failure; the
+      // chain must survive it or every later tap would be dropped too.
+    });
 }
+
+/** Serialises {@link writeEntityState}'s read-modify-write. */
+let entityWrites: Promise<void> = Promise.resolve();
 
 /**
  * Creates a save, offline-first.

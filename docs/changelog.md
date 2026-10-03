@@ -451,10 +451,50 @@ Verified: `tsc --noEmit` clean, both bundles export, and the whole flow driven t
 - **Found, not changed:** `ExtractionCascade.withPinnedComment` runs a yt-dlp probe against YouTube on *every* RapidAPI success, which on Render is expected to bot-check fail and gets cancelled after 3s — a wasted yt-dlp process per YouTube save. Now measurable; worth a flag to skip on Render.
 - **Also:** `ExtractionHealthWiringTest` boots the new beans in a DB-free `ApplicationContextRunner` (nothing else in the suite boots Spring, and the `RestClient.Builder` trap fails at startup, not compile time). Privacy policy §5 gains a "Google — YouTube Data API" recipient row (video ID only). Android on-device fallback written up as a design note only — [extraction-architecture.md §G](extraction-architecture.md#g-design-note--android-on-device-fallback-not-built-2026-10-01).
 
-**Click-path audit, 2026-10-04: 44 handler-level bugs found, the 6 high-severity ones and two shopping-list races fixed.** A `/click-path-audit` traced every button's handler against a map of what each store/outbox/sync action sets *and resets*. Everything below is code-traced, typechecked, and (for the pure queue logic) executed under node. None of it has been driven in headless Chrome or on a device yet. The 36 unfixed medium/low findings are not recorded anywhere in the repo yet.
+**Click-path audit, 2026-10-04: 44 handler-level bugs found, the 6 high-severity ones and two shopping-list races fixed.** A `/click-path-audit` traced every button's handler against a map of what each store/outbox/sync action sets *and resets*. Everything below is code-traced, typechecked, and (for the pure queue logic) executed under node. None of it has been driven in headless Chrome or on a device yet. The remaining medium/low findings were fixed the same day — next entry.
 - **Root cause, sync layer: echoes and fetches overwrote newer local writes.** Each sender adopted the server's echo via `patchSave`, which *replaces* the item-state map, so tick A then B un-ticked B until B sent (up to the 5-min backoff cap). `supersededLocally` in `sync.ts` now skips an echo while a newer pending entry for the same `entityId` exists. Shopping-list fetches (personal and Space) go through `fetchShoppingList`: it refetches if a shopping write landed mid-fetch, then re-applies still-queued ticks/clears (`overlayPendingShopping`, pure, in `outbox.ts`).
 - **"Clear checked" could overtake a tick in backoff** (it was queued with `entityId: null`), so cleared items came back checked. All ops on one list now share `shoppingListKey(spaceId?)`.
 - **Deleting a just-sent comment, or unpinning a just-made pin, still posted it.** The screen dropped the `pending:` placeholder and queued nothing. Placeholders are now `local:` ids returned by `writeComment`/`writeEntityComment`/`writePin`. The delete is queued under the create's key, so it is sent after the create, and resolves the real id through an in-memory `sentIds` map. Pin and unpin now share one key (previously unpin used the pin id, so an unpin in backoff could land after a re-pin).
 - **Fresh captures were invisible in the feed**: `writeCreateSave`'s placeholder has no `userId` and the feed filters by owner (added in 5815b81). `local:` rows now count as owned in both `matchesQuery` and the SQLite `readFeed`.
 - **The note editor wiped unsaved typing** whenever *any* save was written (`[save]` effect plus a new object per `readSave`, and the 2s processing poll). It now re-seeds only when the stored text changes and the editor is clean.
 - **Appearance → Sign out stranded the user on Appearance**, the same bug `SettingsScreen.leaveAndSignOut` already fixed. It now `dismissAll()`s first.
+
+**Click-path audit, round 2, 2026-10-04: the remaining medium and low findings fixed, and the important flows driven in headless Chrome.** Mock mode + CDP against `expo start --web`, one persistent page (so `mockRepository`'s state survives between steps). Failure paths were forced by flag-gated fixture patches (`globalThis.__probe*` in `createSave`/`setShoppingItemChecked`), restored and `diff -q`'d afterwards. Backend 595/595 green (8 skipped); app typechecks and bundles for Android.
+- **Seen working in the browser:**
+  - **Capture offline:** a capture made while offline shows in the feed. Reverting the `matchesQuery` fix reproduced the bug: 21 stored, "20 saved items".
+  - **Note draft:** an unsaved note draft survives a store write to the same save (Add to Space).
+  - **Comments and votes:** a comment sent then deleted inside the mock's latency stays deleted after remount, and the vote is restored from the new `GET /v1/saves/{id}/vote`.
+  - **Library:** long-press while selecting toggles; "Unarchive selected" in the Archived view; Home's "See all N" opens the Library tab.
+  - **Retry:** it settles from `SavesProvider`: original deleted, no stuck "Retrying…".
+  - **Shopping list:** a tick in network backoff holds "Clear checked" behind it (shared `shopping:personal` key). A refetch while offline keeps the queued tick and clear applied (`overlayPendingShopping`), and once online the server ends with the item cleared.
+  - **Pins:** pin then unpin inside the mock's latency ends unpinned after reload.
+  - **Sign-out:** sign-out with an unsent write shows the "unsent changes" sheet, then lands on `/sign-in` from Appearance.
+  - **Settings:** the push/digest switches and the dead "Help & support" row are gone.
+- **Changed, typechecked, not driven (needs data the mock lacks, or is native-only):**
+  - Add-to-Space hides viewer Spaces (the mock has none).
+  - A merged duplicate leaves Sources locally.
+  - The invite error shows inline.
+  - Space collection rows read `entity_states` directly, and their discussion open/count state is lifted out of the row so a status change doesn't collapse it.
+  - Group long-press is gated like the Compare button.
+  - `ConfirmSheet` is first-choice-wins.
+  - The reminder sheet uses `try/finally`, shows a "notifications are off" notice, and is hidden on web.
+  - The checklist next-action opens the first open item.
+  - `writeEntityState` merges onto the stored state, serialised.
+  - Search: the key cancels the debounced call.
+  - Capture is held open during a screenshot upload.
+  - "Try again" on a dependent write also retries its failed create.
+  - Paywall: Subscribe stays locked and `/v1/me` keeps polling while a purchase is `pending`.
+  - Sign-up: with email confirmation, the username is held (`pendingUsername`) until the account's first session.
+  - `userName` is cleared on sign-out and always set from `/v1/me` on sign-in.
+  - "Reset to defaults" keeps `userName` and re-mirrors `openAppWhenSaving` natively.
+  - Push registration is keyed on the user id, not the session object.
+  - Home's derived views (groups, collections, Today, Continue) apply the same owner filter as the feed (5815b81's intent), via `KV.ownerUserId`.
+  - The rest timer sums "1m30s" and finishes itself.
+  - Finished-workout rows reopen an exercise.
+  - The duplicate `pullSave` in the poll is gone.
+- **Save detail no longer goes blank:**
+  - `sync.realSaveId` records local→real ids at reconcile, and `successorOf` follows a replaced or re-keyed save.
+  - The mount load uses `fetchSave`, so a cold deep link to a missing save shows "Save not found".
+  - "Add to shopping list" calls the server directly, so a 402 shows an upgrade link. It falls back to the queue only offline.
+- **One new endpoint:** `GET /v1/saves/{id}/vote` → `{score, myVote}` (`SaveSocialService.voteState`, same `requireVisible` gate as the rest). No unit test was added for it; the suite has no `SaveSocialService` test to extend.
+

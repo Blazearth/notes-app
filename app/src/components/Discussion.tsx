@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { TextInput, View } from 'react-native';
 
 import { repo } from '@/data';
 import type { SaveComment } from '@/api/types';
+import { getStore } from '@/local';
+import type { OutboxPayloads } from '@/local/outbox';
 import { writeComment, writeDeleteComment, writeVote } from '@/local/writes';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -25,6 +27,8 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
   const [draft, setDraft] = useState('');
   const [score, setScore] = useState<number | null>(null);
   const [myVote, setMyVote] = useState<1 | -1 | 0>(0);
+  /** Set by a tap, so a load landing after it cannot put back the old vote. */
+  const votedHere = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -32,6 +36,22 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
     } catch {
       // A save whose comments will not load is still perfectly readable, so
       // this stays quiet rather than pushing an error over the content.
+    }
+    try {
+      const server = await repo.getVote(saveId);
+      // A vote still queued (made offline, or on a previous visit) is newer
+      // than what the server holds: show it, and the score it will produce.
+      const queued = (await getStore().readOutbox())
+        .filter((entry) => entry.op === 'setVote' && entry.status === 'pending')
+        .map((entry) => entry.payload as OutboxPayloads['setVote'])
+        .filter((payload) => payload.saveId === saveId)
+        .pop();
+      if (votedHere.current) return;
+      const mine = queued ? queued.value : server.myVote;
+      setMyVote(mine);
+      setScore(server.score - server.myVote + mine);
+    } catch {
+      // Same as comments: the save is readable without its score.
     }
   }, [saveId]);
 
@@ -44,6 +64,7 @@ export function Discussion({ saveId, spaceId }: { saveId: string; spaceId?: stri
       // Tapping the vote you already hold clears it — the standard toggle, and
       // the server takes 0 for exactly this.
       const next: 1 | -1 | 0 = myVote === value ? 0 : value;
+      votedHere.current = true;
       setMyVote(next);
       // The score is the sum of *everyone's* votes, so this can only guess at
       // the delta its own vote makes — which it can do exactly, because a vote

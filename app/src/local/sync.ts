@@ -474,12 +474,21 @@ class SyncEngine {
    * entry keeps its position and its idempotency key.
    */
   async retryOutbox(id: number): Promise<void> {
-    await getStore().updateOutbox(id, {
-      status: 'pending',
-      attempts: 0,
-      nextAttemptAt: null,
-      lastError: null,
-    });
+    const store = getStore();
+    const entries = await store.readOutbox();
+    const entry = entries.find((e) => e.id === id);
+    const reset = { status: 'pending' as const, attempts: 0, nextAttemptAt: null, lastError: null };
+    // A change to a save that was never created was failed *because* its
+    // create failed (see `drainOutbox`). Retrying it alone sends a request for a
+    // `local:` id — a 404 that fails it again. Retry the create with it; it
+    // sorts first, and the change follows it under the same key.
+    if (entry && entry.op !== 'createSave' && entry.entityId !== null && isLocalId(entry.entityId)) {
+      const create = entries.find(
+        (e) => e.op === 'createSave' && e.entityId === entry.entityId && e.status === 'failed',
+      );
+      if (create) await store.updateOutbox(create.id, reset);
+    }
+    await store.updateOutbox(id, reset);
     void this.drainOutbox();
   }
 
@@ -618,17 +627,41 @@ class SyncEngine {
    * cold deep link, and the poll while a just-created save is `processing`.
    */
   async pullSave(id: string): Promise<SaveResponse | null> {
-    // A `local:` save exists nowhere but here; asking the server for it is a
-    // guaranteed 404 and would surface as a load error on a save the user can
-    // see perfectly well.
-    if (isLocalId(id)) return getStore().readSave(id);
     try {
-      const save = await repo.getSave(id);
-      await getStore().putSaves([save]);
-      return save;
+      return await this.fetchSave(id);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * {@link pullSave}, but a failure says why — what a screen needs to tell
+   * "this save does not exist" (`notFound`) from "could not reach the server".
+   */
+  async fetchSave(id: string): Promise<SaveResponse> {
+    // A `local:` save exists nowhere but here; asking the server for it is a
+    // guaranteed 404 and would surface as a load error on a save the user can
+    // see perfectly well.
+    if (isLocalId(id)) {
+      const local = await getStore().readSave(id);
+      if (local) return local;
+      throw new ApiError('notFound', 'This save no longer exists.', null);
+    }
+    const save = await repo.getSave(id);
+    await getStore().putSaves([save]);
+    return save;
+  }
+
+  /**
+   * The server id an offline-created save was given, once its POST has landed.
+   *
+   * Anything holding a `local:` id — a detail screen, a retry link — is left
+   * pointing at nothing when `reconcileSaveId` moves the row, because nothing
+   * outside the store can otherwise learn what the id became. In memory: a
+   * `local:` id held by a screen does not outlive the session either.
+   */
+  realSaveId(id: string): string | undefined {
+    return reconciledSaveIds.get(id);
   }
 
   /** A Space's own tab, on demand: its saves and members, into the store. */
@@ -757,6 +790,9 @@ async function supersededLocally(entry: OutboxEntry): Promise<boolean> {
  */
 const sentIds = new Map<string, string>();
 
+/** `local:` save id to its server id — see {@link SyncEngine.realSaveId}. */
+const reconciledSaveIds = new Map<string, string>();
+
 /** The server id for `id`, or `null` for a `local:` id whose create never landed. */
 function resolveSentId(id: string): string | null {
   if (!isLocalId(id)) return id;
@@ -808,6 +844,9 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
   async createSave(entry) {
     const { body, localId } = entry.payload;
     const save = await repo.createSave(body, entry.idempotencyKey);
+    // Recorded before the move, so a screen re-reading on the move's change
+    // event can already follow the row to its new id.
+    reconciledSaveIds.set(localId, save.id);
     // One write: the row moves onto the real id, its item states follow, the
     // `pending` flag clears, and every other queued entry pointing at the local
     // id is rewritten. Doing them separately leaves a window where a screen

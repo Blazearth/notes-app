@@ -110,7 +110,7 @@ const members: Record<string, SpaceMember[]> = copy(MOCK_MEMBERS);
 const activity: Record<string, ActivityEntry[]> = copy(MOCK_ACTIVITY);
 const comments: Record<string, SaveComment[]> = copy(MOCK_COMMENTS);
 const shoppingList: ShoppingListResponse = copy(MOCK_SHOPPING_LIST);
-const votes: Record<string, number> = {};
+const votes: Record<string, 1 | -1 | 0> = {};
 /**
  * S3 — `entity_comments`, keyed by Space. Space-scoped, unlike `entityStates`
  * below, and that shape difference is the feature: a status is a fact about a
@@ -932,6 +932,11 @@ export const mockRepository: Repository = {
     comments[saveId] = (comments[saveId] ?? []).filter((c) => c.id !== commentId);
     tomb('comment', commentId);
     return delay(undefined);
+  },
+
+  getVote(saveId: string): Promise<{ score: number; myVote: 1 | -1 | 0 }> {
+    const mine: 1 | -1 | 0 = votes[saveId] ?? 0;
+    return delay({ score: mine, myVote: mine });
   },
 
   setVote(saveId: string, value: 1 | -1 | 0): Promise<{ score: number }> {

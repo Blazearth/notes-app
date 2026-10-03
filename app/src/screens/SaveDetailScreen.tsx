@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useReducedMotion,
@@ -46,7 +46,7 @@ import {
   type EntityStates,
 } from '@/saves/detailModel';
 import { bareUrl, STATUS_LABELS, saveTitle, sourceKindLabel, sourcePlatformName } from '@/saves/format';
-import { canRetry, isRetrying, resolveRetry, retryTarget, startRetry } from '@/saves/retry';
+import { canRetry, startRetry, successorOf, useIsRetrying } from '@/saves/retry';
 import { useSaves } from '@/saves/SavesProvider';
 import { baseServings, scaleQuantity } from '@/saves/scaling';
 import { groupItemNoun, saveTypeMeta } from '@/saves/saveTypeMeta';
@@ -817,29 +817,19 @@ function UnfinishedSave({ save }: { save: SaveResponse }) {
   const { palette, spacing, radius } = useTheme();
   const router = useRouter();
   const { saves } = useSaves();
-  const [retrying, setRetrying] = useState(() => isRetrying(save.id));
-  const target = retrying ? retryTarget(save.id, saves) : undefined;
-
-  // Same mechanism as the feed's `SaveCard` retry: watches the linked attempt
-  // through the same live store every screen reads, advancing the instant the
-  // pipeline moves the new save to `ready` or `failed`.
-  useEffect(() => {
-    if (!retrying || !target) return;
-    if (target.status === 'ready') {
-      resolveRetry(save.id, target, true);
-      // A successful retry deletes *this* row (see `saves/retry.ts`), so
-      // staying put would leave the screen pointed at a save that no longer
-      // exists. Hand off to the new one instead of re-rendering into a void.
-      router.replace({ pathname: '/save/[id]', params: { id: target.id } });
-    } else if (target.status === 'failed') {
-      resolveRetry(save.id, target, false);
-      setRetrying(false);
-    }
-  }, [retrying, target, save.id, router]);
+  // Settled by `SavesProvider`. A successful retry deletes *this* row, and the
+  // screen follows it to the new save through `successorOf` (see the main
+  // component) rather than re-rendering into a void.
+  const retrying = useIsRetrying(save.id);
 
   const handleRetry = () => {
     if (retrying) return;
-    if (startRetry(save, saves)) setRetrying(true);
+    const result = startRetry(save, saves);
+    // The failed row was dropped because this source already has a live save:
+    // show that one instead of a screen whose save was just deleted.
+    if (result.kind === 'duplicate') {
+      router.replace({ pathname: '/save/[id]', params: { id: result.existingId } });
+    }
   };
 
   if (save.knowledgeType === 'unusable') {
@@ -952,6 +942,7 @@ function AddToShoppingList({ saveId, spaceId }: { saveId: string; spaceId?: stri
   const router = useRouter();
   const [state, setState] = useState<'idle' | 'adding' | 'added' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
+  const [overCap, setOverCap] = useState(false);
 
   /**
    * S4: the target follows the *save*, not the caller — a recipe in a Space
@@ -964,14 +955,33 @@ function AddToShoppingList({ saveId, spaceId }: { saveId: string; spaceId?: stri
     ? ({ pathname: '/space/[id]/shopping-list', params: { id: spaceId } } as const)
     : ('/shopping-list' as const);
 
-  // Queued rather than awaited: the conversion is a *server* job that spends a
-  // Gemini request, so nothing about waiting here told the user anything the
-  // "Adding…" copy did not. Queueing it means the same tap works on a train, and
-  // a rejection surfaces through the queue like every other terminal failure.
-  const add = () => {
-    setState('added');
+  // Sent directly first, queued only when there is no network. Queue-only meant
+  // the server's verdict never reached this screen: a free user over the weekly
+  // conversion cap (402) saw "Adding…" forever while the failure sat in
+  // Settings. The tap still works on a train — offline, it falls back to the
+  // queue and is sent when the connection returns.
+  const add = async () => {
+    setState('adding');
     setMessage(null);
-    writeConvertToShoppingList(saveId);
+    setOverCap(false);
+    try {
+      await repo.convertToShoppingList(saveId);
+      setState('added');
+    } catch (e) {
+      const err = e instanceof ApiError ? e : null;
+      if (!err || err.kind === 'network') {
+        writeConvertToShoppingList(saveId);
+        setState('added');
+        return;
+      }
+      setState('error');
+      setOverCap(err.kind === 'quota');
+      setMessage(
+        err.kind === 'quota'
+          ? 'The free plan includes one recipe-to-list conversion a week.'
+          : err.message || 'Couldn’t add this recipe. Try again.',
+      );
+    }
   };
 
   if (state === 'added') {
@@ -1047,9 +1057,23 @@ function AddToShoppingList({ saveId, spaceId }: { saveId: string; spaceId?: stri
         </AppText>
       </Touchable>
       {state === 'error' && message ? (
-        <AppText variant="caption" style={{ marginTop: spacing.sm, color: palette.danger }}>
-          {message}
-        </AppText>
+        <View style={{ marginTop: spacing.sm, gap: spacing.xs }}>
+          <AppText variant="caption" style={{ color: palette.danger }}>
+            {message}
+          </AppText>
+          {overCap ? (
+            <Touchable
+              accessibilityRole="button"
+              onPress={() =>
+                router.push({ pathname: '/paywall', params: { trigger: 'entitlement_gate' } })
+              }
+            >
+              <AppText variant="label" tone="accent">
+                Upgrade for unlimited lists
+              </AppText>
+            </Touchable>
+          ) : null}
+        </View>
       ) : null}
     </View>
   );
@@ -1159,7 +1183,9 @@ export function SaveDetailScreen({ id }: { id: string }) {
     [id],
   );
   const save = stored ?? null;
+  const detailRouter = useRouter();
   const [error, setError] = useState<ApiError | null>(null);
+  const [pulling, setPulling] = useState(true);
 
   // Text-note inline editor state. Initialised from the save's structuredData
   // and kept in sync whenever the save refreshes (e.g., after a successful save).
@@ -1200,16 +1226,34 @@ export function SaveDetailScreen({ id }: { id: string }) {
     setNoteBody(storedBody);
   }, [storedTitle, storedBody]);
 
+  // The error is only *shown* when there is nothing local to show instead (the
+  // render checks `!save`) — offline on a save you already have is not a
+  // failure, it is the point of this layer. Run on mount as well as from "Try
+  // again": a bare `pullSave` here swallowed every failure, so a cold deep link
+  // to a missing save rendered nothing at all.
   const load = useCallback(async () => {
-    const pulled = await sync.pullSave(id);
-    // Only an error when there is nothing local to show instead — offline on a
-    // save you already have is not a failure, it is the point of this layer.
-    setError(pulled == null && stored == null ? new ApiError('server', 'Something went wrong', null) : null);
-  }, [id, stored]);
+    setPulling(true);
+    try {
+      await sync.fetchSave(id);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e : new ApiError('server', 'Something went wrong', null));
+    } finally {
+      setPulling(false);
+    }
+  }, [id]);
 
   useEffect(() => {
-    void sync.pullSave(id);
-  }, [id]);
+    void load();
+  }, [load]);
+
+  // The row this screen was opened on can move or be replaced under it: an
+  // offline-created save is re-keyed when its POST lands, and a retry replaces
+  // its original. Follow it rather than going blank.
+  const successor = !save && !reading ? successorOf(id) : undefined;
+  useEffect(() => {
+    if (successor) detailRouter.replace({ pathname: '/save/[id]', params: { id: successor } });
+  }, [successor, detailRouter]);
 
   // `save_viewed` — whether "ready" ever gets acted on. Keyed on `id` alone
   // (not on `save`, which changes shape as fields fill in) so a re-render
@@ -1223,7 +1267,10 @@ export function SaveDetailScreen({ id }: { id: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, save?.status]);
 
-  const loading = reading && save == null;
+  const loading = (reading || pulling) && save == null && !error;
+  // Loaded, or deleted while open, and not moved anywhere: say so instead of
+  // leaving a screen with nothing but a back button.
+  const missing = !save && !loading && !successor;
 
   /**
    * K2: this save's items' entity state, keyed by `Entities.key`'s output —
@@ -1356,7 +1403,9 @@ export function SaveDetailScreen({ id }: { id: string }) {
       <Reveal index={0}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md }}>
           <BackButton />
-          {save && save.status === 'ready' ? (
+          {/* Not on web: local notifications do not exist there, so every
+              preset in the sheet silently scheduled nothing. */}
+          {save && save.status === 'ready' && Platform.OS !== 'web' ? (
             <Touchable
               accessibilityRole="button"
               accessibilityLabel={hasReminder ? 'Reminder scheduled — tap to view' : 'Set reminder'}
@@ -1389,16 +1438,16 @@ export function SaveDetailScreen({ id }: { id: string }) {
         </View>
       ) : null}
 
-      {error && !save ? (
+      {missing ? (
         <Reveal index={1}>
           <Card>
             <AppText variant="cardTitle" style={{ marginBottom: spacing.xs }}>
-              {error.kind === 'notFound' ? 'Save not found' : "Couldn't load this save"}
+              {error && error.kind !== 'notFound' ? "Couldn't load this save" : 'Save not found'}
             </AppText>
             <AppText variant="caption" tone="muted" style={{ marginBottom: spacing.md }}>
-              {error.message}
+              {error?.message ?? 'This save no longer exists.'}
             </AppText>
-            {error.kind !== 'notFound' ? (
+            {error && error.kind !== 'notFound' ? (
               <Touchable accessibilityRole="button" onPress={() => void load()} haptic="medium">
                 <AppText variant="label" tone="accent">
                   Try again

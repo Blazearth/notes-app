@@ -204,6 +204,7 @@ export function GroupDetailScreen({ id }: { id: string }) {
 
   const hasSubgroups = group.subgroups.length > 0;
   const readyWorkoutCount = saves.filter((s) => s.status === 'ready').length;
+  const canCompare = isWorkoutGroup && !hasSubgroups && readyWorkoutCount >= 2;
   // A group's own id (the root, not a subgroup) *is* its type — see
   // `@/groups/tree`'s `buildTypeGroup`, which names the top-level node after
   // the type itself. A subgroup one level down still shares it.
@@ -226,7 +227,7 @@ export function GroupDetailScreen({ id }: { id: string }) {
               Back
             </AppText>
           </Touchable>
-          {isWorkoutGroup && !hasSubgroups && readyWorkoutCount >= 2 ? (
+          {canCompare ? (
             comparing ? (
               <Touchable accessibilityRole="button" onPress={cancelComparing} haptic="light">
                 <AppText variant="caption" tone="accent">
@@ -302,7 +303,10 @@ export function GroupDetailScreen({ id }: { id: string }) {
                       : () => router.push({ pathname: '/save/[id]', params: { id: save.id } })
                   }
                   onLongPress={
-                    isWorkoutGroup && !comparing && save.status === 'ready'
+                    // Same condition the header's Compare/Cancel uses: entering
+                    // compare mode anywhere else (one workout, or a root with
+                    // subgroups) left no Cancel and nothing to compare against.
+                    canCompare && !comparing && save.status === 'ready'
                       ? () => {
                           setComparing(true);
                           toggleCompareSelection(save.id);

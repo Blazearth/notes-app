@@ -35,7 +35,8 @@ import { nodeType } from '@/collections/collectionMeta';
 import { buildCandidate, rankCandidates, type NextAction } from '@/collections/nextAction';
 import type { KnowledgeGroup } from '@/data/repository';
 import { buildTree as buildGroupTree, collectSaveIds, findGroup, type GroupSaveFacts } from '@/groups/tree';
-import type { LocalStore } from './store';
+import { KV } from './schema';
+import type { FeedQuery, LocalStore } from './store';
 
 /** The tables every derived view below depends on — what `useLive` subscribes to. */
 export const DERIVED_TABLES = ['saves', 'entity_states', 'overrides'] as const;
@@ -47,8 +48,23 @@ export const DERIVED_TABLES = ['saves', 'entity_states', 'overrides'] as const;
  * not a category the user asked for.
  */
 async function readySaves(store: LocalStore): Promise<SaveResponse[]> {
-  const all = await store.readFeed({ includeArchived: false });
+  const all = await readOwnFeed(store, { includeArchived: false });
   return all.filter((save) => save.status === 'ready');
+}
+
+/**
+ * The signed-in user's own saves — the same rule `SavesProvider` applies to the
+ * feed (5815b81): a space-mate's save is stored locally so the Space can show
+ * it, but it belongs in that Space only, not in this user's groups,
+ * collections, Today card or Continue rail. Without this, Home counted saves the
+ * feed beside it was hiding.
+ *
+ * The owner comes from the store itself (`bootstrap` records it), so none of
+ * the derived readers needs a session threaded through.
+ */
+async function readOwnFeed(store: LocalStore, query: FeedQuery): Promise<SaveResponse[]> {
+  const owner = await store.readKv<string>(KV.ownerUserId);
+  return store.readFeed(owner ? { ...query, ownedByUserId: owner } : query);
 }
 
 function toGroupFacts(save: SaveResponse): GroupSaveFacts {
@@ -285,7 +301,7 @@ export async function readSpaceCollectionEntities(
  * page 0. With the whole library local there is nothing left to miss.
  */
 export async function readContinueSaves(store: LocalStore, limit = 10): Promise<SaveResponse[]> {
-  const all = await store.readFeed({ orderBy: 'updated' });
+  const all = await readOwnFeed(store, { orderBy: 'updated' });
   return all
     .filter((save) => save.lifecycleStatus === 'planned' || save.lifecycleStatus === 'started')
     .slice(0, limit);

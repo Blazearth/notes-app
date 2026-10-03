@@ -200,6 +200,8 @@ export function SearchScreen() {
    * merged one either.
    */
   const seq = useRef(0);
+  /** The debounced server call not yet fired, so the search key can pre-empt it. */
+  const pendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Refs, not state: the two halves land at different times and each needs to
   // merge against the other's *current* value. Two `useState`s would merge
@@ -295,14 +297,34 @@ export function SearchScreen() {
         },
       );
 
-    const timer = setTimeout(() => void runServer(ticket, trimmed), DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    pendingTimer.current = setTimeout(() => {
+      pendingTimer.current = null;
+      void runServer(ticket, trimmed);
+    }, DEBOUNCE_MS);
+    return () => {
+      if (pendingTimer.current) clearTimeout(pendingTimer.current);
+      pendingTimer.current = null;
+    };
   }, [query, publish, runServer]);
 
-  /** Both the "try again" button and the keyboard's search key. */
+  /**
+   * Both the "try again" button and the keyboard's search key.
+   *
+   * Cancels the debounced call for the same query first — otherwise pressing
+   * search inside the debounce window sent the request twice. And shows the
+   * request is under way: "Try again" used to give no sign anything happened.
+   */
   const searchNow = useCallback(() => {
-    void runServer(seq.current, query.trim());
-  }, [query, runServer]);
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    if (pendingTimer.current) {
+      clearTimeout(pendingTimer.current);
+      pendingTimer.current = null;
+    }
+    serverHits.current = null;
+    publish(trimmed, true, null);
+    void runServer(seq.current, trimmed);
+  }, [query, runServer, publish]);
 
   const offline = useMemo(
     () => state.kind === 'results' && state.serverError !== null,

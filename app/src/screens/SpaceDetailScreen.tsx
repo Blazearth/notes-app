@@ -1,5 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -14,8 +14,9 @@ import {
 
 import { ApiError } from '@/api/client';
 import { repo } from '@/data';
-import { getStore, useLive, useLiveValue } from '@/local';
-import { sync } from '@/local/sync';
+import { getStore, KV, useLive, useLiveValue } from '@/local';
+import { overlayPendingPins } from '@/local/outbox';
+import { fetchShoppingList, sync } from '@/local/sync';
 import { writePin, writeUnpin } from '@/local/writes';
 import type {
   ActivityEntry,
@@ -483,6 +484,7 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
    */
   const [sharedList, setSharedList] = useState<ShoppingListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [invite, setInvite] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -529,13 +531,17 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       repo.getSpaceActivity(spaceId),
       repo.listDuplicates(spaceId),
       repo.getSpaceKnowledge(spaceId),
-      repo.getSpaceShoppingList(spaceId),
+      // Through the shopping-list guard, so the overview's count agrees with
+      // ticks still on their way.
+      fetchShoppingList(() => repo.getSpaceShoppingList(spaceId), spaceId),
     ] as const);
     if (a.status === 'fulfilled') setActivity(a.value);
     if (d.status === 'fulfilled') setDuplicates(d.value);
     if (k.status === 'fulfilled') {
       setKnowledge(k.value);
-      setPins(k.value.pins ?? []);
+      // Queued pins and unpins re-applied: this load now runs on every focus,
+      // and a pin made offline would otherwise vanish each time you came back.
+      setPins(overlayPendingPins(k.value.pins ?? [], await getStore().readOutbox(), spaceId));
     }
     if (s.status === 'fulfilled') setSharedList(s.value);
     // Only fatal when there is nothing cached to show instead.
@@ -546,9 +552,14 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
     }
   }, [spaceId]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // On focus, not just on mount: the overview's shared-list count, knowledge
+  // and pins are this screen's own copies, so coming back from ticking three
+  // items on the shared list still said "5 still to buy".
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -654,6 +665,7 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
         : 'items';
 
   const onInvite = useCallback(async () => {
+    setInviteError(null);
     try {
       // "Anyone with the link", which is what people expect from a link they
       // are about to paste into a group chat. A single-use invite is a
@@ -662,7 +674,9 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
       setInvite(created.code);
       setCopied(false);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Could not create an invite.');
+      // Its own state, shown beside the button. The screen-level `error` only
+      // renders when there is no Space at all, so the tap looked like nothing.
+      setInviteError(e instanceof ApiError ? e.message : 'Could not create an invite.');
     }
   }, [spaceId]);
 
@@ -715,15 +729,29 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
     async (id: string, merge: boolean) => {
       // Optimistic: the card is gone either way, and leaving it on screen
       // while a request settles makes the tap feel unregistered.
+      const suggestion = duplicates.find((d) => d.id === id);
       setDuplicates((current) => current.filter((d) => d.id !== id));
       try {
         await (merge ? repo.mergeDuplicate(spaceId, id) : repo.dismissDuplicate(spaceId, id));
+        // A merge moves the newer save out of the Space — an UPDATE, so no
+        // tombstone, and `pullSpace` never reaps — so the local row kept its
+        // `spaceId` and stayed in Sources. Mirror the server: the owner keeps
+        // it in their private library; anyone else simply can't see it now.
+        if (merge && suggestion) {
+          const store = getStore();
+          const moved = await store.readSave(suggestion.saveId);
+          if (moved) {
+            const me = await store.readKv<string>(KV.ownerUserId);
+            if (me && moved.userId === me) await store.patchSave(moved.id, { spaceId: undefined });
+            else await store.removeSave(moved.id);
+          }
+        }
         await load();
       } catch {
         await load();
       }
     },
-    [spaceId, load],
+    [spaceId, load, duplicates],
   );
 
   if (error && !space) {
@@ -1267,6 +1295,11 @@ export function SpaceDetailScreen({ spaceId }: { spaceId: string }) {
                   <AppText variant="bodySmall">Create an invite link</AppText>
                 </Touchable>
               )}
+              {inviteError && !invite ? (
+                <AppText variant="caption" style={{ marginTop: spacing.xs, color: palette.danger }}>
+                  {inviteError}
+                </AppText>
+              ) : null}
             </View>
           ) : null}
 

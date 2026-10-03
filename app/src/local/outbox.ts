@@ -30,7 +30,7 @@
  */
 
 import type { ApiErrorKind } from '@/api/client';
-import type { CreateSaveRequest, LifecycleStatus, ShoppingListResponse } from '@/api/types';
+import type { CreateSaveRequest, LifecycleStatus, ShoppingListResponse, SpacePin } from '@/api/types';
 
 // ---------------------------------------------------------------------- types
 
@@ -334,6 +334,47 @@ export function overlayPendingShopping(
     }
   }
   return items === list.items ? list : { ...list, items };
+}
+
+/**
+ * A Space's pins as fetched, with still-queued pins and unpins re-applied in
+ * queue order — the pin counterpart of {@link overlayPendingShopping}.
+ *
+ * Both ops are queued under `space|kind|subject` (`writePin`/`writeUnpin`), so
+ * the subject an unpin is about is read from its key; its payload only carries
+ * the pin id, which for a pin that never reached the server is a `local:` one.
+ */
+export function overlayPendingPins(
+  pins: readonly SpacePin[],
+  entries: readonly OutboxEntry[],
+  spaceId: string,
+): SpacePin[] {
+  let out = [...pins];
+  for (const entry of entries) {
+    if (entry.status !== 'pending') continue;
+    if (entry.op === 'pinInSpace') {
+      const pin = entry.payload as OutboxPayloads['pinInSpace'];
+      if (pin.spaceId !== spaceId) continue;
+      if (out.some((p) => p.kind === pin.kind && p.subject === pin.subject)) continue;
+      out.push({
+        id: pin.localId ?? `${LOCAL_ID_PREFIX}${entry.id}`,
+        kind: pin.kind,
+        subject: pin.subject,
+        payload: pin.payload,
+        createdBy: 'me',
+        createdByName: 'You',
+        available: true,
+        createdAt: entry.createdAt,
+      });
+    } else if (entry.op === 'unpinInSpace') {
+      const unpin = entry.payload as OutboxPayloads['unpinInSpace'];
+      if (unpin.spaceId !== spaceId || entry.entityId === null) continue;
+      const [, kind, ...rest] = entry.entityId.split('|');
+      const subject = rest.join('|');
+      out = out.filter((p) => p.id !== unpin.pinId && !(p.kind === kind && p.subject === subject));
+    }
+  }
+  return out;
 }
 
 /**

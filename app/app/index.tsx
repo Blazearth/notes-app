@@ -339,7 +339,7 @@ export default function TabShell() {
               style={{ width: SCREEN_WIDTH, height: '100%' }}
               pointerEvents={active === 'home' ? 'auto' : 'none'}
             >
-              <HomeScreen />
+              <HomeScreen onSeeAll={() => selectTab('library')} />
             </View>
             <View
               style={{ width: SCREEN_WIDTH, height: '100%' }}

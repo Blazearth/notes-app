@@ -4,7 +4,7 @@ import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, BackHandler, KeyboardAvoidingView, Platform, Pressable, TextInput, View, useWindowDimensions } from 'react-native';
 import Animated, {
   interpolate,
   runOnJS,
@@ -225,6 +225,18 @@ export function CaptureSheet() {
   );
 
   const [busyId, setBusyId] = useState<string | null>(null);
+  /**
+   * A screenshot is uploaded directly, not queued — the bytes exist only in this
+   * sheet. Dismissing mid-upload unmounted the only place a failure could be
+   * reported, so the save was lost without a word. Hold the sheet open until
+   * the upload settles (it dismisses itself on success).
+   */
+  const uploading = busyId === 'screenshot';
+  useEffect(() => {
+    if (!uploading) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, [uploading]);
   const [error, setError] = useState<string | null>(null);
   /** 'tiles' — the grid; 'note' — the inline text editor. */
   const [mode, setMode] = useState<'tiles' | 'note'>('tiles');
@@ -522,7 +534,12 @@ export function CaptureSheet() {
       keyboardVerticalOffset={0}
     >
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={dismiss} style={{ flex: 1 }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss"
+          onPress={uploading ? undefined : dismiss}
+          style={{ flex: 1 }}
+        >
           {blurEffects ? (
             <View style={{ flex: 1 }}>
               <AnimatedBlurView

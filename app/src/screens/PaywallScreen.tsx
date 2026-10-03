@@ -12,6 +12,7 @@ import { Glyph, type GlyphName } from '@/components/Glyph';
 import { Screen } from '@/components/Screen';
 import { Touchable } from '@/components/Touchable';
 import { KV, useLiveValue } from '@/local';
+import { sync } from '@/local/sync';
 import { PRIVACY_POLICY_URL, hasLegalUrl } from '@/legal/links';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -236,6 +237,20 @@ export function PaywallScreen() {
 
   const alreadyPro = me?.pro === true;
 
+  /**
+   * After a `pending` outcome the user has been charged and the server has not
+   * caught up. The provider's ~21s confirmation wait is over, so keep asking —
+   * slower — for as long as this screen is open, and keep Subscribe locked: an
+   * enabled button here invited a second purchase of the same thing.
+   */
+  const awaitingConfirmation = outcome?.kind === 'pending' && !alreadyPro;
+  useEffect(() => {
+    if (!awaitingConfirmation) return;
+    const interval = setInterval(() => void sync.syncMe(), 10_000);
+    return () => clearInterval(interval);
+  }, [awaitingConfirmation]);
+  const subscribeLocked = busy || !available || !selected || awaitingConfirmation;
+
   return (
     <Screen reserveNavSpace={false}>
       <View
@@ -397,11 +412,11 @@ export function PaywallScreen() {
             track(AnalyticsEvent.PurchaseStarted, { package_id: selected.id });
             void run(() => purchase(selected.id));
           }}
-          disabled={busy || !available || !selected}
-          baseOpacity={busy || !available || !selected ? 0.5 : 1}
+          disabled={subscribeLocked}
+          baseOpacity={subscribeLocked ? 0.5 : 1}
           accessibilityRole="button"
           accessibilityLabel="Subscribe to Weavr Pro"
-          accessibilityState={{ disabled: busy || !available || !selected }}
+          accessibilityState={{ disabled: subscribeLocked }}
           weight="card"
           haptic="medium"
           style={{

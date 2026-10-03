@@ -68,6 +68,7 @@ export const apiRepository: Repository = {
   listComments: client.listComments,
   addComment: client.addComment,
   deleteComment: client.deleteComment,
+  getVote: client.getVote,
   setVote: client.setVote,
 
   /**
