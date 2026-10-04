@@ -226,6 +226,23 @@ collapsed and no animation is involved.
 
 ---
 
+### On the Android emulator (2026-10-04)
+
+This machine has an Android SDK after all: `%LOCALAPPDATA%\Android\Sdk`, not on PATH, with one AVD, `Pixel_7`. A debug build runs native code the web harness never touches: `sqliteStore.ts`, the share-config file, notification permissions. It found a bug on its first real write (below). The recipe:
+
+1. `USE_MOCK_DATA = true`, as for the browser. Revert it afterwards, with `git checkout`, not a PowerShell rewrite. `Set-Content` changes the line endings and leaves a phantom diff.
+2. Boot the emulator with **`-gpu swiftshader_indirect`**. With the AVD's default `hw.gpu.mode=auto`, the app's window never drew its first frame. `screencap` returned black, and Android raised an ANR: "Input dispatching timed out (Application does not have a focused window)". Software rendering fixed both. The AVD also has only `hw.ramSize=2048`, so expect the low-memory killer to take system apps.
+3. `npx expo prebuild --platform android --clean`. `android/` is gitignored and fully generated: the share receiver comes from `plugins/withAndroidShareReceiver.js`, so regenerating loses nothing. Then build with `ANDROID_HOME` set, `JAVA_HOME` set to Android Studio's `jbr` (JDK 21), and `npx expo run:android --port 8083`. The first build takes about 7 minutes.
+4. Drive it with `adb`: `input tap`/`text`/`keyevent` and `exec-out screencap -p`. Find controls with `uiautomator dump`, where RN's `accessibilityLabel` shows up as `content-desc` and `<Text>` as `text`.
+5. To read state, `adb exec-out run-as com.weavr.app cat files/SQLite/weavr.db` (plus `-wal` and `-shm`), then query it with Python's `sqlite3`. That is the native counterpart of reading `localStorage` over CDP. Re-run the feed's own `WHERE` clause against that copy to test the SQL itself.
+
+Traps, each of which cost time:
+
+- **`uiautomator dump` fails intermittently** ("null root node"), and a failed dump leaves the *previous* `/sdcard/ui.xml` in place. Reading it anyway returned another app's screen, from an earlier session on the same AVD. Delete the file before dumping, check the command's output, and retry.
+- **The dev client's floating "Tools" button sits on top of Weavr's Settings gear** (about 971,247 versus 981,252), so tapping Settings opened the developer menu. Turn it off under the dev menu's "Tools button" toggle.
+- **The tab pager can show one pane while another is active.** After leaving Settings with the hardware Back key, the Library tab was logically selected but Home was still drawn, and taps landed on the invisible pane. This may be the slow software renderer, or a real bug; it hasn't been investigated. Re-select the tab explicitly before tapping.
+- **Coordinates go stale when the keyboard opens:** the capture sheet slides up, so a tap planned from a dump taken before the keyboard can land on the backdrop and dismiss the sheet. Dump again after typing.
+
 ## What each layer proves
 
 | Check | Proves | Does **not** prove |

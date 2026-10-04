@@ -498,3 +498,15 @@ Verified: `tsc --noEmit` clean, both bundles export, and the whole flow driven t
   - "Add to shopping list" calls the server directly, so a 402 shows an upgrade link. It falls back to the queue only offline.
 - **One new endpoint:** `GET /v1/saves/{id}/vote` → `{score, myVote}` (`SaveSocialService.voteState`, same `requireVisible` gate as the rest). No unit test was added for it; the suite has no `SaveSocialService` test to extend.
 
+**First emulator run, 2026-10-04: a native-only bug in the local store, fixed, and the round-2 native paths driven on `Pixel_7`.** Debug build, mock mode, driven over `adb`; state read by pulling `weavr.db` through `run-as`. The recipe and its traps are in [testing.md](testing.md#on-the-android-emulator-2026-10-04).
+- **Found: concurrent SQLite transactions.** expo-sqlite's `withTransactionAsync` is not exclusive, and every `@/local/writes` helper fires its store write and `sync.enqueue` (also a transaction) in the same tick. The first offline capture logged `NativeDatabase.execAsync … cannot start a transaction within a transaction`. Its `local:` row was never stored (the rejection was swallowed by the `void` at the call site), while its outbox entry went in. `memoryStore` can't reproduce this, so no browser run ever could. **Fix:** `sqliteStore` serialises every write method through one promise chain, reads included, which also closes `patchSave`'s read-modify-write window. After the fix the same capture stored its row and no further transaction errors were logged. That is one failure before and one success after on a timing race, so it's strong evidence rather than proof.
+- **Seen working on the device:**
+  - H1's SQL: the fixed `readFeed` query returns 20 rows on the pulled database, the old one 19, and the Library header showed 20.
+  - Toggling "Open app when saving" writes `files/weavr_share_config.json` (`true`), and "Reset to defaults" writes `false` back.
+  - With `POST_NOTIFICATIONS` revoked and user-fixed, a reminder preset shows the "Notifications are off" notice and the sheet stays usable. After granting it, the next preset schedules (`dumpsys alarm` lists `com.weavr.app`) and the button reads "Reminder set".
+  - "Add to shopping list" (direct call) shows "Adding…".
+  - On the Space list, two fast ticks plus "Clear checked" leave the items cleared on the server after leaving and reopening.
+  - Settings → Log out with two unsent creates shows the warning; Cancel keeps the session; "Log out anyway" lands on sign-in.
+- **Not covered:** the Back key during a screenshot upload (needs the photo picker), haptics, the share receiver end to end.
+- **Observed, not diagnosed:** after leaving Settings with the hardware Back key, the tab pager drew Home while Library was the active tab (`screen_viewed` said `library`), so taps went to the hidden pane. It could be slow software rendering or a real state/animation bug.
+

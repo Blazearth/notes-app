@@ -255,7 +255,7 @@ export function createSqliteStore(): LocalStore {
     }
   }
 
-  return {
+  const store: LocalStore = {
     kind: 'sqlite',
 
     async open() {
@@ -830,4 +830,61 @@ export function createSqliteStore(): LocalStore {
 
     subscribe: (listener) => bus.subscribe(listener),
   };
+
+  /**
+   * Every write runs alone on the connection — read, write and transaction
+   * included.
+   *
+   * expo-sqlite's `withTransactionAsync` is **not** exclusive: anything else
+   * that runs on the connection while it is open either joins it or, if it
+   * opens a transaction of its own, fails with "cannot start a transaction
+   * within a transaction". Every helper in `@/local/writes` fires its store
+   * write and `sync.enqueue` (another transaction) in the same tick, so on a
+   * device one of the two regularly lost: found on the Pixel_7 emulator
+   * (2026-10-04), where an offline capture's `local:` row was never stored at
+   * all — its `putSaves` rejected, swallowed by the `void` at the call site,
+   * while the outbox entry beside it went in. `memoryStore` cannot show this,
+   * which is why the web harness never did.
+   *
+   * Serialising whole methods rather than only their transactions also closes
+   * the read-modify-write gap in `patchSave`/`patchShoppingItem`, whose read
+   * could otherwise land between another write's read and its commit.
+   */
+  let writeChain: Promise<unknown> = Promise.resolve();
+  function serial<A extends unknown[], R>(fn: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
+    return (...args: A) => {
+      const run = writeChain.then(() => fn(...args));
+      writeChain = run.catch(() => {});
+      return run;
+    };
+  }
+  const WRITES = [
+    'wipe',
+    'putSaves',
+    'patchSave',
+    'removeSave',
+    'putItemStates',
+    'putItemState',
+    'removeItemState',
+    'reconcileSaveId',
+    'putEntityStates',
+    'removeEntityState',
+    'putOverrides',
+    'removeOverride',
+    'putSpaces',
+    'removeSpace',
+    'putSpaceMembers',
+    'removeSpaceMember',
+    'putShoppingList',
+    'patchShoppingItem',
+    'removeShoppingItems',
+    'enqueueOutbox',
+    'updateOutbox',
+    'removeOutbox',
+    'putKv',
+  ] as const satisfies readonly (keyof LocalStore)[];
+  const writable = store as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  for (const name of WRITES) writable[name] = serial(writable[name].bind(store));
+
+  return store;
 }
