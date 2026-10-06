@@ -34,7 +34,7 @@ import type {
   Space,
   SpaceMember,
 } from '@/api/types';
-import type { OutboxDraft, OutboxEntry } from './outbox';
+import { isLocalId, type OutboxDraft, type OutboxEntry } from './outbox';
 import type { StoreTable } from './schema';
 
 export type { StoreTable } from './schema';
@@ -426,6 +426,11 @@ export function matchesQuery(save: SaveResponse, query: FeedQuery): boolean {
   if (!query.includeArchived && save.archived) return false;
   if (query.spaceId !== undefined && (save.spaceId ?? null) !== query.spaceId) return false;
   if (query.knowledgeType !== undefined && save.knowledgeType !== query.knowledgeType) return false;
-  if (query.ownedByUserId !== undefined && save.userId !== query.ownedByUserId) return false;
+  // A `local:` save was made on this device by whoever is signed in — the store
+  // is wiped on any account change — and it has no `userId` until the server
+  // assigns one, so filtering it on that field hid every fresh capture.
+  if (query.ownedByUserId !== undefined && save.userId !== query.ownedByUserId && !isLocalId(save.id)) {
+    return false;
+  }
   return true;
 }

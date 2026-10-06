@@ -292,7 +292,7 @@ function subgroupPreview(group: KnowledgeGroup): string | null {
  * indefinitely, and an unreachable API is the single most likely thing to happen
  * during development.
  */
-function RecentlyCaptured({ limit }: { limit: number }) {
+function RecentlyCaptured({ limit, onSeeAll }: { limit: number; onSeeAll?: () => void }) {
   const { palette, radius, spacing, icon } = useTheme();
   const { saves, status, error, refresh } = useSaves();
   // Don't show archived saves on Home — they belong in the Archived filter in Library
@@ -399,7 +399,9 @@ function RecentlyCaptured({ limit }: { limit: number }) {
         {visibleSaves.length > shown.length ? (
           <Touchable
             accessibilityRole="button"
-            onPress={() => router.push('/search')}
+            // The Library is the full list this promises. `/search` opened in
+            // its idle state — suggestions, no list — which is not "all".
+            onPress={() => (onSeeAll ? onSeeAll() : router.push('/search'))}
             haptic="selection"
             style={{ alignSelf: 'center', paddingVertical: spacing.sm }}
           >
@@ -457,7 +459,7 @@ function sourceLine(save: SaveResponse): string | undefined {
   return parts.length ? parts.join(' • ') : undefined;
 }
 
-export function HomeScreen() {
+export function HomeScreen({ onSeeAll }: { onSeeAll?: () => void } = {}) {
   const { palette, radius, spacing, icon } = useTheme();
   const { prefs } = usePreferences();
   const { session } = useSession();
@@ -796,7 +798,7 @@ export function HomeScreen() {
 
       <Reveal index={7}>
         <SectionLabel>Recently added</SectionLabel>
-        <RecentlyCaptured limit={RECENT_LIMIT} />
+        <RecentlyCaptured limit={RECENT_LIMIT} onSeeAll={onSeeAll} />
       </Reveal>
     </Screen>
   );

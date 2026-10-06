@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { Modal, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -29,7 +29,14 @@ export function AddToSpaceSheet({ save, onClose }: AddToSpaceSheetProps) {
   // From the store, so the picker is populated the instant the sheet opens —
   // this used to be a `repo.listSpaces()` on mount, which meant a spinner over a
   // list the app already had, and an empty picker offline.
-  const spaces = useLiveValue<Space[]>(['spaces'], (store) => store.readSpaces(), EMPTY_SPACES);
+  const allSpaces = useLiveValue<Space[]>(['spaces'], (store) => store.readSpaces(), EMPTY_SPACES);
+  // Only Spaces this user can add to. `SaveService.setSpace` requires editor,
+  // so offering a viewer's Space showed the save as moved while the server
+  // rejected it with a 403 — and nothing rolls an optimistic move back.
+  const spaces = useMemo(
+    () => allSpaces.filter((space) => space.myRole === 'owner' || space.myRole === 'editor'),
+    [allSpaces],
+  );
 
   const apply = useCallback(
     (spaceId: string | null) => {

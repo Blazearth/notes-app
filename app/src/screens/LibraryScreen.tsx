@@ -294,10 +294,16 @@ export function LibraryScreen() {
 
   const handleLongPress = useCallback(
     (id: string) => {
+      // Already selecting: a long-press toggles that card like a tap would.
+      // Starting a fresh selection here threw away everything picked so far.
+      if (selectionMode) {
+        toggleSelected(id);
+        return;
+      }
       setSelectionMode(true);
       setSelectedIds(new Set([id]));
     },
-    [],
+    [selectionMode, toggleSelected],
   );
 
   const handleCardPress = useCallback(
@@ -401,10 +407,12 @@ export function LibraryScreen() {
                 label="Favorite selected"
                 onPress={() => bulkApply({ favorite: true })}
               />
+              {/* In the Archived view everything selected is already archived,
+                  so the only useful action is the way back out. */}
               <HeaderAction
                 glyph="archive"
-                label="Archive selected"
-                onPress={() => bulkApply({ archived: true })}
+                label={filter === ARCHIVED ? 'Unarchive selected' : 'Archive selected'}
+                onPress={() => bulkApply({ archived: filter !== ARCHIVED })}
               />
               <HeaderAction
                 glyph="close"

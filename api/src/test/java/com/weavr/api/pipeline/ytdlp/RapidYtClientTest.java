@@ -3,6 +3,7 @@ package com.weavr.api.pipeline.ytdlp;
 import java.time.Duration;
 import java.util.Optional;
 
+import com.weavr.api.pipeline.health.ExtractionFailureCategory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -187,6 +188,84 @@ class RapidYtClientTest {
 
         assertThat(client.probe("https://youtube.com/watch?v=" + VIDEO_ID)).isEmpty();
         server.verify();
+    }
+
+    // --- probeDetailed: the same calls, now reporting why they failed ---
+
+    @Test
+    void detailedOutcomeReportsSuccessWithTheStatus() {
+        server.expect(requestTo(METADATA_URL))
+                .andRespond(withSuccess(metadataJson("[]"), MediaType.APPLICATION_JSON));
+
+        RapidYtClient.ProbeOutcome outcome = client.probeDetailed("https://youtube.com/watch?v=" + VIDEO_ID);
+
+        assertThat(outcome.attempted()).isTrue();
+        assertThat(outcome.category()).isEqualTo(ExtractionFailureCategory.SUCCESS);
+        assertThat(outcome.result()).isPresent();
+    }
+
+    @Test
+    void detailedOutcomeReportsRateLimitAfterExhaustingRetries() {
+        server.expect(requestTo(METADATA_URL)).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
+        server.expect(requestTo(METADATA_URL)).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
+        server.expect(requestTo(METADATA_URL)).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
+
+        RapidYtClient.ProbeOutcome outcome = client.probeDetailed("https://youtube.com/watch?v=" + VIDEO_ID);
+
+        assertThat(outcome.category()).isEqualTo(ExtractionFailureCategory.HTTP_429);
+        assertThat(outcome.httpStatus()).isEqualTo(429);
+        assertThat(outcome.result()).isEmpty();
+        server.verify();
+    }
+
+    @Test
+    void detailedOutcomeReportsANotFoundAsContentUnavailable() {
+        server.expect(requestTo(METADATA_URL)).andRespond(withStatus(HttpStatus.NOT_FOUND));
+
+        RapidYtClient.ProbeOutcome outcome = client.probeDetailed("https://youtube.com/watch?v=" + VIDEO_ID);
+
+        assertThat(outcome.category()).isEqualTo(ExtractionFailureCategory.CONTENT_UNAVAILABLE);
+        assertThat(outcome.httpStatus()).isEqualTo(404);
+    }
+
+    /** 401 is RapidAPI rejecting OUR key — a provider problem, not a login wall on the video. */
+    @Test
+    void detailedOutcomeReportsAnUnauthorizedAsAProviderError() {
+        server.expect(requestTo(METADATA_URL)).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+
+        assertThat(client.probeDetailed("https://youtube.com/watch?v=" + VIDEO_ID).category())
+                .isEqualTo(ExtractionFailureCategory.PROVIDER_ERROR);
+    }
+
+    @Test
+    void detailedOutcomeReportsANonOkBodyAsAProviderError() {
+        server.expect(requestTo(METADATA_URL))
+                .andRespond(withSuccess("{\"status\": \"FAIL\"}", MediaType.APPLICATION_JSON));
+
+        RapidYtClient.ProbeOutcome outcome = client.probeDetailed("https://youtube.com/watch?v=" + VIDEO_ID);
+
+        assertThat(outcome.attempted()).isTrue();
+        assertThat(outcome.category()).isEqualTo(ExtractionFailureCategory.PROVIDER_ERROR);
+    }
+
+    @Test
+    void detailedOutcomeReportsAMalformedBodyAsAProviderError() {
+        server.expect(requestTo(METADATA_URL))
+                .andRespond(withSuccess("{not json", MediaType.APPLICATION_JSON));
+
+        assertThat(client.probeDetailed("https://youtube.com/watch?v=" + VIDEO_ID).category())
+                .isEqualTo(ExtractionFailureCategory.PROVIDER_ERROR);
+    }
+
+    @Test
+    void aDisabledClientReportsNotAttemptedSoNothingIsRecorded() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer disabledServer = MockRestServiceServer.bindTo(builder).build();
+        RapidYtClient disabledClient = new RapidYtClient(
+                new RapidYtProperties("", Duration.ofSeconds(2)), builder, MAPPER);
+
+        assertThat(disabledClient.probeDetailed("https://youtube.com/watch?v=" + VIDEO_ID).attempted()).isFalse();
+        disabledServer.verify();
     }
 
     @Test

@@ -41,7 +41,10 @@ public class YtDlpClient {
     /** Written once at startup from {@code cookiesBase64}; null when not configured. */
     private Path cookiesFile;
 
-    YtDlpClient(ExternalProcess processes, ObjectMapper objectMapper, YtDlpProperties properties) {
+    /** Read lazily by {@link #version()}; {@code "unknown"} once a read has failed, so it isn't retried per save. */
+    private volatile String version;
+
+    public YtDlpClient(ExternalProcess processes, ObjectMapper objectMapper, YtDlpProperties properties) {
         this.processes = processes;
         this.objectMapper = objectMapper;
         this.properties = properties;
@@ -92,6 +95,28 @@ public class YtDlpClient {
         out.add("youtube:player_client=" + properties.playerClients());
         out.addAll(cmd.subList(1, cmd.size()));
         return out;
+    }
+
+    /**
+     * The installed binary's version, for attempt records. The Dockerfiles
+     * install {@code yt-dlp>=…} unpinned, so without this there is no way to
+     * tell from a log which version a failure came from. Never throws.
+     */
+    public String version() {
+        String cached = version;
+        if (cached != null) {
+            return cached;
+        }
+        String read;
+        try {
+            ExternalProcess.Result result = processes.run(
+                    List.of(properties.binary(), "--version"), java.time.Duration.ofSeconds(15));
+            read = result.succeeded() && !result.stdout().isBlank() ? result.stdout().strip() : "unknown";
+        } catch (RuntimeException e) {
+            read = "unknown";
+        }
+        version = read;
+        return read;
     }
 
     /**
@@ -420,7 +445,7 @@ public class YtDlpClient {
 
     private static String describe(ExternalProcess.Result result) {
         if (result.timedOut()) {
-            return "yt-dlp timed out";
+            return YtDlpFailedException.TIMED_OUT_MESSAGE;
         }
         return "yt-dlp exited " + result.exitCode();
     }

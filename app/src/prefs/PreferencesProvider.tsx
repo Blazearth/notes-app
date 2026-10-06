@@ -81,7 +81,16 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     [persist],
   );
 
-  const resetPreferences = useCallback(() => persist(DEFAULT_PREFERENCES), [persist]);
+  // "Reset to defaults" is the Appearance screen's button, so it resets how the
+  // app looks and behaves — not who the user is: `userName` is kept (blanking
+  // it dropped the greeting to the email while the server name still
+  // existed). And the native share config is re-mirrored, or Android went on
+  // opening the app on every share while the toggle here read Off.
+  const resetPreferences = useCallback(() => {
+    persist({ ...DEFAULT_PREFERENCES, userName: latest.current.userName });
+    void mirrorSharedPreference('openAppWhenSaving', DEFAULT_PREFERENCES.openAppWhenSaving);
+    mirrorOpenAppWhenSaving(DEFAULT_PREFERENCES.openAppWhenSaving);
+  }, [persist]);
 
   const value = useMemo(
     () => ({ prefs, hydrated, setPreference, resetPreferences }),

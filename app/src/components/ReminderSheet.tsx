@@ -34,6 +34,7 @@ export function ReminderSheet({ save, onClose }: ReminderSheetProps) {
   const fireHaptic = useHaptic();
   const [existingReminder, setExistingReminder] = useState<Date | null>(null);
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -111,26 +112,41 @@ export function ReminderSheet({ save, onClose }: ReminderSheetProps) {
       save.rawCaption ??
       'Tap to review this saved item in Weavr';
 
-    const id = await scheduleSaveReminder({
-      saveId: save.id,
-      title,
-      body,
-      date,
-    });
-
-    setBusy(false);
+    // `try/finally`: a rejected permission check used to leave `busy` stuck
+    // true, and every later tap was then ignored. A `null` result (notifications
+    // denied) used to close nothing and say nothing — the tap looked dead.
+    let id: string | null = null;
+    setNotice(null);
+    try {
+      id = await scheduleSaveReminder({
+        saveId: save.id,
+        title,
+        body,
+        date,
+      });
+    } catch {
+      id = null;
+    } finally {
+      setBusy(false);
+    }
     if (id) {
       fireHaptic('success');
       onClose();
+    } else {
+      fireHaptic('error');
+      setNotice('Notifications are off for Weavr. Turn them on in your phone’s settings to get reminders.');
     }
   };
 
   const handleCancelReminder = async () => {
     if (busy) return;
     setBusy(true);
-    await cancelSaveReminder(save.id);
-    setExistingReminder(null);
-    setBusy(false);
+    try {
+      await cancelSaveReminder(save.id);
+      setExistingReminder(null);
+    } finally {
+      setBusy(false);
+    }
     fireHaptic('medium');
     onClose();
   };
@@ -188,6 +204,12 @@ export function ReminderSheet({ save, onClose }: ReminderSheetProps) {
         <AppText variant="bodySmall" tone="muted" style={{ marginBottom: spacing.md }}>
           Get notified to revisit this save
         </AppText>
+
+        {notice ? (
+          <AppText variant="caption" style={{ color: palette.danger, marginBottom: spacing.md }}>
+            {notice}
+          </AppText>
+        ) : null}
 
         {existingReminder ? (
           <View

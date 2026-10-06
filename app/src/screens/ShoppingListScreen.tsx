@@ -14,7 +14,7 @@ import {
   writeShoppingItemChecked,
   writeSpaceShoppingItemChecked,
 } from '@/local/writes';
-import { sync } from '@/local/sync';
+import { fetchShoppingList, sync } from '@/local/sync';
 import { useTaskStatus } from '@/local/useSync';
 import { AppText } from '@/components/AppText';
 import { Card } from '@/components/Card';
@@ -148,7 +148,9 @@ export function ShoppingListScreen({ spaceId }: { spaceId?: string } = {}) {
     if (!spaceId) return;
     setLoadingSpace(true);
     try {
-      setSpaceList(await repo.getSpaceShoppingList(spaceId));
+      // Through the same guard as the personal list, so a tick still queued
+      // (or one that landed mid-fetch) is not reverted by this reply.
+      setSpaceList(await fetchShoppingList(() => repo.getSpaceShoppingList(spaceId), spaceId));
       setSpaceError(null);
     } catch (e) {
       setSpaceError(e instanceof ApiError ? e : null);
@@ -224,7 +226,7 @@ export function ShoppingListScreen({ spaceId }: { spaceId?: string } = {}) {
               }
             : current,
         );
-        writeSpaceShoppingItemChecked(item.id, !item.checked);
+        writeSpaceShoppingItemChecked(spaceId, item.id, !item.checked);
         return;
       }
       writeShoppingItemChecked(item.id, !item.checked);

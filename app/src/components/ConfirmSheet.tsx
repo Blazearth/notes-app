@@ -1,5 +1,5 @@
 import { BlurView } from 'expo-blur';
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { Modal, Platform, Pressable, View } from 'react-native';
 import Animated, {
   interpolate,
@@ -76,7 +76,16 @@ export function ConfirmSheet({
   const reducedMotion = useReducedMotion();
   const progress = useSharedValue(0);
 
+  /**
+   * The first choice wins. Without this, a backdrop tap (or Android back)
+   * inside the 160ms exit replaced the Confirm animation, its callback ran with
+   * `finished = false`, and only `onCancel` fired — the confirmed delete never
+   * happened. Same guard as `Sheet`'s `dismissing`.
+   */
+  const closing = useRef(false);
+
   useEffect(() => {
+    if (visible) closing.current = false;
     if (visible) progress.value = reducedMotion ? 1 : withSpring(1, Spring.enter);
     // Entrance only — dismissal is driven by the button handlers below, not by `visible` flipping false.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -84,6 +93,8 @@ export function ConfirmSheet({
 
   const closeThen = useCallback(
     (action: () => void) => {
+      if (closing.current) return;
+      closing.current = true;
       if (reducedMotion) {
         action();
         return;

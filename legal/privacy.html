@@ -667,6 +667,11 @@ footer.pagefoot {
               <td>The video identifier from the URL you saved</td>
             </tr>
             <tr>
+              <td><strong>Google — YouTube Data API</strong></td>
+              <td>Fetching a saved YouTube video's public title, description and channel when the metadata provider above is unavailable</td>
+              <td>The video identifier from the URL you saved</td>
+            </tr>
+            <tr>
               <td><strong>RevenueCat</strong></td>
               <td>Subscription entitlement records</td>
               <td>A customer identifier and subscription status. <em>No purchase flow exists in the app today</em> — this integration is inactive until paid plans launch.</td>
@@ -680,8 +685,8 @@ footer.pagefoot {
         </table>
       </div>
       <p>
-        Enrichment lookups (Google Places, Google Books, TMDB) are optional per installation and are
-        disabled when no credential is configured. Transcription is likewise only used
+        Enrichment lookups (Google Places, Google Books, TMDB) and the YouTube Data API fallback are
+        optional per installation and are disabled when no credential is configured. Transcription is likewise only used
         when earlier, cheaper text sources produced nothing.
       </p>
 

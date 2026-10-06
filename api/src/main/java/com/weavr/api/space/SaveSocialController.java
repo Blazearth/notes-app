@@ -81,6 +81,11 @@ class SaveSocialController {
      * the same as setting it once. That makes a retried request harmless
      * without any dedupe machinery.
      */
+    @GetMapping("/v1/saves/{id}/vote")
+    SaveSocialService.VoteState voteState(@CurrentUser UUID userId, @PathVariable UUID id) {
+        return social.voteState(userId, id);
+    }
+
     @PutMapping("/v1/saves/{id}/vote")
     Map<String, Integer> vote(@CurrentUser UUID userId, @PathVariable UUID id,
                               @RequestBody VoteRequest request) {

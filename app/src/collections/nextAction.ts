@@ -190,7 +190,11 @@ function pickChecklist(node: NodeFacts, entities: EntityFacts[]): NextAction | n
     type: 'checklist',
     headline: `Finish ${node.name}`,
     detail: `${done}/${entities.length} done — ${remaining} left.`,
-    actionLabel: 'View checklist',
+    // The first open item, so the button goes somewhere: on the collection
+    // screen this card only shows on the checklist's own tab, so a "View
+    // checklist" that switched to that tab did nothing at all.
+    entityKey: entities.find((e) => !isDone(e.state))?.entityKey,
+    actionLabel: 'Open next item',
     reasons,
     weight: remaining * 6 + node.sourceCount,
   };

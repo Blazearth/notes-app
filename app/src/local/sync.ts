@@ -31,13 +31,20 @@ import { AppState, type AppStateStatus } from 'react-native';
 import * as Network from 'expo-network';
 
 import { ApiError, type ApiErrorKind } from '@/api/client';
-import type { DigestResponse, MeResponse, SaveResponse, SyncResponse } from '@/api/types';
+import type {
+  DigestResponse,
+  MeResponse,
+  SaveResponse,
+  ShoppingListResponse,
+  SyncResponse,
+} from '@/api/types';
 import { repo } from '@/data';
 import {
   dispositionFor,
   isLocalId,
   nextAttemptAt,
   nextWakeMs,
+  overlayPendingShopping,
   randomId,
   selectNext,
   type OutboxEntry,
@@ -348,7 +355,7 @@ class SyncEngine {
    */
   syncShoppingList(): Promise<void> {
     return this.run('shoppingList', async () => {
-      await getStore().putShoppingList(await repo.getShoppingList());
+      await getStore().putShoppingList(await fetchShoppingList(() => repo.getShoppingList(), null));
     });
   }
 
@@ -467,12 +474,21 @@ class SyncEngine {
    * entry keeps its position and its idempotency key.
    */
   async retryOutbox(id: number): Promise<void> {
-    await getStore().updateOutbox(id, {
-      status: 'pending',
-      attempts: 0,
-      nextAttemptAt: null,
-      lastError: null,
-    });
+    const store = getStore();
+    const entries = await store.readOutbox();
+    const entry = entries.find((e) => e.id === id);
+    const reset = { status: 'pending' as const, attempts: 0, nextAttemptAt: null, lastError: null };
+    // A change to a save that was never created was failed *because* its
+    // create failed (see `drainOutbox`). Retrying it alone sends a request for a
+    // `local:` id — a 404 that fails it again. Retry the create with it; it
+    // sorts first, and the change follows it under the same key.
+    if (entry && entry.op !== 'createSave' && entry.entityId !== null && isLocalId(entry.entityId)) {
+      const create = entries.find(
+        (e) => e.op === 'createSave' && e.entityId === entry.entityId && e.status === 'failed',
+      );
+      if (create) await store.updateOutbox(create.id, reset);
+    }
+    await store.updateOutbox(id, reset);
     void this.drainOutbox();
   }
 
@@ -489,12 +505,16 @@ class SyncEngine {
     const entry = (await store.readOutbox()).find((e) => e.id === id);
     await store.removeOutbox(id);
     if (!entry) return;
-    if (entry.entityId !== null && !isLocalId(entry.entityId)) {
-      if (entry.op === 'setEntityState') void this.syncEntityStates();
-      else void this.pullSave(entry.entityId);
-    }
-    if (entry.op === 'setShoppingItemChecked' || entry.op === 'clearCheckedShoppingItems') {
+    const shopping = entry.op === 'setShoppingItemChecked' || entry.op === 'clearCheckedShoppingItems';
+    const pin = entry.op === 'pinInSpace' || entry.op === 'unpinInSpace';
+    if (shopping) {
       void this.syncShoppingList();
+    } else if (entry.op === 'setEntityState') {
+      void this.syncEntityStates();
+    } else if (!pin && entry.entityId !== null && !isLocalId(entry.entityId)) {
+      // Keyed by a save id. A list key or a pin key is not one, and asking the
+      // server for it is a guaranteed 404.
+      void this.pullSave(entry.entityId);
     }
     // A failed `createSave` leaves a `local:` row that will never become real.
     // Removing it is the only honest outcome: the save was never accepted.
@@ -607,17 +627,41 @@ class SyncEngine {
    * cold deep link, and the poll while a just-created save is `processing`.
    */
   async pullSave(id: string): Promise<SaveResponse | null> {
-    // A `local:` save exists nowhere but here; asking the server for it is a
-    // guaranteed 404 and would surface as a load error on a save the user can
-    // see perfectly well.
-    if (isLocalId(id)) return getStore().readSave(id);
     try {
-      const save = await repo.getSave(id);
-      await getStore().putSaves([save]);
-      return save;
+      return await this.fetchSave(id);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * {@link pullSave}, but a failure says why — what a screen needs to tell
+   * "this save does not exist" (`notFound`) from "could not reach the server".
+   */
+  async fetchSave(id: string): Promise<SaveResponse> {
+    // A `local:` save exists nowhere but here; asking the server for it is a
+    // guaranteed 404 and would surface as a load error on a save the user can
+    // see perfectly well.
+    if (isLocalId(id)) {
+      const local = await getStore().readSave(id);
+      if (local) return local;
+      throw new ApiError('notFound', 'This save no longer exists.', null);
+    }
+    const save = await repo.getSave(id);
+    await getStore().putSaves([save]);
+    return save;
+  }
+
+  /**
+   * The server id an offline-created save was given, once its POST has landed.
+   *
+   * Anything holding a `local:` id — a detail screen, a retry link — is left
+   * pointing at nothing when `reconcileSaveId` moves the row, because nothing
+   * outside the store can otherwise learn what the id became. In memory: a
+   * `local:` id held by a screen does not outlive the session either.
+   */
+  realSaveId(id: string): string | undefined {
+    return reconciledSaveIds.get(id);
   }
 
   /** A Space's own tab, on demand: its saves and members, into the store. */
@@ -717,6 +761,75 @@ async function applyDeletion(type: string, id: string): Promise<void> {
 // ------------------------------------------------------------ sending a write
 
 /**
+ * Whether a newer write about the same thing is still waiting to be sent.
+ *
+ * Every echo-adopting sender below asks this first. The echo is the server's
+ * view as of *this* request, so adopting it while a later tap is still queued
+ * overwrites that tap on screen: tick A then B, and A's echo (which has never
+ * heard of B) unticks B, for as long as B takes to send, which is up to the
+ * backoff cap on a bad connection. Skipping it costs nothing: the newer entry's
+ * own echo arrives with it and carries everything this one would have.
+ */
+async function supersededLocally(entry: OutboxEntry): Promise<boolean> {
+  if (entry.entityId === null) return false;
+  const entries = await getStore().readOutbox();
+  return entries.some(
+    (other) => other.id > entry.id && other.entityId === entry.entityId && other.status === 'pending',
+  );
+}
+
+/**
+ * `local:` id to the server's id, for comments and pins created this session.
+ *
+ * A screen shows a just-sent comment under its `local:` id until it reloads, so
+ * deleting it queues a delete *of the local id*. The delete is queued under the
+ * same key as the create and is therefore sent after it; by then the create has
+ * recorded its real id here. In memory only: a screen's placeholder does not
+ * outlive the session either, and the ordering means a restart replays the
+ * create (which records it again) before the delete.
+ */
+const sentIds = new Map<string, string>();
+
+/** `local:` save id to its server id — see {@link SyncEngine.realSaveId}. */
+const reconciledSaveIds = new Map<string, string>();
+
+/** The server id for `id`, or `null` for a `local:` id whose create never landed. */
+function resolveSentId(id: string): string | null {
+  if (!isLocalId(id)) return id;
+  return sentIds.get(id) ?? null;
+}
+
+/**
+ * Bumped whenever a shopping-list write reaches the server. A list fetch that
+ * started before one of those landed holds the server's view from before it,
+ * so {@link fetchShoppingList} fetches again rather than storing that.
+ */
+let shoppingWrites = 0;
+
+/**
+ * A shopping list from the server, made safe to store over local edits.
+ *
+ * Two races, two halves. A write that *landed* during the fetch is missing from
+ * what came back, so the fetch is repeated until none did (bounded: a busy
+ * queue is not a reason to spin). A write still *queued* cannot be in any
+ * fetch, so it is re-applied on top.
+ */
+export async function fetchShoppingList(
+  fetch: () => Promise<ShoppingListResponse>,
+  spaceId: string | null,
+): Promise<ShoppingListResponse> {
+  let list: ShoppingListResponse;
+  let attempts = 0;
+  for (;;) {
+    const before = shoppingWrites;
+    list = await fetch();
+    attempts += 1;
+    if (before === shoppingWrites || attempts >= 3) break;
+  }
+  return overlayPendingShopping(list, await getStore().readOutbox(), spaceId);
+}
+
+/**
  * How each queued op reaches the server, and what its response does to the
  * store.
  *
@@ -731,6 +844,9 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
   async createSave(entry) {
     const { body, localId } = entry.payload;
     const save = await repo.createSave(body, entry.idempotencyKey);
+    // Recorded before the move, so a screen re-reading on the move's change
+    // event can already follow the row to its new id.
+    reconciledSaveIds.set(localId, save.id);
     // One write: the row moves onto the real id, its item states follow, the
     // `pending` flag clears, and every other queued entry pointing at the local
     // id is rewritten. Doing them separately leaves a window where a screen
@@ -743,21 +859,25 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
       title: entry.payload.title,
       body: entry.payload.body,
     });
+    if (await supersededLocally(entry)) return;
     await getStore().patchSave(entry.payload.id, updated);
   },
 
   async setSaveFlags(entry) {
     const updated = await repo.setSaveFlags(entry.payload.id, entry.payload.flags);
+    if (await supersededLocally(entry)) return;
     await getStore().patchSave(entry.payload.id, updated);
   },
 
   async setSaveLifecycle(entry) {
     const updated = await repo.setSaveLifecycle(entry.payload.id, entry.payload.lifecycleStatus);
+    if (await supersededLocally(entry)) return;
     await getStore().patchSave(entry.payload.id, updated);
   },
 
   async setSaveSpace(entry) {
     const updated = await repo.setSaveSpace(entry.payload.id, entry.payload.spaceId);
+    if (await supersededLocally(entry)) return;
     await getStore().patchSave(entry.payload.id, updated);
   },
 
@@ -773,16 +893,19 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
       entry.payload.itemPath,
       entry.payload.state,
     );
+    if (await supersededLocally(entry)) return;
     await getStore().patchSave(entry.payload.id, updated);
   },
 
   async setEntityState(entry) {
     const echoed = await repo.setEntityState(entry.payload.entityKey, entry.payload.state);
+    if (await supersededLocally(entry)) return;
     await getStore().putEntityStates({ [entry.payload.entityKey]: echoed });
   },
 
   async setShoppingItemChecked(entry) {
     await repo.setShoppingItemChecked(entry.payload.itemId, entry.payload.checked);
+    shoppingWrites += 1;
   },
 
   async clearCheckedShoppingItems(entry) {
@@ -794,6 +917,7 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
     } else {
       await repo.clearCheckedShoppingItems();
     }
+    shoppingWrites += 1;
   },
 
   async convertToShoppingList(entry) {
@@ -809,11 +933,15 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
     // is an absolute set, so replaying it is a no-op by construction — which
     // makes it the only one where a lost response could post the same thing
     // twice. `V16__idempotency.sql` is what the key finally reaches.
-    await repo.addComment(entry.payload.saveId, entry.payload.body, entry.idempotencyKey);
+    const created = await repo.addComment(entry.payload.saveId, entry.payload.body, entry.idempotencyKey);
+    if (entry.payload.localId) sentIds.set(entry.payload.localId, created.id);
   },
 
   async deleteComment(entry) {
-    await repo.deleteComment(entry.payload.saveId, entry.payload.commentId);
+    const commentId = resolveSentId(entry.payload.commentId);
+    // Its create was rejected, so there is nothing on the server to delete.
+    if (commentId === null) return;
+    await repo.deleteComment(entry.payload.saveId, commentId);
   },
 
   async setVote(entry) {
@@ -825,29 +953,35 @@ const SENDERS: { [O in OutboxOp]: (entry: OutboxEntry<O>) => Promise<void> } = {
     // key for the same reason `addComment` does — a lost response followed by a
     // retry is otherwise the difference between one remark and two identical
     // ones.
-    await repo.addEntityComment(
+    const created = await repo.addEntityComment(
       entry.payload.spaceId,
       entry.payload.entityKey,
       entry.payload.body,
       entry.idempotencyKey,
     );
+    if (entry.payload.localId) sentIds.set(entry.payload.localId, created.id);
   },
 
   async deleteEntityComment(entry) {
-    await repo.deleteEntityComment(entry.payload.spaceId, entry.payload.commentId);
+    const commentId = resolveSentId(entry.payload.commentId);
+    if (commentId === null) return;
+    await repo.deleteEntityComment(entry.payload.spaceId, commentId);
   },
 
   async pinInSpace(entry) {
-    await repo.pinInSpace(
+    const pin = await repo.pinInSpace(
       entry.payload.spaceId,
       entry.payload.kind,
       entry.payload.subject,
       entry.payload.payload,
     );
+    if (entry.payload.localId) sentIds.set(entry.payload.localId, pin.id);
   },
 
   async unpinInSpace(entry) {
-    await repo.unpinInSpace(entry.payload.spaceId, entry.payload.pinId);
+    const pinId = resolveSentId(entry.payload.pinId);
+    if (pinId === null) return;
+    await repo.unpinInSpace(entry.payload.spaceId, pinId);
   },
 };
 

@@ -226,6 +226,23 @@ collapsed and no animation is involved.
 
 ---
 
+### On the Android emulator (2026-10-04)
+
+This machine has an Android SDK after all: `%LOCALAPPDATA%\Android\Sdk`, not on PATH, with one AVD, `Pixel_7`. A debug build runs native code the web harness never touches: `sqliteStore.ts`, the share-config file, notification permissions. It found a bug on its first real write (below). The recipe:
+
+1. `USE_MOCK_DATA = true`, as for the browser. Revert it afterwards, with `git checkout`, not a PowerShell rewrite. `Set-Content` changes the line endings and leaves a phantom diff.
+2. Boot the emulator with **`-gpu swiftshader_indirect`**. With the AVD's default `hw.gpu.mode=auto`, the app's window never drew its first frame. `screencap` returned black, and Android raised an ANR: "Input dispatching timed out (Application does not have a focused window)". Software rendering fixed both. The AVD also has only `hw.ramSize=2048`, so expect the low-memory killer to take system apps.
+3. `npx expo prebuild --platform android --clean`. `android/` is gitignored and fully generated: the share receiver comes from `plugins/withAndroidShareReceiver.js`, so regenerating loses nothing. Then build with `ANDROID_HOME` set, `JAVA_HOME` set to Android Studio's `jbr` (JDK 21), and `npx expo run:android --port 8083`. The first build takes about 7 minutes.
+4. Drive it with `adb`: `input tap`/`text`/`keyevent` and `exec-out screencap -p`. Find controls with `uiautomator dump`, where RN's `accessibilityLabel` shows up as `content-desc` and `<Text>` as `text`.
+5. To read state, `adb exec-out run-as com.weavr.app cat files/SQLite/weavr.db` (plus `-wal` and `-shm`), then query it with Python's `sqlite3`. That is the native counterpart of reading `localStorage` over CDP. Re-run the feed's own `WHERE` clause against that copy to test the SQL itself.
+
+Traps, each of which cost time:
+
+- **`uiautomator dump` fails intermittently** ("null root node"), and a failed dump leaves the *previous* `/sdcard/ui.xml` in place. Reading it anyway returned another app's screen, from an earlier session on the same AVD. Delete the file before dumping, check the command's output, and retry.
+- **The dev client's floating "Tools" button sits on top of Weavr's Settings gear** (about 971,247 versus 981,252), so tapping Settings opened the developer menu. Turn it off under the dev menu's "Tools button" toggle.
+- **The tab pager can show one pane while another is active.** After leaving Settings with the hardware Back key, the Library tab was logically selected but Home was still drawn, and taps landed on the invisible pane. This may be the slow software renderer, or a real bug; it hasn't been investigated. Re-select the tab explicitly before tapping.
+- **Coordinates go stale when the keyboard opens:** the capture sheet slides up, so a tap planned from a dump taken before the keyboard can land on the backdrop and dismiss the sheet. Dump again after typing.
+
 ## What each layer proves
 
 | Check | Proves | Does **not** prove |
@@ -284,11 +301,11 @@ repair, and the fast English model is ~2 MB against ~15 MB for the accurate one.
 
 ```bash
 cd api
-./mvnw test           # 431 tests, ~30s, NO database or .env needed (6 skip: see below)
+./mvnw test           # 595 tests, NO database or .env needed (8 skip: see below)
 ./mvnw clean verify   # the above plus packaging
 ```
 
-Six tests skip by default, in three opt-in groups. All are gated rather than
+Eight tests skip by default, in five opt-in groups. All are gated rather than
 deleted because a red build caused by a third party rate-limiting us is worse
 than no signal — but an ungated *absence* of the check is worse than either.
 
@@ -316,6 +333,25 @@ first fail:
 ```bash
 WEAVR_LIVE_GEMINI=1 ./mvnw test -Dtest=KnowledgeTypeRegistrySchemaLiveTest
 ```
+
+`ExtractionCanaryLiveTest` (1) runs the canary for real — every default target
+through every configured provider — and prints a table. `ExtractionCascadeLiveTest`
+(1) runs the real production cascade on one URL through the free tiers (RapidAPI,
+Data API, yt-dlp probe + captions); ASR/OCR/link/PDF are **not** wired and throw if
+reached, so a pass means captions or metadata alone carried the save. Keys are read
+from the environment; a missing one leaves that provider off rather than mocked:
+
+```bash
+WEAVR_LIVE_CANARY=1 ./mvnw test -Dtest=ExtractionCanaryLiveTest
+WEAVR_LIVE_CASCADE=1 WEAVR_LIVE_URL=https://... ./mvnw test -Dtest=ExtractionCascadeLiveTest
+```
+
+**Both measure the machine they run on.** From a dev box that's a residential IP —
+not Render's datacenter IP — and from this team's machine in India, TikTok is
+unreachable at the network level (national ban), so a TikTok `TIMEOUT` from here
+says nothing about TikTok. First run, 2026-10-01, residential IP: YouTube via
+RapidAPI ✅ (captions, 5,142 chars, 5.7s), YouTube via yt-dlp ✅ (3.5s), Instagram
+via yt-dlp ✅ (metadata, 436 chars, 4.8s), TikTok ❌ `TIMEOUT` (network block, 21.8s).
 
 Run the yt-dlp pair after touching anything under `pipeline/ytdlp/` and expect
 an occasional 429 that is not your fault; run the OCR trio after touching

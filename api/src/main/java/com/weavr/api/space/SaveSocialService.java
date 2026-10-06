@@ -201,6 +201,27 @@ public class SaveSocialService {
         return score(saveId);
     }
 
+    /**
+     * The save's score and the caller's own vote, for a screen opening on it.
+     *
+     * <p>Without this the client could only learn either one by casting a vote,
+     * so the control rendered unvoted at a score of nothing — and the first tap
+     * on a save already at +4 showed +1.
+     */
+    @Transactional(readOnly = true)
+    public VoteState voteState(UUID userId, UUID saveId) {
+        requireVisible(userId, saveId);
+        int mine = jdbc.sql("select value from save_votes where save_id = ? and user_id = ?")
+                .param(saveId).param(userId)
+                .query(Integer.class)
+                .optional()
+                .orElse(0);
+        return new VoteState(score(saveId), mine);
+    }
+
+    public record VoteState(int score, int myVote) {
+    }
+
     @Transactional(readOnly = true)
     public int score(UUID saveId) {
         Integer sum = jdbc.sql("select coalesce(sum(value), 0) from save_votes where save_id = ?")

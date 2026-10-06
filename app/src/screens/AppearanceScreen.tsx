@@ -12,6 +12,7 @@ import { SectionLabel } from '@/components/SectionLabel';
 import { Segmented } from '@/components/Segmented';
 import { SettingSwitch } from '@/components/SettingRow';
 import { Touchable } from '@/components/Touchable';
+import { useGuardedSignOut } from '@/components/useGuardedSignOut';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import { NAV_BAR_STYLES, THEME_MODES, type NavBarStyle, type ThemeMode } from '@/prefs/types';
 import { withAlpha } from '@/theme/contrast';
@@ -319,6 +320,14 @@ export function AppearanceScreen() {
   const { palette, radius, spacing, layout, icon } = useTheme();
   const { prefs, setPreference, resetPreferences } = usePreferences();
   const { session, signOut } = useSession();
+  // Appearance sits on top of Settings, which sits on top of `index` — and
+  // `index` holds the only redirect to sign-in. A bare sign-out left the user
+  // here, signed in as nobody. Pop back to `index` first, as Settings' own
+  // "Log out" does.
+  const { requestSignOut, signOutSheet } = useGuardedSignOut(() => {
+    if (router.canDismiss()) router.dismissAll();
+    void signOut();
+  });
   const systemScheme = useColorScheme();
   const router = useRouter();
 
@@ -481,7 +490,7 @@ export function AppearanceScreen() {
           </View>
           <Touchable
             accessibilityRole="button"
-            onPress={() => void signOut()}
+            onPress={requestSignOut}
             haptic="medium"
             style={{
               alignSelf: 'flex-start',
@@ -517,6 +526,7 @@ export function AppearanceScreen() {
           Reset to defaults
         </AppText>
       </Touchable>
+      {signOutSheet}
     </Screen>
   );
 }

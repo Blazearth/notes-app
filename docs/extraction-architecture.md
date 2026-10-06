@@ -471,6 +471,30 @@ Ordered so each phase is independently shippable and the riskiest work is de-ris
 
 ---
 
+## G. Design note — Android on-device fallback (not built, 2026-10-01)
+
+Recorded so the decision can be made on evidence later; **nothing here is implemented**. Seal (an open-source Android yt-dlp front end, GPLv3 — studied, not copied) proves `youtubedl-android` runs yt-dlp on a phone. The narrow version for Weavr:
+
+```text
+server extraction → source_blocked (BOT_CHECK / AUTH_REQUIRED / HTTP_429 on a video platform)
+  → save gets a "retry on device" flag in the next /v1/sync delta
+  → Android app runs a metadata+captions probe locally (never media download)
+  → uploads normalised text + metadata (same shape as a TEXT save's rawCaption)
+  → normal classify/enrich/embed from there
+```
+
+- **Trigger, not default.** Only saves the server already failed with a block category. Silent capture stays server-side; the device pays nothing on the common path.
+- **APK size.** `youtubedl-android` bundles a Python runtime + yt-dlp (+ ffmpeg if used); expect tens of MB. Measure a real build before deciding — this is the main cost.
+- **Python cold start / battery.** Seconds per run on first use; must run in WorkManager with network + battery-not-low constraints, never in the share receiver (which must `finish()` immediately).
+- **Background limits.** Android may defer the work for hours; the save stays `pending`, which is honest. Offline → WorkManager retries.
+- **Keeping yt-dlp current.** The app's bundled yt-dlp goes stale like the server's; `youtubedl-android` can self-update, which is a runtime code download on users' devices — a separate, explicit decision.
+- **Privacy/security.** The phone fetches from its own IP — a user's IP now touches the platform because they asked it to, which is the same as opening the link. No cookies, no WebView harvesting, nothing uploaded but the extracted text. Still a privacy-policy change (on-device processing of the source page).
+- **iOS.** No equivalent: no embeddable Python, and a share extension's memory ceiling rules it out. iOS stays server-only.
+- **Testing.** Emulator (`Pixel_7` AVD exists on the dev machine) proves integration, APK size and WorkManager behaviour — but its traffic leaves through the host's network, so it proves nothing about IP blocking. That needs real devices on mobile networks.
+- **Gate before building:** canary/attempt data showing a sustained block rate on Instagram or TikTok from Render. Without that, this solves a problem we haven't observed.
+
+---
+
 ## Provenance and what is not verified
 
 **Read from source.** Repository findings came from the repositories themselves — package manifests, extraction call sites, issue histories — not from recall. Our own findings were read from the working tree and confirmed by grep.

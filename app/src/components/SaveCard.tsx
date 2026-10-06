@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
 import type { SaveResponse } from '@/api/types';
-import { canRetry, isRetrying, resolveRetry, retryTarget, startRetry } from '@/saves/retry';
+import { canRetry, startRetry, useIsRetrying } from '@/saves/retry';
 import { useSaves } from '@/saves/SavesProvider';
 import { buildCardModel } from '@/saves/cardModel';
 import { saveSubtitle, saveTitle } from '@/saves/format';
@@ -50,27 +50,13 @@ function FailedSaveRow({
 }) {
   const { palette, spacing, radius } = useTheme();
   const { saves } = useSaves();
-  const [retrying, setRetrying] = useState(() => isRetrying(save.id));
-  const target = retrying ? retryTarget(save.id, saves) : undefined;
-
-  // Watches the linked retry attempt to completion. `target` comes from the
-  // same live store every screen reads, so this advances the instant the
-  // pipeline (real or offline-queued) moves the new save to `ready` or
-  // `failed` — no polling of its own.
-  useEffect(() => {
-    if (!retrying || !target) return;
-    if (target.status === 'ready') {
-      resolveRetry(save.id, target, true);
-      setRetrying(false);
-    } else if (target.status === 'failed') {
-      resolveRetry(save.id, target, false);
-      setRetrying(false);
-    }
-  }, [retrying, target, save.id]);
+  // Shared, not per-row: Home and Library show the same answer, and the attempt
+  // is settled by `SavesProvider` whether or not this row is still mounted.
+  const retrying = useIsRetrying(save.id);
 
   const handleRetry = () => {
     if (retrying || retryDisabled) return;
-    if (startRetry(save, saves)) setRetrying(true);
+    startRetry(save, saves);
   };
 
   const canShowRetry = canRetry(save);

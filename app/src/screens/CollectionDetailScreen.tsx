@@ -991,7 +991,7 @@ export function CollectionDetailScreen({ nodeId }: { nodeId: string }) {
               action={nextAction}
               label={NEXT_ACTION_LABELS[type] ?? 'Next up'}
               onPrimary={() => {
-                if (nextAction.type === 'recommendation_list' && nextAction.entityKey) {
+                if (nextAction.entityKey) {
                   setSelectedKey(nextAction.entityKey);
                 } else {
                   setTab('entities');

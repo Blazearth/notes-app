@@ -8,6 +8,7 @@ import com.weavr.api.asr.GroqProperties;
 import com.weavr.api.embed.EmbeddingProperties;
 import com.weavr.api.enrich.EnrichmentProperties;
 import com.weavr.api.gemini.GeminiProperties;
+import com.weavr.api.pipeline.youtube.YouTubeDataApiProperties;
 import com.weavr.api.pipeline.ytdlp.RapidYtProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
@@ -71,6 +72,13 @@ class RestClientConfig {
     @Qualifier("rapidYt")
     @Scope("prototype")
     RestClient.Builder rapidYtRestClientBuilder(RapidYtProperties props) {
+        return builder(props.timeout());
+    }
+
+    @Bean
+    @Qualifier("youtubeData")
+    @Scope("prototype")
+    RestClient.Builder youtubeDataRestClientBuilder(YouTubeDataApiProperties props) {
         return builder(props.timeout());
     }
 

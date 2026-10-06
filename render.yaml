@@ -89,6 +89,12 @@ services:
       # ── RapidAPI YouTube — primary metadata+transcript path for YouTube ──────
       - key: WEAVR_RAPID_YT_API_KEY
         sync: false
+      # ── YouTube Data API v3 — metadata-only fallback when RapidAPI fails ─────
+      - key: WEAVR_YOUTUBE_API_KEY
+        sync: false
+      # ── Extraction canary — flip to "true" to start periodic platform probes ──
+      - key: WEAVR_CANARY_ENABLED
+        value: "false"
 
       # ── Supabase Storage — screenshot upload bucket ──────────────────────────
       - key: WEAVR_SUPABASE_SERVICE_KEY

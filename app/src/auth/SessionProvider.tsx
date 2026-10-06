@@ -5,7 +5,8 @@ import { AppState, type AppStateStatus } from 'react-native';
 
 import { supabase, SUPABASE_AUTH_STORAGE_KEY } from './supabase';
 import { getAuthCallbackUrl } from './redirectUrl';
-import { getMe } from '@/api/client';
+import { getMe, patchUsername } from '@/api/client';
+import { clearPendingUsername, readPendingUsername } from './pendingUsername';
 import { identify, resetAnalytics, track } from '@/analytics/client';
 import { AnalyticsEvent } from '@/analytics/events';
 import { USE_MOCK_DATA } from '@/data/config';
@@ -141,6 +142,31 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const { setPreference } = usePreferences();
 
+  // A username chosen at sign-up while email confirmation was pending is
+  // registered the first time that account has a session — a sign-in or the
+  // confirmation link's callback, whichever comes first.
+  const sessionEmail = session?.user.email ?? null;
+  useEffect(() => {
+    if (USE_MOCK_DATA || !sessionEmail) return;
+    let cancelled = false;
+    void (async () => {
+      const pending = await readPendingUsername(sessionEmail);
+      if (!pending || cancelled) return;
+      try {
+        await patchUsername(pending);
+        if (!cancelled) setPreference('userName', pending);
+      } catch {
+        // Taken by now, or offline. Taken is final — the user picks another in
+        // Settings; offline is retried on the next session start.
+        return;
+      }
+      await clearPendingUsername();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionEmail, setPreference]);
+
   const signIn = useCallback(async (email: string, password: string) => {
     if (USE_MOCK_DATA) {
       setSession(MOCK_SESSION);
@@ -154,10 +180,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (error) throw new Error(error.message);
     track(AnalyticsEvent.SignInCompleted, {});
     // Sync the server-authoritative username to local prefs so returning
-    // users see their username on any device without re-entering it.
+    // users see their username on any device without re-entering it. Set even
+    // when empty: prefs outlive sign-out, so skipping it greeted a second
+    // account on this device by the first account's name. A name still waiting
+    // from sign-up is registered by the effect below, which then sets it.
     try {
       const me = await getMe();
-      if (me.username) setPreference('userName', me.username);
+      setPreference('userName', me.username ?? '');
     } catch {
       // Non-fatal — prefs.userName may already be set, or the user will
       // see the email fallback until they visit Settings.
@@ -201,12 +230,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     identifiedUserId.current = null;
     resetAnalytics();
+    // The greeting belongs to the account, not the device.
+    setPreference('userName', '');
     if (USE_MOCK_DATA) {
       setSession(null);
       return;
     }
     await supabase.auth.signOut();
-  }, []);
+  }, [setPreference]);
 
   const value = useMemo(
     () => ({ session, hydrated, signIn, signUp, signOut }),

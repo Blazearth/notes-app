@@ -7,7 +7,8 @@ import { getStore, useLive } from '@/local';
 import { isLocalId } from '@/local/outbox';
 import { useStoreReady } from '@/local/SyncProvider';
 import { sync } from '@/local/sync';
-import { useTaskStatus } from '@/local/useSync';
+import { useOutbox, useTaskStatus } from '@/local/useSync';
+import { settleRetries } from './retry';
 
 export type FeedStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -121,7 +122,6 @@ export function SavesProvider({ children }: { children: React.ReactNode }) {
       for (const id of current.split(',')) {
         if (!startedAt.current.has(id)) startedAt.current.set(id, now);
         if (now - (startedAt.current.get(id) ?? now) > POLL_TIMEOUT) continue;
-        void sync.pullSave(id);
         // `pullSave` writes into the store, so the feed updates itself — nothing
         // here has to hold or hand back the result. When the save reaches
         // `ready` it drops out of `processing` and stops being polled.
@@ -131,6 +131,23 @@ export function SavesProvider({ children }: { children: React.ReactNode }) {
 
     return () => clearInterval(interval);
   }, []);
+
+  // Retries are settled here rather than by whichever row started them — this
+  // provider is mounted for the app's life, a row is not. See `@/saves/retry`.
+  // `failed` is a fresh array every render; key the map on its contents.
+  const { failed } = useOutbox();
+  const failedKey = failed.map((entry) => entry.id).join(',');
+  const failedCreates = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const entry of failed) {
+      if (entry.op === 'createSave' && entry.entityId !== null) map.set(entry.entityId, entry.id);
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [failedKey]);
+  useEffect(() => {
+    settleRetries(saves, failedCreates);
+  }, [saves, failedCreates]);
 
   const refresh = useCallback(() => sync.refreshAll(), []);
 

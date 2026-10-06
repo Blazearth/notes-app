@@ -232,6 +232,32 @@ weavr:
     timeout: 15s
 
   # --------------------------------------------------------------------------
+  # YouTube Data API v3 — the legitimate metadata fallback when RapidAPI fails.
+  # Order for a YouTube URL: RapidAPI → this → yt-dlp. Metadata ONLY (title,
+  # description, channel, duration, thumbnail): the Data API can't download
+  # captions for videos you don't own, so this never claims any. Blank key =
+  # never called. Quota: 1 unit per call, 10,000/day on the default project.
+  # Create a key in Google Cloud with "YouTube Data API v3" enabled; restrict
+  # it to that API. Server-side only.
+  # --------------------------------------------------------------------------
+  youtube-data-api:
+    api-key: ${WEAVR_YOUTUBE_API_KEY:}
+    timeout: 10s
+
+  # --------------------------------------------------------------------------
+  # Extraction canary — probes a few long-lived public URLs per platform so a
+  # broken extractor or a new IP block shows up in the logs before a user's
+  # silent capture fails. Metadata probes only: never downloads media, never
+  # uses cookies, never calls Gemini. Off by default; turn on for the deploy.
+  # Each run is ~1 request per provider per target — early detection, not load.
+  # Results: grep the logs for `extraction_attempt context=canary`.
+  # --------------------------------------------------------------------------
+  canary:
+    enabled: ${WEAVR_CANARY_ENABLED:false}
+    initial-delay: ${WEAVR_CANARY_INITIAL_DELAY:PT10M}
+    interval: ${WEAVR_CANARY_INTERVAL:PT12H}
+
+  # --------------------------------------------------------------------------
   # ffmpeg — downmixes ASR audio to 16 kHz mono before it goes to Groq.
   # --------------------------------------------------------------------------
   ffmpeg:

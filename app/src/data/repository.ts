@@ -181,6 +181,8 @@ export interface Repository {
    */
   addComment(saveId: string, body: string, idempotencyKey?: string): Promise<SaveComment>;
   deleteComment(saveId: string, commentId: string): Promise<void>;
+  /** The save's score and the caller's own vote. */
+  getVote(saveId: string): Promise<{ score: number; myVote: 1 | -1 | 0 }>;
   setVote(saveId: string, value: 1 | -1 | 0): Promise<{ score: number }>;
 
   /** Top-level groups. See `KnowledgeGroup` — no endpoint serves these yet. */

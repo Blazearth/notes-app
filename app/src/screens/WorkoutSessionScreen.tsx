@@ -256,7 +256,9 @@ export function WorkoutSessionScreen({ nodeId }: { nodeId: string }) {
         </View>
       </Reveal>
 
-      {current && !finished ? (
+      {/* After the last completion the hero hides — unless a row below was
+          tapped, which is the only way back to an exercise finished by mistake. */}
+      {current && (!finished || manualIndex !== null) ? (
         <Reveal index={1}>
           <Card radius={radius.lg} style={{ marginBottom: spacing.lg }}>
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.sm }}>

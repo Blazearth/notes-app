@@ -6,7 +6,8 @@ import { Card } from '@/components/Card';
 import { Screen } from '@/components/Screen';
 import { Touchable } from '@/components/Touchable';
 import { WeavrMark } from '@/components/WeavrMark';
-import { patchUsername } from '@/api/client';
+import { ApiError, patchUsername } from '@/api/client';
+import { savePendingUsername } from '@/auth/pendingUsername';
 import { useSession } from '@/auth/SessionProvider';
 import { usePreferences } from '@/prefs/PreferencesProvider';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -61,23 +62,25 @@ export function SignInScreen() {
         // for the PATCH round-trip.
         setPreference('userName', trimmedUsername);
 
+        if (needsConfirmation) {
+          // No session yet, so the server cannot be asked to reserve the name —
+          // trying anyway failed `unauthorized` and was reported as "taken".
+          // Held until this account first signs in (see `pendingUsername`).
+          await savePendingUsername(email, trimmedUsername);
+          setMessage('Account created. Check your email and confirm the address, then sign in.');
+          return;
+        }
+
         // Register the username server-side (uniqueness enforced there).
         try {
           await patchUsername(trimmedUsername);
-        } catch {
-          // Username might be taken — warn the user but don't block them.
-          // They can change it from Settings later.
+        } catch (e) {
+          // Don't block sign-up over it — the name can be set from Settings.
           setIsError(true);
           setMessage(
-            `Account created, but username "${trimmedUsername}" was already taken. ` +
-            'You can set a unique one from Settings.',
-          );
-          if (!needsConfirmation) return;
-        }
-
-        if (needsConfirmation) {
-          setMessage(
-            'Account created. Confirm the email address before signing in — this project has email confirmation on.',
+            `Account created, but the username couldn’t be saved: ${
+              e instanceof ApiError ? e.message : 'try a different one'
+            }. You can set one from Settings.`,
           );
         }
       }

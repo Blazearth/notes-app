@@ -42,9 +42,13 @@ function Routes() {
   const { palette } = useTheme();
   const { session } = useSession();
   const router = useRouter();
+  // The user, not the session object: Supabase hands back a new session on
+  // every token refresh, which re-registered for push and re-subscribed the
+  // tap listener roughly hourly for no reason.
+  const userId = session?.user.id ?? null;
 
   useEffect(() => {
-    if (!session) return;
+    if (!userId) return;
     registerForPushNotificationsAsync().catch(() => {});
 
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -60,7 +64,7 @@ function Routes() {
     return () => {
       subscription.remove();
     };
-  }, [session, router]);
+  }, [userId, router]);
 
   // Warm `app_opened`: the cold-start one fires once from `SplashGate` below,
   // keyed on time-to-ready rather than on this listener's first (already

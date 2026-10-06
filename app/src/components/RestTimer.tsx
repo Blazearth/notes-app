@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
+import { useHaptic } from '@/motion/haptics';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppText } from './AppText';
 import { Glyph } from './Glyph';
@@ -22,20 +23,42 @@ import { Touchable } from './Touchable';
  */
 export function RestTimer({ label }: { label: string }) {
   const { palette, spacing } = useTheme();
+  const haptic = useHaptic();
+  // Every `<number><unit>` in the label, summed — "1m30s" is 90, not the 60 a
+  // first-match parse read it as. The unit must not run on into a word, so the
+  // "m" of "max" is not a minute.
   const parsedSeconds = useMemo(() => {
-    const match = label.match(/(\d+(?:\.\d+)?)\s*(s|sec|second|m|min|minute)/i);
-    if (!match) return null;
-    const value = parseFloat(match[1]);
-    return Math.round(match[2].toLowerCase().startsWith('m') ? value * 60 : value);
+    const parts = [...label.matchAll(/(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m)(?![a-z])/gi)];
+    if (parts.length === 0) return null;
+    const total = parts.reduce((sum, [, value, unit]) => {
+      const n = parseFloat(value);
+      return sum + (unit.toLowerCase().startsWith('m') ? n * 60 : n);
+    }, 0);
+    return total > 0 ? Math.round(total) : null;
   }, [label]);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [manualElapsed, setManualElapsed] = useState<number | null>(null);
+  const [justFinished, setJustFinished] = useState(false);
 
   useEffect(() => {
-    if (remaining === null || remaining <= 0) return;
+    if (remaining === null) return;
+    if (remaining <= 0) {
+      // Rest is over: say so once, then return to the idle label rather than
+      // sitting at "0s left" until someone taps it.
+      haptic('success');
+      setRemaining(null);
+      setJustFinished(true);
+      return;
+    }
     const t = setTimeout(() => setRemaining((r) => (r !== null ? r - 1 : r)), 1000);
     return () => clearTimeout(t);
-  }, [remaining]);
+  }, [remaining, haptic]);
+
+  useEffect(() => {
+    if (!justFinished) return;
+    const t = setTimeout(() => setJustFinished(false), 4000);
+    return () => clearTimeout(t);
+  }, [justFinished]);
 
   useEffect(() => {
     if (manualElapsed === null) return;
@@ -44,7 +67,11 @@ export function RestTimer({ label }: { label: string }) {
   }, [manualElapsed]);
 
   const running = remaining !== null || manualElapsed !== null;
-  const start = () => (parsedSeconds !== null ? setRemaining(parsedSeconds) : setManualElapsed(0));
+  const start = () => {
+    setJustFinished(false);
+    if (parsedSeconds !== null) setRemaining(parsedSeconds);
+    else setManualElapsed(0);
+  };
   const stop = () => {
     setRemaining(null);
     setManualElapsed(null);
@@ -64,7 +91,9 @@ export function RestTimer({ label }: { label: string }) {
           ? `${remaining}s left`
           : manualElapsed !== null
             ? `${manualElapsed}s`
-            : `Rest ${label}`}
+            : justFinished
+              ? 'Rest done'
+              : `Rest ${label}`}
       </AppText>
     </Touchable>
   );

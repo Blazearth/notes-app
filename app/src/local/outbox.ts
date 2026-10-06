@@ -30,7 +30,7 @@
  */
 
 import type { ApiErrorKind } from '@/api/client';
-import type { CreateSaveRequest, LifecycleStatus } from '@/api/types';
+import type { CreateSaveRequest, LifecycleStatus, ShoppingListResponse, SpacePin } from '@/api/types';
 
 // ---------------------------------------------------------------------- types
 
@@ -93,14 +93,26 @@ export interface OutboxPayloads {
    */
   clearCheckedShoppingItems: { spaceId?: string };
   convertToShoppingList: { saveId: string };
-  addComment: { saveId: string; body: string };
+  /**
+   * `localId` is the placeholder id the screen shows until a reload replaces it
+   * with the server's copy. A delete of that placeholder is queued behind this
+   * entry and resolved to the real id once it lands — see `resolveSentId`.
+   * Optional because entries queued before it existed carry none.
+   */
+  addComment: { saveId: string; body: string; localId?: string };
   deleteComment: { saveId: string; commentId: string };
   setVote: { saveId: string; value: 1 | -1 | 0 };
   /** S3. Space-scoped, unlike `setEntityState` — see `EntityCommentService`. */
-  addEntityComment: { spaceId: string; entityKey: string; body: string };
+  addEntityComment: { spaceId: string; entityKey: string; body: string; localId?: string };
   deleteEntityComment: { spaceId: string; commentId: string };
   /** S4. An upsert on `(space, kind, subject)`, so replaying one is a no-op. */
-  pinInSpace: { spaceId: string; kind: string; subject: string; payload: Record<string, unknown> };
+  pinInSpace: {
+    spaceId: string;
+    kind: string;
+    subject: string;
+    payload: Record<string, unknown>;
+    localId?: string;
+  };
   unpinInSpace: { spaceId: string; pinId: string };
 }
 
@@ -281,6 +293,88 @@ export function rewriteLocalId<O extends OutboxOp>(
     entityId: entry.entityId === localId ? realId : entry.entityId,
     payload: JSON.parse(serialised.split(localId).join(realId)) as OutboxPayloads[O],
   };
+}
+
+/**
+ * Queue keys for the shopping lists. Every tick and every "clear checked" on
+ * one list shares one key, so {@link selectNext} sends them in the order they
+ * were made: a clear that overtook a tick still waiting out a backoff would
+ * clear without that item, and the tick landing afterwards would bring it back.
+ */
+export function shoppingListKey(spaceId?: string | null): string {
+  return spaceId ? `shopping:space:${spaceId}` : 'shopping:personal';
+}
+
+/**
+ * A fetched shopping list with every still-queued edit to it re-applied, in
+ * queue order.
+ *
+ * A list fetched while a tick is waiting to send is the server's view from
+ * *before* that tick, and storing it as-is would untick the item on screen
+ * until the next fetch. `failed` entries are skipped: the server said no.
+ *
+ * Ticks match by item id alone (an id addresses one row on one list), so a
+ * tick for an item not on this list is a no-op. A clear only applies to its
+ * own list — the scope is in its payload.
+ */
+export function overlayPendingShopping(
+  list: ShoppingListResponse,
+  entries: readonly OutboxEntry[],
+  spaceId?: string | null,
+): ShoppingListResponse {
+  let items = list.items;
+  for (const entry of entries) {
+    if (entry.status !== 'pending') continue;
+    if (entry.op === 'setShoppingItemChecked') {
+      const { itemId, checked } = entry.payload as OutboxPayloads['setShoppingItemChecked'];
+      items = items.map((item) => (item.id === itemId ? { ...item, checked } : item));
+    } else if (entry.op === 'clearCheckedShoppingItems') {
+      const scope = (entry.payload as OutboxPayloads['clearCheckedShoppingItems']).spaceId ?? null;
+      if (scope === (spaceId ?? null)) items = items.filter((item) => !item.checked);
+    }
+  }
+  return items === list.items ? list : { ...list, items };
+}
+
+/**
+ * A Space's pins as fetched, with still-queued pins and unpins re-applied in
+ * queue order — the pin counterpart of {@link overlayPendingShopping}.
+ *
+ * Both ops are queued under `space|kind|subject` (`writePin`/`writeUnpin`), so
+ * the subject an unpin is about is read from its key; its payload only carries
+ * the pin id, which for a pin that never reached the server is a `local:` one.
+ */
+export function overlayPendingPins(
+  pins: readonly SpacePin[],
+  entries: readonly OutboxEntry[],
+  spaceId: string,
+): SpacePin[] {
+  let out = [...pins];
+  for (const entry of entries) {
+    if (entry.status !== 'pending') continue;
+    if (entry.op === 'pinInSpace') {
+      const pin = entry.payload as OutboxPayloads['pinInSpace'];
+      if (pin.spaceId !== spaceId) continue;
+      if (out.some((p) => p.kind === pin.kind && p.subject === pin.subject)) continue;
+      out.push({
+        id: pin.localId ?? `${LOCAL_ID_PREFIX}${entry.id}`,
+        kind: pin.kind,
+        subject: pin.subject,
+        payload: pin.payload,
+        createdBy: 'me',
+        createdByName: 'You',
+        available: true,
+        createdAt: entry.createdAt,
+      });
+    } else if (entry.op === 'unpinInSpace') {
+      const unpin = entry.payload as OutboxPayloads['unpinInSpace'];
+      if (unpin.spaceId !== spaceId || entry.entityId === null) continue;
+      const [, kind, ...rest] = entry.entityId.split('|');
+      const subject = rest.join('|');
+      out = out.filter((p) => p.id !== unpin.pinId && !(p.kind === kind && p.subject === subject));
+    }
+  }
+  return out;
 }
 
 /**

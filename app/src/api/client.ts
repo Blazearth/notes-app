@@ -731,6 +731,10 @@ export function deleteComment(saveId: string, commentId: string): Promise<void> 
  *
  * @param value 1, -1, or 0 to clear
  */
+export function getVote(saveId: string): Promise<{ score: number; myVote: 1 | -1 | 0 }> {
+  return request<{ score: number; myVote: 1 | -1 | 0 }>(`/v1/saves/${saveId}/vote`);
+}
+
 export function setVote(saveId: string, value: 1 | -1 | 0): Promise<{ score: number }> {
   return request<{ score: number }>(`/v1/saves/${saveId}/vote`, {
     method: 'PUT',
